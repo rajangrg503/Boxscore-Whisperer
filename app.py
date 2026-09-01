@@ -812,7 +812,7 @@ def get_teammate_availability_adjustment(player_id, missing_names, season):
     for _, row in df.iterrows():
         game_id = row["Game_ID"]
         try:
-            box = boxscoretraditionalv2.BoxScoreTraditionalV2(game_id=game_id)
+            box = boxscoretraditionalv2.BoxScoreTraditionalV2(game_id=game_id, timeout=5)
             box_df = box.get_data_frames()[0]
             players_in_game = set(box_df["PLAYER_NAME"])
         except Exception:
@@ -846,7 +846,7 @@ def get_opponent_missing_adjustment(missing_opponents, season):
             if not match:
                 continue
             pid = match[0]["id"]
-            career = playercareerstats.PlayerCareerStats(player_id=pid)
+            career = playercareerstats.PlayerCareerStats(player_id=pid, timeout=5)
             df = career.get_data_frames()[0]
             season_row = df[df["SEASON_ID"] == season]
             if season_row.empty:
@@ -913,6 +913,7 @@ def get_defender_matchup_adjustment(player_id, player_full_name, defender_name, 
                 off_player_id_nullable=player_id,
                 def_player_id_nullable=defender_id,
                 season=try_season,
+                timeout=5,
             )
             return data.get_data_frames()[0]
 
