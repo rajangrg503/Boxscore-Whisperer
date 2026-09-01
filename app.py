@@ -358,7 +358,10 @@ def get_head_to_head_log(player_id, opponent_abbr, cutoff_date=None):
     opponent and would otherwise pollute the average."""
     frames = []
     for season in HEAD_TO_HEAD_SEASONS:
-        df = fetch_combined_game_log(player_id, season)
+        try:
+            df = fetch_combined_game_log(player_id, season)
+        except Exception:
+            continue  # this season unavailable (blocked live + not cached) -- skip, don't fail the whole lookup
         if df.empty:
             continue
         matched = df[df["MATCHUP"].str.contains(opponent_abbr, na=False)]
@@ -458,7 +461,10 @@ def get_multi_season_log(player_id, seasons=HEAD_TO_HEAD_SEASONS):
     the vs-specific-player matchup lookup below."""
     frames = []
     for season in seasons:
-        df = fetch_combined_game_log(player_id, season)
+        try:
+            df = fetch_combined_game_log(player_id, season)
+        except Exception:
+            continue  # this season unavailable -- skip, don't fail the whole lookup
         if not df.empty:
             frames.append(df)
     if not frames:
@@ -562,13 +568,23 @@ def get_season_baseline(player_id, player_name):
     column (PTS, AST, REB, STL, BLK, FG3M, TOV) to a (mean, std) tuple.
     Using a dict here instead of a long positional tuple avoids the
     kind of unpacking-count bugs that come from adding a new stat
-    later and forgetting to update every call site."""
-    df = fetch_combined_game_log(player_id, CURRENT_SEASON)
+    later and forgetting to update every call site.
+
+    Tries CURRENT_SEASON first; falls through to PREVIOUS_SEASON both
+    when there aren't enough current-season games yet (early in a new
+    season) AND when fetch_combined_game_log raises outright (e.g. a
+    live nba_api failure with no cached copy for the current season
+    specifically -- previous seasons are far more likely to already be
+    cached, since a whole season's worth of games existed to fetch)."""
+    try:
+        df = fetch_combined_game_log(player_id, CURRENT_SEASON)
+    except Exception:
+        df = pd.DataFrame()
 
     if len(df) >= 5:
         source = f"{CURRENT_SEASON} season so far, incl. playoffs ({len(df)} games)"
     else:
-        df = fetch_combined_game_log(player_id, PREVIOUS_SEASON)
+        df = fetch_combined_game_log(player_id, PREVIOUS_SEASON)  # let this one raise if it fails -- nothing left to fall back to
         source = f"{PREVIOUS_SEASON} full season, incl. playoffs ({len(df)} games)"
 
     stats_dict = {}
@@ -784,7 +800,11 @@ def get_teammate_availability_adjustment(player_id, missing_names, season):
     if not missing_names:
         return 1.0, "No missing teammates specified -- no adjustment."
 
-    df = fetch_combined_game_log(player_id, season)
+    try:
+        df = fetch_combined_game_log(player_id, season)
+    except Exception:
+        return 1.0, (f"No game log available for {season} (live fetch failed, not yet "
+                      f"cached) -- skipping this adjustment.")
 
     matching_games = []
     for _, row in df.iterrows():
@@ -998,7 +1018,12 @@ def get_full_game_log(player_id, season):
     """Fetch a player's full game log for a season (regular season +
     playoffs blended), sorted most-recent first. Used for the hit-rate
     table and trend chart."""
-    df = fetch_combined_game_log(player_id, season)
+    try:
+        df = fetch_combined_game_log(player_id, season)
+    except Exception:
+        return pd.DataFrame()
+    if df.empty:
+        return df
     df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
     df = df.sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
     return df
@@ -1647,7 +1672,10 @@ if submitted:
                 using_h2h = False  # nothing to show -- fall back below
 
         if not using_h2h:
-            current_season_check = fetch_combined_game_log(player_id, CURRENT_SEASON)
+            try:
+                current_season_check = fetch_combined_game_log(player_id, CURRENT_SEASON)
+            except Exception:
+                current_season_check = pd.DataFrame()
             hitrate_season = CURRENT_SEASON if len(current_season_check) >= 5 else PREVIOUS_SEASON
             game_log_for_hitrate = get_full_game_log(player_id, hitrate_season)
 
