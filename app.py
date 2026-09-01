@@ -315,7 +315,8 @@ def fetch_combined_game_log(player_id, season):
     for season_type in ["Regular Season", "Playoffs"]:
         try:
             log = playergamelog.PlayerGameLog(
-                player_id=player_id, season=season, season_type_all_star=season_type
+                player_id=player_id, season=season, season_type_all_star=season_type,
+                timeout=5,
             )
             df = log.get_data_frames()[0]
             if not df.empty:
