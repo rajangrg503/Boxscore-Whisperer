@@ -24,7 +24,7 @@ import datetime
 
 import pandas as pd
 from nba_api.stats.static import players
-from nba_api.stats.endpoints import playergamelog, leaguedashteamstats
+from nba_api.stats.endpoints import playergamelog, leaguedashteamstats, synergyplaytypes
 
 CURRENT_SEASON = "2026-27"   # keep in sync with app.py
 PREVIOUS_SEASON = "2025-26"
@@ -98,6 +98,42 @@ def refresh_team_stats():
         time.sleep(0.6)
 
 
+SYNERGY_PLAY_TYPES = [
+    "PRBallHandler",
+    "Isolation",
+    "PRRollman",
+    "OffScreen",
+    "Transition",
+    "Postup",
+]
+
+
+def refresh_synergy_scheme_data():
+    print(f"Refreshing Synergy defensive play-type data for {PREVIOUS_SEASON} "
+          f"({len(SYNERGY_PLAY_TYPES)} play types)...")
+    for play_type in SYNERGY_PLAY_TYPES:
+        try:
+            data = synergyplaytypes.SynergyPlayTypes(
+                league_id="00",
+                per_mode_simple="PerGame",
+                player_or_team_abbreviation="T",
+                season_type_all_star="Regular Season",
+                season=PREVIOUS_SEASON,
+                type_grouping_nullable="defensive",
+                play_type_nullable=play_type,
+                timeout=5,
+            )
+            df = data.get_data_frames()[0]
+            if not df.empty:
+                save_df_cache(f"synergy_{play_type}_{PREVIOUS_SEASON}", df)
+                print(f"  Cached synergy_{play_type}_{PREVIOUS_SEASON} ({len(df)} teams)")
+            else:
+                print(f"  (no data returned for {play_type} -- skipping)")
+        except Exception as e:
+            print(f"  ! Failed for {play_type}: {e}")
+        time.sleep(0.6)
+
+
 def refresh_player_game_logs():
     active_players = players.get_active_players()
     print(f"Refreshing game logs for {len(active_players)} active players "
@@ -118,6 +154,8 @@ def refresh_player_game_logs():
 if __name__ == "__main__":
     print(f"Cache directory: {CACHE_DIR}\n")
     refresh_team_stats()
+    print()
+    refresh_synergy_scheme_data()
     print()
     refresh_player_game_logs()
     print("\nDone. Now commit and push the data_cache/ folder to GitHub "

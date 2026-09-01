@@ -985,6 +985,7 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
             season=season,
             type_grouping_nullable="defensive",
             play_type_nullable=play_type,
+            timeout=5,
         )
         return data.get_data_frames()[0]
 
