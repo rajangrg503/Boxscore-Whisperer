@@ -37,6 +37,81 @@ from nba_api.stats.endpoints import (
 CURRENT_SEASON = "2026-27"   # update each year
 PREVIOUS_SEASON = "2025-26"
 
+# ---------- Local-to-cloud data cache ----------
+# nba_api works fine when this app runs locally, but is blocked by the
+# NBA's unofficial stats site when running on Streamlit Community
+# Cloud's shared IP range (a known, confirmed limitation -- see the
+# module docstring above). Rather than the app simply breaking on the
+# cloud, every real nba_api call below routes through cached_or_live():
+# it tries the live call first (works locally, and would work on any
+# host nba_api isn't blocking), and falls back to a cached local copy
+# of the same data if the live call fails.
+#
+# WORKFLOW: run this app locally periodically (or run refresh_cache.py,
+# see below) to populate/update data_cache/*.json with fresh data, then
+# commit and push that folder to GitHub. The deployed cloud app reads
+# whatever is in data_cache/ at deploy time -- it never needs to write
+# there itself, since Streamlit Cloud's filesystem doesn't persist
+# writes between sessions anyway.
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_cache")
+
+
+def _cache_key_to_path(key):
+    safe_key = "".join(c if (c.isalnum() or c in "_-") else "_" for c in key)
+    return os.path.join(CACHE_DIR, f"{safe_key}.json")
+
+
+def _save_df_cache(key, df):
+    """Best-effort local cache write -- safe to fail silently (e.g. on
+    a read-only filesystem). Caching is a local-machine workflow; the
+    deployed cloud app only ever reads these files."""
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        payload = {
+            "cached_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "data": df.to_dict(orient="records"),
+        }
+        with open(_cache_key_to_path(key), "w") as f:
+            import json
+            json.dump(payload, f)
+    except Exception:
+        pass
+
+
+def _load_df_cache(key):
+    """Returns (dataframe, cached_at_string) if a cache file exists for
+    this key, else (None, None)."""
+    path = _cache_key_to_path(key)
+    if not os.path.exists(path):
+        return None, None
+    try:
+        import json
+        with open(path) as f:
+            payload = json.load(f)
+        return pd.DataFrame(payload["data"]), payload.get("cached_at")
+    except Exception:
+        return None, None
+
+
+def cached_or_live(key, fetch_fn):
+    """Try a live nba_api call first; fall back to a cached local copy
+    if the live call raises (e.g. nba_api blocked on this host).
+    Returns (dataframe, source_label) where source_label is "live" or
+    "cached (<timestamp>)", so callers can show which one was actually
+    used. Re-raises the live error only if no cached copy exists
+    either -- at that point there's genuinely nothing to show."""
+    try:
+        df = fetch_fn()
+        _save_df_cache(key, df)
+        return df, "live"
+    except Exception as live_error:
+        cached_df, cached_at = _load_df_cache(key)
+        if cached_df is not None:
+            label = f"cached copy from {cached_at}" if cached_at else "cached copy"
+            return cached_df, label
+        raise live_error
+
+
 SCHEME_ADJUSTMENTS = {
     "Drop coverage": 1.03,             # big sags back in the paint on PnR -- favors pull-up scorers
     "Switch everything": 0.97,         # limits easy paint/rim looks, creates size mismatches
@@ -224,8 +299,19 @@ def refresh_pending_predictions():
 def fetch_combined_game_log(player_id, season):
     """Fetch a player's game log for a season, blending regular season
     and playoff games into one combined dataset. Playoffs come from a
-    separate season_type query and simply get concatenated on."""
+    separate season_type query and simply get concatenated on -- a
+    missing playoff log is normal (most players didn't make the
+    playoffs that year) and isn't treated as an error.
+
+    A failure on the Regular Season call specifically is a different
+    story -- every rostered player has some current/recent regular
+    season log, so that failing means the live API call itself broke
+    (e.g. nba_api blocked on this host). In that case this falls back
+    to a cached local copy via cached_or_live() instead of silently
+    returning an empty, columnless DataFrame that breaks every
+    downstream stat lookup with a confusing KeyError."""
     frames = []
+    regular_season_error = None
     for season_type in ["Regular Season", "Playoffs"]:
         try:
             log = playergamelog.PlayerGameLog(
@@ -234,11 +320,26 @@ def fetch_combined_game_log(player_id, season):
             df = log.get_data_frames()[0]
             if not df.empty:
                 frames.append(df)
-        except Exception:
+        except Exception as e:
+            if season_type == "Regular Season":
+                regular_season_error = e
             continue
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+
+    cache_key = f"gamelog_{player_id}_{season}"
+
+    if regular_season_error is not None and not frames:
+        cached_df, _cached_at = _load_df_cache(cache_key)
+        if cached_df is not None:
+            return cached_df
+        raise ConnectionError(
+            f"Live NBA data fetch failed for player {player_id}, season {season}, "
+            f"and no cached copy exists yet."
+        ) from regular_season_error
+
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if not combined.empty:
+        _save_df_cache(cache_key, combined)
+    return combined
 
 
 HEAD_TO_HEAD_SEASONS = [CURRENT_SEASON, PREVIOUS_SEASON, "2024-25", "2023-24"]
@@ -477,12 +578,33 @@ def get_season_baseline(player_id, player_name):
     return stats_dict, source
 
 
+def get_league_advanced_team_stats(season):
+    """Full-league snapshot of DEF_RATING and PACE for every team, in a
+    single API call -- this powers both get_team_defensive_rating
+    (below) and the 'Opponent Defensive Profile' dropdown labels, so
+    they never make two separate calls for the same season.
+
+    Tries a live nba_api call first; falls back to a cached local copy
+    (see cached_or_live) if the live call fails -- e.g. nba_api is
+    blocked on Streamlit Community Cloud but this season was already
+    fetched and cached from a local run."""
+    def _fetch():
+        stats = leaguedashteamstats.LeagueDashTeamStats(
+            season=season, measure_type_detailed_defense="Advanced"
+        )
+        df = stats.get_data_frames()[0]
+        cols = ["TEAM_ID", "TEAM_NAME", "DEF_RATING", "PACE", "GP"]
+        return df[[c for c in cols if c in df.columns]].copy()
+
+    df, _source = cached_or_live(f"team_stats_advanced_{season}", _fetch)
+    return df
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_team_defensive_rating(team_id, season):
-    stats = leaguedashteamstats.LeagueDashTeamStats(
-        season=season, measure_type_detailed_defense="Advanced"
-    )
-    df = stats.get_data_frames()[0]
+    df = get_league_advanced_team_stats(season)
+    if df.empty or "DEF_RATING" not in df.columns:
+        return None, None, None
     league_avg = df["DEF_RATING"].mean()
     team_row = df[df["TEAM_ID"] == team_id]
     if team_row.empty:
@@ -512,20 +634,6 @@ def get_opponent_defense_with_fallback(team_id):
         f"roster changes."
     )
     return prev_def_rating, prev_league_avg, note
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_league_advanced_team_stats(season):
-    """Full-league snapshot of DEF_RATING and PACE for every team, in a
-    single API call -- this powers the labeled 'Opponent Defensive
-    Profile' dropdown (e.g. "Boston Celtics (Balanced / Top Def)")
-    below, so we don't need a separate call per team."""
-    stats = leaguedashteamstats.LeagueDashTeamStats(
-        season=season, measure_type_detailed_defense="Advanced"
-    )
-    df = stats.get_data_frames()[0]
-    cols = ["TEAM_ID", "TEAM_NAME", "DEF_RATING", "PACE", "GP"]
-    return df[[c for c in cols if c in df.columns]].copy()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -596,7 +704,6 @@ def get_team_profiles():
     return profiles
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def get_league_advanced_team_stats_since(date_from_str):
     """Same idea as get_league_advanced_team_stats, but restricted to
     games from date_from_str (MM/DD/YYYY) onward, current season only.
@@ -604,13 +711,18 @@ def get_league_advanced_team_stats_since(date_from_str):
     DEF_RATING/PACE blends pre- and post-trade games together, which
     is actively misleading right after a roster shakeup like adding a
     superstar."""
-    stats = leaguedashteamstats.LeagueDashTeamStats(
-        season=CURRENT_SEASON, measure_type_detailed_defense="Advanced",
-        date_from_nullable=date_from_str,
-    )
-    df = stats.get_data_frames()[0]
-    cols = ["TEAM_ID", "TEAM_NAME", "DEF_RATING", "PACE", "GP"]
-    return df[[c for c in cols if c in df.columns]].copy()
+    def _fetch():
+        stats = leaguedashteamstats.LeagueDashTeamStats(
+            season=CURRENT_SEASON, measure_type_detailed_defense="Advanced",
+            date_from_nullable=date_from_str,
+        )
+        df = stats.get_data_frames()[0]
+        cols = ["TEAM_ID", "TEAM_NAME", "DEF_RATING", "PACE", "GP"]
+        return df[[c for c in cols if c in df.columns]].copy()
+
+    safe_date = date_from_str.replace("/", "-")
+    df, _source = cached_or_live(f"team_stats_since_{safe_date}", _fetch)
+    return df
 
 
 def get_opponent_defense_post_change(team_id, change_date):
@@ -774,14 +886,19 @@ def get_defender_matchup_adjustment(player_id, player_full_name, defender_name, 
     defender_id = match[0]["id"]
 
     for try_season in [season, PREVIOUS_SEASON]:
-        try:
+        def _fetch():
             data = leagueseasonmatchups.LeagueSeasonMatchups(
                 off_player_id_nullable=player_id,
                 def_player_id_nullable=defender_id,
                 season=try_season,
             )
-            df = data.get_data_frames()[0]
-        except Exception as e:
+            return data.get_data_frames()[0]
+
+        try:
+            df, _source = cached_or_live(
+                f"matchup_{player_id}_{defender_id}_{try_season}", _fetch
+            )
+        except Exception:
             continue
 
         if df.empty:
@@ -839,7 +956,7 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
             f"using your manual estimate x{manual_value:.3f} (not data-backed)."
         )
 
-    try:
+    def _fetch():
         data = synergyplaytypes.SynergyPlayTypes(
             league_id="00",
             per_mode_simple="PerGame",
@@ -849,7 +966,10 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
             type_grouping_nullable="defensive",
             play_type_nullable=play_type,
         )
-        df = data.get_data_frames()[0]
+        return data.get_data_frames()[0]
+
+    try:
+        df, source = cached_or_live(f"synergy_{play_type}_{season}", _fetch)
         team_row = df[df["TEAM_ID"] == team_id]
         if team_row.empty or len(df) < 5:
             return manual_value, (
@@ -860,10 +980,11 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
         league_avg_ppp = df["PPP"].mean()
         gap_pct = (team_ppp - league_avg_ppp) / league_avg_ppp
         real_adjustment = 1 + (gap_pct * 0.5)  # same damping as opponent DEF_RATING
+        source_note = "" if source == "live" else f" (from a {source})"
         return real_adjustment, (
-            f"REAL DATA: {scheme_label} maps to Synergy '{play_type}' defense -- "
-            f"team allows {team_ppp:.2f} PPP vs. league avg {league_avg_ppp:.2f} PPP "
-            f"-> adjustment x{real_adjustment:.3f}."
+            f"REAL DATA{source_note}: {scheme_label} maps to Synergy '{play_type}' "
+            f"defense -- team allows {team_ppp:.2f} PPP vs. league avg "
+            f"{league_avg_ppp:.2f} PPP -> adjustment x{real_adjustment:.3f}."
         )
     except Exception as e:
         return manual_value, (
