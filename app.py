@@ -1704,6 +1704,10 @@ if submitted:
         "using_h2h": using_h2h,
         "h2h_cutoff": h2h_cutoff,
         "roster_change_active": roster_change_active,
+        "post_change_thin_sample": post_change_thin_sample,
+        "key_player_ids": key_player_ids,
+        "no_combo_data": no_combo_data,
+        "valid_ids": valid_ids,
     }
 
 if "results" in st.session_state:
@@ -1725,6 +1729,10 @@ if "results" in st.session_state:
     using_h2h = r["using_h2h"]
     h2h_cutoff = r["h2h_cutoff"]
     roster_change_active = r["roster_change_active"]
+    post_change_thin_sample = r["post_change_thin_sample"]
+    key_player_ids = r["key_player_ids"]
+    no_combo_data = r["no_combo_data"]
+    valid_ids = r["valid_ids"]
 
     headshot_url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
     st.markdown(
