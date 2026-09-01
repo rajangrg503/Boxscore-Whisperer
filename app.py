@@ -731,6 +731,7 @@ def get_league_advanced_team_stats_since(date_from_str):
         stats = leaguedashteamstats.LeagueDashTeamStats(
             season=CURRENT_SEASON, measure_type_detailed_defense="Advanced",
             date_from_nullable=date_from_str,
+            timeout=5,
         )
         df = stats.get_data_frames()[0]
         cols = ["TEAM_ID", "TEAM_NAME", "DEF_RATING", "PACE", "GP"]
