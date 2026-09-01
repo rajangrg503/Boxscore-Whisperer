@@ -99,14 +99,12 @@ def refresh_team_stats():
 
 
 def refresh_player_game_logs():
-    print(f"Refreshing game logs for {len(PLAYERS_TO_CACHE)} players "
+    active_players = players.get_active_players()
+    print(f"Refreshing game logs for {len(active_players)} active players "
           f"across {len(HEAD_TO_HEAD_SEASONS)} seasons each...")
-    for name in PLAYERS_TO_CACHE:
-        match = players.find_players_by_full_name(name)
-        if not match:
-            print(f"  ! No player found for '{name}' -- check spelling")
-            continue
-        player_id = match[0]["id"]
+    for player in active_players:
+        name = player["full_name"]
+        player_id = player["id"]
         print(f"  {name} (id {player_id}):")
         for season in HEAD_TO_HEAD_SEASONS:
             df = fetch_combined_game_log(player_id, season)
