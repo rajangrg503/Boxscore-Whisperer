@@ -1702,6 +1702,8 @@ if submitted:
         "scheme_executor_input": scheme_executor_input,
         "game_log": game_log_for_hitrate,
         "using_h2h": using_h2h,
+        "h2h_cutoff": h2h_cutoff,
+        "roster_change_active": roster_change_active,
     }
 
 if "results" in st.session_state:
@@ -1721,6 +1723,8 @@ if "results" in st.session_state:
     scheme_executor_input = r["scheme_executor_input"]
     game_log_for_hitrate = r["game_log"]
     using_h2h = r["using_h2h"]
+    h2h_cutoff = r["h2h_cutoff"]
+    roster_change_active = r["roster_change_active"]
 
     headshot_url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
     st.markdown(
