@@ -850,10 +850,11 @@ def get_teammate_availability_adjustment(player_id, missing_names, season):
         return neutral, (f"No game log available for {season} (live fetch failed, not yet "
                           f"cached) -- skipping this adjustment."), 0
 
-   if st.session_state.get("_live_nba_api_blocked"):
+    if st.session_state.get("_live_nba_api_blocked"):
         return neutral, (f"Live NBA data already confirmed unreachable this session -- "
-                          f"skipping per-game teammate-availability scan."), 0 
-       matching_games = []
+                          f"skipping per-game teammate-availability scan."), 0
+
+    matching_games = []
     consecutive_failures = 0
     games_checked = 0
     MAX_CONSECUTIVE_FAILURES = 3  # after this many in a row, assume the
