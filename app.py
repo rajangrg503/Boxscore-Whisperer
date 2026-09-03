@@ -1199,8 +1199,8 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
     play_type = SCHEME_TO_SYNERGY_PLAYTYPE.get(scheme_label)
     manual_value = SCHEME_ADJUSTMENTS[scheme_label]
 
-    if play_type is None:
-            if scheme_label == "Man-to-man (standard)":
+        if play_type is None:
+        if scheme_label == "Man-to-man (standard)":
             if st.session_state.get("_live_nba_api_blocked"):
                 return manual_value, (
                     f"'{scheme_label}' has no real Synergy play-type equivalent, and "
