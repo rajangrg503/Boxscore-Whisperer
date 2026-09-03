@@ -1208,15 +1208,15 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
                                                      # signal, not a full defense
                                                      # rating replacement
             for try_season in [season, PREVIOUS_SEASON]:
-                        try:
-            def _fetch_hustle():
-                hustle = leaguehustlestatsteam.LeagueHustleStatsTeam(
-                    season=try_season, per_mode_time="PerGame", timeout=10
-                )
-                return hustle.get_data_frames()[0]
-            hustle_df, _hustle_source = cached_or_live(
-                f"hustle_team_stats_{try_season}", _fetch_hustle
-            )
+                try:
+                    def _fetch_hustle():
+                        hustle = leaguehustlestatsteam.LeagueHustleStatsTeam(
+                            season=try_season, per_mode_time="PerGame", timeout=10
+                        )
+                        return hustle.get_data_frames()[0]
+                    hustle_df, _hustle_source = cached_or_live(
+                        f"hustle_team_stats_{try_season}", _fetch_hustle
+                    )
                 except Exception:
                     continue
                 if hustle_df.empty or "DEFLECTIONS" not in hustle_df.columns:
