@@ -1007,8 +1007,7 @@ def get_new_teammate_impact_adjustment(player_id, new_teammate_name, season):
 def get_opponent_missing_adjustment(missing_opponents, season):
     if not missing_opponents:
         return 1.0, "No missing opponent players specified -- no adjustment."
-
-        if st.session_state.get("_live_nba_api_blocked"):
+    if st.session_state.get("_live_nba_api_blocked"):
         return 1.0, ("Live NBA data already confirmed unreachable this session -- "
                       "skipping opponent-missing-player adjustment.")
 
