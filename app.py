@@ -850,7 +850,10 @@ def get_teammate_availability_adjustment(player_id, missing_names, season):
         return neutral, (f"No game log available for {season} (live fetch failed, not yet "
                           f"cached) -- skipping this adjustment."), 0
 
-    matching_games = []
+   if st.session_state.get("_live_nba_api_blocked"):
+        return neutral, (f"Live NBA data already confirmed unreachable this session -- "
+                          f"skipping per-game teammate-availability scan."), 0 
+       matching_games = []
     consecutive_failures = 0
     games_checked = 0
     MAX_CONSECUTIVE_FAILURES = 3  # after this many in a row, assume the
@@ -1003,6 +1006,10 @@ def get_new_teammate_impact_adjustment(player_id, new_teammate_name, season):
 def get_opponent_missing_adjustment(missing_opponents, season):
     if not missing_opponents:
         return 1.0, "No missing opponent players specified -- no adjustment."
+
+        if st.session_state.get("_live_nba_api_blocked"):
+        return 1.0, ("Live NBA data already confirmed unreachable this session -- "
+                      "skipping opponent-missing-player adjustment.")
 
     # Pull league-wide estimated net ratings once (not per player) so a
     # missing player's real two-way impact -- not just their minutes --
@@ -1193,7 +1200,13 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
     manual_value = SCHEME_ADJUSTMENTS[scheme_label]
 
     if play_type is None:
-        if scheme_label == "Man-to-man (standard)":
+            if scheme_label == "Man-to-man (standard)":
+            if st.session_state.get("_live_nba_api_blocked"):
+                return manual_value, (
+                    f"'{scheme_label}' has no real Synergy play-type equivalent, and "
+                    f"live disruption data is unavailable this session -- using your "
+                    f"manual estimate \U0001F9E9 Scheme Layer Applied \u2014 x{manual_value:.3f} (not data-backed)."
+                )
             from nba_api.stats.endpoints import leaguehustlestatsteam
 
             DEFLECTIONS_ADJUSTMENT_STRENGTH = 0.4  # kept modest -- this is a
