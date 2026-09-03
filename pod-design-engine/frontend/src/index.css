@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-surface text-gray-100;
+  margin: 0;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-panelLight rounded-full;
+}
+
+.checker-bg {
+  background-image: repeating-conic-gradient(#2a2a30 0% 25%, #1a1a1f 0% 50%);
+  background-size: 20px 20px;
+}
+
+.input-text {
+  @apply bg-panelLight border border-black/40 rounded px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-accent;
+}
+
+.input-select {
+  @apply bg-panelLight border border-black/40 rounded px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-accent;
+}

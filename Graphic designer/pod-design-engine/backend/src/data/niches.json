@@ -1,0 +1,37 @@
+{
+  "kids_birthday": {
+    "label": "Kids Birthday",
+    "defaultPalette": "playful_bright",
+    "fontStack": "'Baloo 2', 'Poppins', sans-serif",
+    "fontWeight": 800,
+    "textTransform": "none"
+  },
+  "kids_soft": {
+    "label": "Kids Soft / Nursery",
+    "defaultPalette": "pastel_soft",
+    "fontStack": "'Fredoka', 'Poppins', sans-serif",
+    "fontWeight": 700,
+    "textTransform": "capitalize"
+  },
+  "premium_apparel": {
+    "label": "Premium Streetwear",
+    "defaultPalette": "premium_neutral",
+    "fontStack": "'Bebas Neue', 'Oswald', sans-serif",
+    "fontWeight": 400,
+    "textTransform": "uppercase"
+  },
+  "retro_vintage": {
+    "label": "Retro / Vintage",
+    "defaultPalette": "bold_retro",
+    "fontStack": "'Anton', 'Oswald', sans-serif",
+    "fontWeight": 400,
+    "textTransform": "uppercase"
+  },
+  "minimal_editorial": {
+    "label": "Minimal Editorial",
+    "defaultPalette": "monochrome_editorial",
+    "fontStack": "'Helvetica Neue', Arial, sans-serif",
+    "fontWeight": 300,
+    "textTransform": "none"
+  }
+}

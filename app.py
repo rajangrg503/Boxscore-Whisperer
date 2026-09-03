@@ -406,7 +406,7 @@ def get_head_to_head_baseline(player_id, opponent_abbr, num_games, cutoff_date=N
     return stats_dict, source, actual_n
 
 
-def blend_baseline_stats(season_stats, shrinkage_k=8, team_h2h=None, team_h2h_n=0,
+def blend_baseline_stats(season_stats, shrinkage_k=4, team_h2h=None, team_h2h_n=0,
                           extra_sources=None):
     """Blend season average, team head-to-head, and any number of
     extra sources -- e.g. head-to-head vs. one specific opponent
@@ -799,46 +799,215 @@ def get_opponent_dropdown_options():
 
 
 def get_teammate_availability_adjustment(player_id, missing_names, season):
+    """Measures how this player's production differs in real games
+    where a specific teammate did NOT play vs. games where they did,
+    within the same season -- a genuine natural experiment, not a
+    guess.
+
+    Returns (adjustments, note, matching_game_count). adjustments is a
+    dict mapping each STAT_COLUMNS key to its OWN ratio -- a center's
+    rebounds and a guard's assists can move differently, so this does
+    NOT blend everything into one scoring-based number.
+
+    Requires a real sample of games BOTH missing the teammate AND with
+    them present. If a teammate has left the team entirely, every game
+    this season trivially "misses" them -- that's not a genuine
+    comparison, so it's detected and skipped rather than silently
+    returning a near-meaningless ratio. matching_game_count is 0
+    whenever there's no usable comparison, so callers can fall back to
+    an earlier season without relying on fragile text-matching."""
+    neutral = {col: 1.0 for col, _ in STAT_COLUMNS}
+
     if not missing_names:
-        return 1.0, "No missing teammates specified -- no adjustment."
+        return neutral, "No missing teammates specified -- no adjustment.", 0
 
     try:
         df = fetch_combined_game_log(player_id, season)
     except Exception:
-        return 1.0, (f"No game log available for {season} (live fetch failed, not yet "
-                      f"cached) -- skipping this adjustment.")
+        return neutral, (f"No game log available for {season} (live fetch failed, not yet "
+                          f"cached) -- skipping this adjustment."), 0
 
     matching_games = []
+    consecutive_failures = 0
+    games_checked = 0
+    MAX_CONSECUTIVE_FAILURES = 3  # after this many in a row, assume the
+                                   # live host is blocked for this whole
+                                   # request and stop paying the timeout
+                                   # cost on every remaining game
+    MAX_GAMES_TO_CHECK = 20        # bound the worst case even when the
+                                    # live host IS reachable
+
     for _, row in df.iterrows():
+        if games_checked >= MAX_GAMES_TO_CHECK:
+            break
+        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+            break
         game_id = row["Game_ID"]
+        games_checked += 1
         try:
             box = boxscoretraditionalv2.BoxScoreTraditionalV2(game_id=game_id, timeout=5)
             box_df = box.get_data_frames()[0]
             players_in_game = set(box_df["PLAYER_NAME"])
         except Exception:
+            consecutive_failures += 1
             continue
+        consecutive_failures = 0  # reset streak on any success
         time.sleep(0.5)
         if all(name not in players_in_game for name in missing_names):
             matching_games.append(row)
 
-    if len(matching_games) < 3:
-        return 1.0, (f"Only found {len(matching_games)} past games missing "
-                      f"{missing_names} -- too few to trust, skipping this adjustment.")
+    present_count = games_checked - len(matching_games)
+
+    if len(matching_games) < 3 or present_count < 3:
+        return neutral, (f"Found {len(matching_games)} game(s) missing {missing_names} "
+                          f"out of {games_checked} checked (and {present_count} with them "
+                          f"present) -- not enough real contrast in both directions to "
+                          f"trust a comparison, skipping this adjustment."), 0
 
     matched_df = pd.DataFrame(matching_games)
-    avg_with_missing = matched_df["PTS"].mean()
-    avg_overall = df["PTS"].mean()
-    ratio = avg_with_missing / avg_overall if avg_overall else 1.0
-    return ratio, (f"Found {len(matching_games)} games missing {missing_names}: "
-                    f"averaged {avg_with_missing:.1f} pts vs. {avg_overall:.1f} pts overall "
-                    f"({(ratio - 1) * 100:+.1f}%)")
+    adjustments = {}
+    per_stat_notes = []
+    for col, _label in STAT_COLUMNS:
+        avg_with_missing = matched_df[col].mean()
+        avg_overall = df[col].mean()
+        ratio = avg_with_missing / avg_overall if avg_overall else 1.0
+        adjustments[col] = ratio
+        per_stat_notes.append(
+            f"{col} {avg_with_missing:.1f} vs {avg_overall:.1f} overall ({(ratio - 1) * 100:+.1f}%)"
+        )
+
+    summary = ", ".join(per_stat_notes)
+    return adjustments, (
+        f"Found {len(matching_games)} games missing {missing_names} (vs. {present_count} "
+        f"with them present), stat-by-stat: {summary}."
+    ), len(matching_games)
+def get_new_teammate_impact_adjustment(player_id, new_teammate_name, season):
+    """Measures how a specific teammate's HEAVY on-court presence has
+    historically correlated with this player's production, using real
+    shared games -- not a guess. Splits games where both players were
+    on the same team into "teammate played heavy minutes" vs. "teammate
+    played light/no minutes", and compares this player's stats between
+    those two buckets.
+
+    Returns (adjustments, note, shared_game_count). adjustments is a
+    dict mapping each STAT_COLUMNS key to its OWN ratio -- a center's
+    rebounding and a point guard's assists can move in different
+    directions (or not at all) when a new ball-handler arrives, so
+    this deliberately does NOT blend everything into one scoring-based
+    number. shared_game_count is a real integer (not a parsed message)
+    so callers can decide whether to check an earlier season without
+    relying on fragile text-matching.
+
+    A neutral dict (all 1.0) and a count of 0 are returned whenever
+    there isn't enough real data to trust a comparison.
+
+    Only works when the two players have actual shared game history on
+    the same team -- a brand-new pairing that has never shared the
+    floor has no data to measure an effect from yet, and this function
+    says so plainly rather than guessing."""
+    neutral = {col: 1.0 for col, _ in STAT_COLUMNS}
+
+    if not new_teammate_name:
+        return neutral, "No new teammate specified -- no adjustment.", 0
+
+    match = players.find_players_by_full_name(new_teammate_name)
+    if not match:
+        return neutral, f"No player found named '{new_teammate_name}' -- check spelling, skipping.", 0
+    teammate_id = match[0]["id"]
+
+    try:
+        player_df = fetch_combined_game_log(player_id, season)
+        teammate_df = fetch_combined_game_log(teammate_id, season)
+    except Exception:
+        return neutral, ("Game log unavailable for this season (live fetch failed, not "
+                          "yet cached) -- skipping this adjustment."), 0
+
+    if player_df.empty or teammate_df.empty:
+        return neutral, (f"No shared game history found between this player and "
+                          f"{new_teammate_name} yet -- likely a brand-new pairing. This "
+                          f"adjustment needs real games played together to measure an "
+                          f"effect, so it's skipped rather than guessed at."), 0
+
+    # Only trust games where they were on the SAME team, not games where
+    # they happened to face each other as opponents (that's a different
+    # question, already covered by the head-to-head features).
+    player_df = player_df.copy()
+    teammate_df = teammate_df.copy()
+    player_df["_team_abbr"] = player_df["MATCHUP"].str.split().str[0]
+    teammate_df["_team_abbr"] = teammate_df["MATCHUP"].str.split().str[0]
+
+    shared = player_df.merge(
+        teammate_df[["Game_ID", "MIN", "_team_abbr"]],
+        on="Game_ID", suffixes=("", "_teammate"),
+    )
+    shared = shared[shared["_team_abbr"] == shared["_team_abbr_teammate"]]
+
+    if len(shared) < 5:
+        return neutral, (f"Only found {len(shared)} shared game(s) as teammates with "
+                          f"{new_teammate_name} this season -- too few to trust, "
+                          f"skipping this adjustment."), len(shared)
+
+    HEAVY_MINUTES_THRESHOLD = 25
+    heavy = shared[shared["MIN_teammate"] >= HEAVY_MINUTES_THRESHOLD]
+    light = shared[shared["MIN_teammate"] < HEAVY_MINUTES_THRESHOLD]
+
+    if len(heavy) < 3 or len(light) < 3:
+        return neutral, (f"Found {len(shared)} shared games with {new_teammate_name}, but "
+                          f"not enough of a split between heavy-minute and light-minute "
+                          f"games ({len(heavy)} vs {len(light)}) to trust a comparison -- "
+                          f"skipping."), len(shared)
+
+    adjustments = {}
+    per_stat_notes = []
+    for col, _label in STAT_COLUMNS:
+        avg_heavy = heavy[col].mean()
+        avg_light = light[col].mean()
+        ratio = avg_heavy / avg_light if avg_light else 1.0
+        adjustments[col] = ratio
+        per_stat_notes.append(
+            f"{col} {avg_heavy:.1f} vs {avg_light:.1f} ({(ratio - 1) * 100:+.1f}%)"
+        )
+
+    summary = ", ".join(per_stat_notes)
+    return adjustments, (
+        f"Found {len(shared)} shared games with {new_teammate_name} -- comparing the "
+        f"{len(heavy)} game(s) where {new_teammate_name} played "
+        f"{HEAVY_MINUTES_THRESHOLD}+ minutes vs. the {len(light)} game(s) with lighter "
+        f"minutes, stat-by-stat: {summary}."
+    ), len(shared)
 
 
 def get_opponent_missing_adjustment(missing_opponents, season):
     if not missing_opponents:
         return 1.0, "No missing opponent players specified -- no adjustment."
 
-    total_mpg = 0.0
+    # Pull league-wide estimated net ratings once (not per player) so a
+    # missing player's real two-way impact -- not just their minutes --
+    # informs how much their absence should matter. Falls back to last
+    # season if the current one has no games yet (e.g. preseason).
+    from nba_api.stats.endpoints import playerestimatedmetrics
+
+    net_rating_by_id = {}
+    metrics_season_used = None
+    for try_season in [season, PREVIOUS_SEASON]:
+        try:
+            metrics = playerestimatedmetrics.PlayerEstimatedMetrics(
+                season=try_season, timeout=10
+            )
+            metrics_df = metrics.get_data_frames()[0]
+        except Exception:
+            continue
+        if not metrics_df.empty:
+            net_rating_by_id = dict(zip(metrics_df["PLAYER_ID"], metrics_df["E_NET_RATING"]))
+            metrics_season_used = try_season
+            break
+
+    QUALITY_SCALE = 10.0  # a player at +10 E_NET_RATING roughly doubles
+                           # their raw-MPG weight; -10 roughly zeroes it out.
+    MIN_QUALITY_MULTIPLIER = 0.2  # floor, so a very poor E_NET_RATING never
+                                   # flips a player's contribution negative
+
+    total_weighted_mpg = 0.0
     found_players = []
     for name in missing_opponents:
         try:
@@ -852,8 +1021,19 @@ def get_opponent_missing_adjustment(missing_opponents, season):
             if season_row.empty:
                 season_row = df.tail(1)
             mpg = season_row["MIN"].values[0] / season_row["GP"].values[0]
-            total_mpg += mpg
-            found_players.append((name, round(mpg, 1)))
+
+            net_rating = net_rating_by_id.get(pid)
+            if net_rating is not None:
+                quality_multiplier = max(MIN_QUALITY_MULTIPLIER, 1 + (net_rating / QUALITY_SCALE))
+                weighted_mpg = mpg * quality_multiplier
+                found_players.append((name, round(mpg, 1), round(net_rating, 1)))
+            else:
+                weighted_mpg = mpg  # no estimated-metrics data found for this
+                                     # player -- fall back to raw MPG rather
+                                     # than dropping them entirely
+                found_players.append((name, round(mpg, 1), None))
+
+            total_weighted_mpg += weighted_mpg
             time.sleep(0.5)
         except Exception:
             continue
@@ -861,12 +1041,21 @@ def get_opponent_missing_adjustment(missing_opponents, season):
     if not found_players:
         return 1.0, f"Could not find stats for {missing_opponents} -- skipping adjustment."
 
-    minutes_fraction = total_mpg / 240
+    minutes_fraction = total_weighted_mpg / 240
     adjustment = 1 + (minutes_fraction * 0.35)
-    detail = ", ".join(f"{n} ({m} MPG)" for n, m in found_players)
-    return adjustment, (f"Missing: {detail} -> {total_mpg:.1f} combined MPG out "
-                         f"-> adjustment x{adjustment:.3f}")
-
+    detail_parts = []
+    for n, m, nr in found_players:
+        if nr is not None:
+            detail_parts.append(f"{n} ({m} MPG, {nr:+.1f} net rtg)")
+        else:
+            detail_parts.append(f"{n} ({m} MPG, net rtg unavailable)")
+    detail = ", ".join(detail_parts)
+    if metrics_season_used:
+        metrics_note = f" [quality-weighted using {metrics_season_used} estimated net ratings]"
+    else:
+        metrics_note = " [net rating data unavailable -- weighted by MPG only]"
+    return adjustment, (f"Missing: {detail}{metrics_note} -> "
+                         f"\U0001F691 Opponent Missing Players Layer Applied \u2014 x{adjustment:.3f}")
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _safe_float(value):
@@ -969,14 +1158,59 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
     pull actual team defensive efficiency (points per possession) for
     that play type and use it instead of the guessed multiplier.
     Falls back to the manual estimate if no mapping exists or the
-    data can't be fetched."""
+    data can't be fetched.
+
+    Special case: 'Man-to-man (standard)' has no Synergy play-type
+    equivalent, but real disruption data (deflections/game vs. league
+    average) is available and genuinely reflects man-to-man defensive
+    quality without double-counting the separate Opponent Defense
+    Layer (which measures points-allowed efficiency, a different
+    dimension from ball pressure/disruption)."""
     play_type = SCHEME_TO_SYNERGY_PLAYTYPE.get(scheme_label)
     manual_value = SCHEME_ADJUSTMENTS[scheme_label]
 
     if play_type is None:
+        if scheme_label == "Man-to-man (standard)":
+            from nba_api.stats.endpoints import leaguehustlestatsteam
+
+            DEFLECTIONS_ADJUSTMENT_STRENGTH = 0.4  # kept modest -- this is a
+                                                     # supplementary disruption
+                                                     # signal, not a full defense
+                                                     # rating replacement
+            for try_season in [season, PREVIOUS_SEASON]:
+                try:
+                    hustle = leaguehustlestatsteam.LeagueHustleStatsTeam(
+                        season=try_season, per_mode_time="PerGame", timeout=10
+                    )
+                    hustle_df = hustle.get_data_frames()[0]
+                except Exception:
+                    continue
+                if hustle_df.empty or "DEFLECTIONS" not in hustle_df.columns:
+                    continue
+                team_row = hustle_df[hustle_df["TEAM_ID"] == team_id]
+                if team_row.empty:
+                    continue
+                team_deflections = team_row["DEFLECTIONS"].values[0]
+                league_avg_deflections = hustle_df["DEFLECTIONS"].mean()
+                gap_pct = (team_deflections - league_avg_deflections) / league_avg_deflections
+                real_adjustment = 1 - (gap_pct * DEFLECTIONS_ADJUSTMENT_STRENGTH)
+                if try_season == season:
+                    source_note = ""
+                else:
+                    source_note = f" (from {try_season}, {season} not available yet)"
+                return real_adjustment, (
+                    f"'Man-to-man (standard)' has no real Synergy play-type "
+                    f"equivalent, but real disruption data is available{source_note}: "
+                    f"{team_deflections:.1f} deflections/game vs. league avg "
+                    f"{league_avg_deflections:.1f} -> \U0001F9E9 Scheme Layer Applied "
+                    f"\u2014 x{real_adjustment:.3f}"
+                )
+            # hustle data unavailable in any season checked -- fall through
+            # to the plain manual estimate below
+
         return manual_value, (
             f"'{scheme_label}' has no real Synergy play-type equivalent -- "
-            f"using your manual estimate x{manual_value:.3f} (not data-backed)."
+            f"using your manual estimate \U0001F9E9 Scheme Layer Applied \u2014 x{manual_value:.3f} (not data-backed)."
         )
 
     def _fetch():
@@ -991,14 +1225,13 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
             timeout=5,
         )
         return data.get_data_frames()[0]
-
     try:
         df, source = cached_or_live(f"synergy_{play_type}_{season}", _fetch)
         team_row = df[df["TEAM_ID"] == team_id]
         if team_row.empty or len(df) < 5:
             return manual_value, (
                 f"Synergy '{play_type}' data unavailable for this team -- "
-                f"falling back to manual estimate x{manual_value:.3f}."
+                f"falling back to manual estimate \U0001F9E9 Scheme Layer Applied \u2014 x{manual_value:.3f}."
             )
         team_ppp = team_row["PPP"].values[0]
         league_avg_ppp = df["PPP"].mean()
@@ -1008,14 +1241,13 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
         return real_adjustment, (
             f"REAL DATA{source_note}: {scheme_label} maps to Synergy '{play_type}' "
             f"defense -- team allows {team_ppp:.2f} PPP vs. league avg "
-            f"{league_avg_ppp:.2f} PPP -> adjustment x{real_adjustment:.3f}."
+            f"{league_avg_ppp:.2f} PPP -> \U0001F9E9 Scheme Layer Applied \u2014 x{real_adjustment:.3f}."
         )
     except Exception as e:
         return manual_value, (
             f"Synergy data fetch failed ({e}) -- falling back to manual estimate "
-            f"x{manual_value:.3f}."
+            f"\U0001F9E9 Scheme Layer Applied \u2014 x{manual_value:.3f}."
         )
-
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_full_game_log(player_id, season):
@@ -1093,7 +1325,7 @@ html, body, [class*="css"] {
     font-size: 16px;
     color: #9ca3af;
     text-align: center;
-    margin-bottom: 32px;
+    margin-bottom: 48px;  /* patch_hero_breathing_room */
 }
 
 /* Search-bar-style container around the form */
@@ -1347,699 +1579,908 @@ def get_team_name_list():
 player_names = get_player_name_list()
 team_names = get_team_name_list()
 
-with st.form("predictor_form"):
-    st.markdown('<div class="search-row">', unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
-    with col1:
-        player_input = st.selectbox(
-            "Player", options=player_names, index=None, placeholder="Search a player..."
-        )
-    with col2:
-        opponent_options, opponent_label_to_name = get_opponent_dropdown_options()
-        opponent_label_input = st.selectbox(
-            "Opponent — pace / defense at a glance", options=opponent_options, index=None,
-            placeholder="Search a team...", key="opponent_select",
-        )
-        opponent_input = opponent_label_to_name.get(opponent_label_input) if opponent_label_input else None
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.caption(
-        "Pace and defense tags are computed live from this season's team stats "
-        "(falling back to last season early in the year) — not fixed presets."
-    )
+tab1, tab2 = st.tabs(["Single Player", "Full Matchup"])  # patch_tabs_split
 
-    baseline_source_input = st.selectbox(
-        "Baseline source",
-        ["Season average (default)", "Last 5 games vs. this opponent", "Last 10 games vs. this opponent"],
-        index=0,
-    )
-    st.caption(
-        "Head-to-head baselines use real games vs. this specific opponent -- more "
-        "relevant if a player has a real history against this team, but based on a "
-        "much smaller sample than a full season."
-    )
-
-    line1, line2, line3 = st.columns(3)
-    with line1:
-        pts_line_input = st.number_input(
-            "Points line (0 = season average)", min_value=0.0, value=0.0, step=0.5
-        )
-    with line2:
-        ast_line_input = st.number_input(
-            "Assists line (0 = season average)", min_value=0.0, value=0.0, step=0.5
-        )
-    with line3:
-        reb_line_input = st.number_input(
-            "Rebounds line (0 = season average)", min_value=0.0, value=0.0, step=0.5
+with tab1:
+    with st.form("predictor_form"):
+        st.markdown('<div class="search-row">', unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            player_input = st.selectbox(
+                "Player", options=player_names, index=None, placeholder="Search a player..."
+            )
+        with col2:
+            opponent_options, opponent_label_to_name = get_opponent_dropdown_options()
+            opponent_label_input = st.selectbox(
+                "Opponent — pace / defense at a glance", options=opponent_options, index=None,
+                placeholder="Search a team...", key="opponent_select",
+            )
+            opponent_input = opponent_label_to_name.get(opponent_label_input) if opponent_label_input else None
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.caption(
+            "Pace and defense tags are computed live from this season's team stats "
+            "(falling back to last season early in the year) — not fixed presets."
         )
 
-    with st.expander("Track more stats (steals, blocks, 3-pointers, turnovers -- optional)"):
-        line4, line5, line6, line7 = st.columns(4)
-        with line4:
-            stl_line_input = st.number_input(
-                "Steals line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
-            )
-        with line5:
-            blk_line_input = st.number_input(
-                "Blocks line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
-            )
-        with line6:
-            fg3m_line_input = st.number_input(
-                "3PM line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
-            )
-        with line7:
-            tov_line_input = st.number_input(
-                "Turnovers line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
-            )
-
-    with st.expander("Advanced options (injuries, defender, scheme -- optional)"):
-        adv1, adv2 = st.columns(2)
-        with adv1:
-            missing_teammates = st.multiselect(
-                "Missing teammates", options=player_names, default=[],
-                placeholder="Search and select players...",
-            )
-            defender_input = st.selectbox(
-                "Primary defender assigned", options=player_names, index=None,
-                placeholder="Search a defender...",
-            )
-        with adv2:
-            missing_opponents = st.multiselect(
-                "Missing opponent players", options=player_names, default=[],
-                placeholder="Search and select players...",
-            )
-            scheme_input = st.selectbox("Defensive scheme", list(SCHEME_ADJUSTMENTS.keys()))
-            scheme_executor_input = st.selectbox(
-                "Scheme executed primarily by (reference only -- optional)",
-                options=player_names, index=None, placeholder="Search a player...",
-            )
-            st.caption(
-                "No public data tracks which player runs a specific scheme, "
-                "so this name is stored for your own reference only -- it "
-                "doesn't affect the calculation."
-            )
-
-        st.markdown("---")
-        roster_change_checked = st.checkbox(
-            "Opponent just made a major roster change (trade, etc.)",
-        )
-        roster_change_date = None
-        if roster_change_checked:
-            roster_change_date = st.date_input(
-                "Change effective date", value=None,
-            )
-            st.caption(
-                "When set, opponent defense and head-to-head history use only "
-                "games since this date. The season-long average otherwise blends "
-                "pre- and post-change games together -- misleading right after a "
-                "big trade (e.g. a star player switching teams). Predictions "
-                "based on a very small post-change sample will show a wider "
-                "likely range to reflect the extra uncertainty."
-            )
-
-        key_players_input = st.multiselect(
-            "Also check history vs. specific opposing player(s) (optional)",
-            options=player_names, default=[],
-            placeholder="e.g. a star who just changed teams...",
+        baseline_source_input = st.selectbox(
+            "Baseline source",
+            ["Season average (default)", "Last 5 games vs. this opponent", "Last 10 games vs. this opponent"],
+            index=0,
         )
         st.caption(
-            "Finds every real game this player has faced them, on whatever team "
-            "they were on at the time -- not just games against their current "
-            "team. Select two or more players (e.g. a new frontcourt pairing) "
-            "to also check whether they've ever shared the floor as opponents "
-            "before -- if not, that's flagged rather than papered over."
+            "Head-to-head baselines use real games vs. this specific opponent -- more "
+            "relevant if a player has a real history against this team, but based on a "
+            "much smaller sample than a full season."
+        )
+        raw_baseline_input = st.checkbox(
+            "Use only this source, no season blending",
+            value=False,
+        )
+        st.caption(
+            "By default, even a head-to-head baseline is blended with the season "
+            "average for reliability (a handful of games can't fully override a "
+            "full season on their own). Check this to use the selected baseline "
+            "source on its own instead -- only applies when a head-to-head option "
+            "is selected above."
         )
 
-    submitted = st.form_submit_button("Predict statline")
+        line1, line2, line3 = st.columns(3)
+        with line1:
+            pts_line_input = st.number_input(
+                "Points line (0 = season average)", min_value=0.0, value=0.0, step=0.5
+            )
+        with line2:
+            ast_line_input = st.number_input(
+                "Assists line (0 = season average)", min_value=0.0, value=0.0, step=0.5
+            )
+        with line3:
+            reb_line_input = st.number_input(
+                "Rebounds line (0 = season average)", min_value=0.0, value=0.0, step=0.5
+            )
 
-if submitted:
-    if not player_input or not opponent_input:
-        st.error("Please select both a player and an opponent team.")
-        st.stop()
-
-    with st.spinner("Pulling data and calculating..."):
-        player_id, player_full_name = get_player_id(player_input)
-        if player_id is None:
-            st.error(f"No player found for '{player_input}'. Check spelling.")
-            st.stop()
-
-        opponent_id, opponent_full_name, opponent_abbr = get_team_id(opponent_input)
-        if opponent_id is None:
-            st.error(f"No team found for '{opponent_input}'. Use the full team name.")
-            st.stop()
-
-        roster_change_active = roster_change_checked and roster_change_date is not None
-        h2h_cutoff = roster_change_date if roster_change_active else None
-
-        try:
-            season_stats, season_source = get_season_baseline(player_id, player_full_name)
-
-            team_h2h_stats, team_h2h_n = None, 0
-            team_h2h_note = None
-            if baseline_source_input != "Season average (default)":
-                num_games = 5 if "Last 5" in baseline_source_input else 10
-                team_h2h_stats, team_h2h_note, team_h2h_n = get_head_to_head_baseline(
-                    player_id, opponent_abbr, num_games, cutoff_date=h2h_cutoff
+        with st.expander("Track more stats (steals, blocks, 3-pointers, turnovers -- optional)"):
+            line4, line5, line6, line7 = st.columns(4)
+            with line4:
+                stl_line_input = st.number_input(
+                    "Steals line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                )
+            with line5:
+                blk_line_input = st.number_input(
+                    "Blocks line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                )
+            with line6:
+                fg3m_line_input = st.number_input(
+                    "3PM line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                )
+            with line7:
+                tov_line_input = st.number_input(
+                    "Turnovers line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
                 )
 
-            # Resolve every selected key player to an ID up front.
-            key_player_ids = {}
-            for name in key_players_input:
-                pid, full_name = get_player_id(name)
-                key_player_ids[name] = (pid, full_name)
-
-            combo_stats, combo_n, combo_note = None, 0, None
-            no_combo_data = False
-            valid_ids = [pid for pid, _ in key_player_ids.values() if pid is not None]
-            if len(valid_ids) >= 2:
-                combo_df, combo_note = get_head_to_head_vs_player_combo(player_id, valid_ids)
-                if not combo_df.empty:
-                    subset = combo_df.head(10)
-                    combo_stats = {col: (subset[col].mean(), subset[col].std()) for col, _ in STAT_COLUMNS}
-                    combo_n = len(subset)
-                else:
-                    no_combo_data = True
-
-            extra_sources = []
-            individual_notes = {}  # name -> (stats, note, n), for display + build-panel
-            if combo_stats is not None:
-                # The exact combination has real data -- use it directly
-                # instead of each player's separate history, since the
-                # combo already captures whatever interaction effect
-                # exists between them (spacing, shared minutes, etc.)
-                # that blending two individual signals could not.
-                names_label = " + ".join(key_player_ids.keys())
-                extra_sources.append((f"vs. {names_label} together", combo_stats, combo_n))
-            else:
-                # No combo data (or fewer than 2 players selected) --
-                # fall back to each player's individual history, kept
-                # as separate weighted sources.
-                for name, (pid, full_name) in key_player_ids.items():
-                    if pid is None:
-                        individual_notes[name] = (None, "No player found with that name.", 0)
-                        continue
-                    stats, note, n = get_vs_player_baseline(player_id, pid)
-                    individual_notes[name] = (stats, note, n)
-                    extra_sources.append((f"vs. {name}", stats, n))
-
-            any_extra_data = any(n > 0 for _, stats, n in extra_sources if stats is not None)
-            if team_h2h_n == 0 and not any_extra_data:
-                baseline_stats, source = season_stats, season_source
-                blend_weights = {"season": 1.0, "team_h2h": 0.0}
-            else:
-                baseline_stats, blend_weights = blend_baseline_stats(
-                    season_stats, team_h2h=team_h2h_stats, team_h2h_n=team_h2h_n,
-                    extra_sources=extra_sources,
+        with st.expander("Advanced options (injuries, defender, scheme -- optional)"):
+            adv1, adv2 = st.columns(2)
+            with adv1:
+                missing_teammates = st.multiselect(
+                    "Missing teammates", options=player_names, default=[],
+                    placeholder="Search and select players...",
                 )
-                parts = [f"season avg {blend_weights['season']:.0%}"]
-                if team_h2h_n > 0:
-                    parts.append(f"team h2h {blend_weights['team_h2h']:.0%} ({team_h2h_note})")
-                elif baseline_source_input != "Season average (default)" and team_h2h_note:
-                    parts.append(f"team h2h unavailable ({team_h2h_note})")
-                for label, stats, n in extra_sources:
-                    if n > 0 and stats is not None:
-                        parts.append(f"{label} {blend_weights[label]:.0%} ({n} game(s))")
+                new_teammate_input = st.selectbox(
+                    "New teammate arriving (optional)", options=player_names, index=None,
+                    placeholder="Search a player who just joined...",
+                )
+                st.caption(
+                    "Uses real shared games to compare this player's stats when this "
+                    "teammate played heavy minutes vs. light minutes. Needs actual "
+                    "shared game history to work -- a pairing that hasn't shared the "
+                    "floor yet will be flagged, not guessed at."
+                )
+                defender_input = st.selectbox(
+                    "Primary defender assigned", options=player_names, index=None,
+                    placeholder="Search a defender...",
+                )
+            with adv2:
+                missing_opponents = st.multiselect(
+                    "Missing opponent players", options=player_names, default=[],
+                    placeholder="Search and select players...",
+                )
+                scheme_input = st.selectbox("Defensive scheme", list(SCHEME_ADJUSTMENTS.keys()))
+                scheme_executor_input = st.selectbox(
+                    "Scheme executed primarily by (reference only -- optional)",
+                    options=player_names, index=None, placeholder="Search a player...",
+                )
+                st.caption(
+                    "No public data tracks which player runs a specific scheme, "
+                    "so this name is stored for your own reference only -- it "
+                    "doesn't affect the calculation."
+                )
+
+            st.markdown("---")
+            roster_change_checked = st.checkbox(
+                "Opponent just made a major roster change (trade, etc.)",
+            )
+            roster_change_date = None
+            if roster_change_checked:
+                roster_change_date = st.date_input(
+                    "Change effective date", value=None,
+                )
+                st.caption(
+                    "When set, opponent defense and head-to-head history use only "
+                    "games since this date. The season-long average otherwise blends "
+                    "pre- and post-change games together -- misleading right after a "
+                    "big trade (e.g. a star player switching teams). Predictions "
+                    "based on a very small post-change sample will show a wider "
+                    "likely range to reflect the extra uncertainty."
+                )
+
+            st.markdown("---")  # patch_expander_spacing
+            key_players_input = st.multiselect(
+                "Also check history vs. specific opposing player(s) (optional)",
+                options=player_names, default=[],
+                placeholder="e.g. a star who just changed teams...",
+            )
+            st.caption(
+                "Finds every real game this player has faced them, on whatever team "
+                "they were on at the time -- not just games against their current "
+                "team. Select two or more players (e.g. a new frontcourt pairing) "
+                "to also check whether they've ever shared the floor as opponents "
+                "before -- if not, that's flagged rather than papered over."
+            )
+
+        submitted = st.form_submit_button("Predict statline")
+
+    if submitted:
+        if not player_input or not opponent_input:
+            st.error("Please select both a player and an opponent team.")
+            st.stop()
+
+        with st.spinner("Pulling data and calculating..."):
+            player_id, player_full_name = get_player_id(player_input)
+            if player_id is None:
+                st.error(f"No player found for '{player_input}'. Check spelling.")
+                st.stop()
+
+            opponent_id, opponent_full_name, opponent_abbr = get_team_id(opponent_input)
+            if opponent_id is None:
+                st.error(f"No team found for '{opponent_input}'. Use the full team name.")
+                st.stop()
+
+            roster_change_active = roster_change_checked and roster_change_date is not None
+            h2h_cutoff = roster_change_date if roster_change_active else None
+
+            try:
+                season_stats, season_source = get_season_baseline(player_id, player_full_name)
+
+                team_h2h_stats, team_h2h_n = None, 0
+                team_h2h_note = None
+                if baseline_source_input != "Season average (default)":
+                    num_games = 5 if "Last 5" in baseline_source_input else 10
+                    team_h2h_stats, team_h2h_note, team_h2h_n = get_head_to_head_baseline(
+                        player_id, opponent_abbr, num_games, cutoff_date=h2h_cutoff
+                    )
+
+                # Fold the primary defender into the "vs specific player(s)"
+                # comparison too, so picking one field doesn't leave the other's
+                # real-game head-to-head data and hit-rate tables empty -- no
+                # need to type the same name twice. The visible multiselect
+                # widget above is untouched; this only affects what gets
+                # calculated and shown.
+                effective_key_players_input = list(key_players_input)
+                if defender_input and defender_input not in effective_key_players_input:
+                    effective_key_players_input.append(defender_input)
+
+                # Resolve every selected key player to an ID up front.
+                key_player_ids = {}
+                for name in effective_key_players_input:
+                    pid, full_name = get_player_id(name)
+                    key_player_ids[name] = (pid, full_name)
+
+                combo_stats, combo_n, combo_note = None, 0, None
+                no_combo_data = False
+                valid_ids = [pid for pid, _ in key_player_ids.values() if pid is not None]
+                if len(valid_ids) >= 2:
+                    combo_df, combo_note = get_head_to_head_vs_player_combo(player_id, valid_ids)
+                    if not combo_df.empty:
+                        subset = combo_df.head(10)
+                        combo_stats = {col: (subset[col].mean(), subset[col].std()) for col, _ in STAT_COLUMNS}
+                        combo_n = len(subset)
                     else:
-                        parts.append(f"{label} unavailable")
-                source = "Blended baseline -- " + "; ".join(parts)
-                if no_combo_data:
-                    combo_label = " + ".join(key_player_ids.keys())
-                    source += (f" -- NOTE: no historical games found with {combo_label} on the same "
-                               f"team together ({combo_note}); this combination appears to be new, "
-                               f"so the estimate reflects each individually, not their combined effect")
-        except Exception as e:
-            st.error(
-                f"Couldn't fetch data from the NBA stats API: {e}\n\n"
-                "This can happen when running on a cloud server -- the NBA's unofficial "
-                "API sometimes blocks requests from hosting providers even though it "
-                "works fine locally."
-            )
-            st.stop()
+                        no_combo_data = True
 
-        post_change_thin_sample = False
-        if roster_change_active:
-            pt_def_rating, pt_league_avg, pt_note, pt_games, pt_thin = get_opponent_defense_post_change(
-                opponent_id, roster_change_date
-            )
-            if pt_def_rating is not None:
-                team_def_rating, league_avg_def, def_source_note = pt_def_rating, pt_league_avg, pt_note
-                post_change_thin_sample = pt_thin
+                extra_sources = []
+                individual_notes = {}  # name -> (stats, note, n), for display + build-panel
+                if combo_stats is not None:
+                    # The exact combination has real data -- use it directly
+                    # instead of each player's separate history, since the
+                    # combo already captures whatever interaction effect
+                    # exists between them (spacing, shared minutes, etc.)
+                    # that blending two individual signals could not.
+                    names_label = " + ".join(key_player_ids.keys())
+                    extra_sources.append((f"vs. {names_label} together", combo_stats, combo_n))
+                else:
+                    # No combo data (or fewer than 2 players selected) --
+                    # fall back to each player's individual history, kept
+                    # as separate weighted sources.
+                    for name, (pid, full_name) in key_player_ids.items():
+                        if pid is None:
+                            individual_notes[name] = (None, "No player found with that name.", 0)
+                            continue
+                        stats, note, n = get_vs_player_baseline(player_id, pid)
+                        individual_notes[name] = (stats, note, n)
+                        extra_sources.append((f"vs. {name}", stats, n))
+
+                any_extra_data = any(n > 0 for _, stats, n in extra_sources if stats is not None)
+                if team_h2h_n == 0 and not any_extra_data:
+                    baseline_stats, source = season_stats, season_source
+                    blend_weights = {"season": 1.0, "team_h2h": 0.0}
+                else:
+                    if raw_baseline_input and team_h2h_n > 0:
+                        baseline_stats, blend_weights = blend_baseline_stats(
+                            season_stats, shrinkage_k=0,
+                            team_h2h=team_h2h_stats, team_h2h_n=team_h2h_n,
+                            extra_sources=extra_sources,
+                        )
+                    else:
+                        baseline_stats, blend_weights = blend_baseline_stats(
+                            season_stats, team_h2h=team_h2h_stats, team_h2h_n=team_h2h_n,
+                            extra_sources=extra_sources,
+                        )
+                    parts = [f"season avg {blend_weights['season']:.0%}"]
+                    if team_h2h_n > 0:
+                        parts.append(f"team h2h {blend_weights['team_h2h']:.0%} ({team_h2h_note})")
+                    elif baseline_source_input != "Season average (default)" and team_h2h_note:
+                        parts.append(f"team h2h unavailable ({team_h2h_note})")
+                    for label, stats, n in extra_sources:
+                        if n > 0 and stats is not None:
+                            parts.append(f"{label} {blend_weights[label]:.0%} ({n} game(s))")
+                        else:
+                            parts.append(f"{label} unavailable")
+                    source = "Blended baseline -- " + "; ".join(parts)
+                    if no_combo_data:
+                        combo_label = " + ".join(key_player_ids.keys())
+                        source += (f" -- NOTE: no historical games found with {combo_label} on the same "
+                                   f"team together ({combo_note}); this combination appears to be new, "
+                                   f"so the estimate reflects each individually, not their combined effect")
+            except Exception as e:
+                st.error(
+                    f"Couldn't fetch data from the NBA stats API: {e}\n\n"
+                    "This can happen when running on a cloud server -- the NBA's unofficial "
+                    "API sometimes blocks requests from hosting providers even though it "
+                    "works fine locally."
+                )
+                st.stop()
+
+            post_change_thin_sample = False
+            if roster_change_active:
+                pt_def_rating, pt_league_avg, pt_note, pt_games, pt_thin = get_opponent_defense_post_change(
+                    opponent_id, roster_change_date
+                )
+                if pt_def_rating is not None:
+                    team_def_rating, league_avg_def, def_source_note = pt_def_rating, pt_league_avg, pt_note
+                    post_change_thin_sample = pt_thin
+                else:
+                    team_def_rating, league_avg_def, def_source_note = get_opponent_defense_with_fallback(opponent_id)
+                    def_source_note = f"{def_source_note} (post-change data unavailable: {pt_note})"
             else:
                 team_def_rating, league_avg_def, def_source_note = get_opponent_defense_with_fallback(opponent_id)
-                def_source_note = f"{def_source_note} (post-change data unavailable: {pt_note})"
-        else:
-            team_def_rating, league_avg_def, def_source_note = get_opponent_defense_with_fallback(opponent_id)
 
-        # The defense-strength multiplier is scaled down only by the
-        # TEAM head-to-head weight, not the vs-player weight -- a team
-        # h2h average already implicitly reflects that team's overall
-        # defense, so stacking the full team-wide DEF_RATING adjustment
-        # on top would partly double-count it. A vs-player average
-        # reflects that one matchup, not the rest of the team's
-        # defense, so it doesn't create the same redundancy.
-        DEF_ADJUSTMENT_STRENGTH = 0.5
-        team_h2h_weight = blend_weights["team_h2h"]
-        if team_def_rating is not None:
-            def_gap_pct = (team_def_rating - league_avg_def) / league_avg_def
-            effective_strength = DEF_ADJUSTMENT_STRENGTH * (1 - team_h2h_weight)
-            def_adjustment = 1 + (def_gap_pct * effective_strength)
-            def_note = (f"{opponent_full_name} DEF_RATING: {team_def_rating:.1f} "
-                        f"(league avg {league_avg_def:.1f}, source: {def_source_note}) "
-                        f"-> adjustment x{def_adjustment:.3f}")
-            if team_h2h_weight > 0:
-                def_note += (f" (scaled down from the usual x{DEF_ADJUSTMENT_STRENGTH} strength "
-                             f"since the baseline already carries {team_h2h_weight:.0%} team head-to-head weight)")
-        else:
-            def_adjustment = 1.0
-            def_note = "Opponent defensive rating unavailable -- no adjustment."
+            # The defense-strength multiplier is scaled down only by the
+            # TEAM head-to-head weight, not the vs-player weight -- a team
+            # h2h average already implicitly reflects that team's overall
+            # defense, so stacking the full team-wide DEF_RATING adjustment
+            # on top would partly double-count it. A vs-player average
+            # reflects that one matchup, not the rest of the team's
+            # defense, so it doesn't create the same redundancy.
+            DEF_ADJUSTMENT_STRENGTH = 0.5
+            team_h2h_weight = blend_weights["team_h2h"]
+            if team_def_rating is not None:
+                def_gap_pct = (team_def_rating - league_avg_def) / league_avg_def
+                effective_strength = DEF_ADJUSTMENT_STRENGTH * (1 - team_h2h_weight)
+                def_adjustment = 1 + (def_gap_pct * effective_strength)
+                def_note = (f"{opponent_full_name} DEF_RATING: {team_def_rating:.1f} "
+                            f"(league avg {league_avg_def:.1f}, source: {def_source_note}) "
+                            f"-> adjustment 🛡️ Opponent Defense Layer Applied — x{def_adjustment:.3f}")
+                if team_h2h_weight > 0:
+                    def_note += (f" (scaled down from the usual x{DEF_ADJUSTMENT_STRENGTH} strength "
+                                 f"since the baseline already carries {team_h2h_weight:.0%} team head-to-head weight)")
+            else:
+                def_adjustment = 1.0
+                def_note = "Opponent defensive rating unavailable -- no adjustment."
 
-        teammate_adj, teammate_note = get_teammate_availability_adjustment(
-            player_id, missing_teammates, CURRENT_SEASON
-        )
-        opp_missing_adj, opp_missing_note = get_opponent_missing_adjustment(
-            missing_opponents, PREVIOUS_SEASON
-        )
-        _, defender_note = get_defender_matchup_adjustment(
-            player_id, player_full_name, defender_input, CURRENT_SEASON
-        )
+            if missing_teammates:
+                teammate_adj_by_stat, teammate_note = None, None
+                for _try_season in HEAD_TO_HEAD_SEASONS:
+                    teammate_adj_by_stat, teammate_note, _teammate_count = get_teammate_availability_adjustment(
+                        player_id, missing_teammates, _try_season
+                    )
+                    if _teammate_count > 0:
+                        break
+            else:
+                teammate_adj_by_stat, teammate_note, _ = get_teammate_availability_adjustment(
+                    player_id, missing_teammates, CURRENT_SEASON
+                )
+            if new_teammate_input:
+                # Check the full multi-season window (same one used for
+                # opponent head-to-head elsewhere) rather than stopping
+                # after just one fallback season -- a real pairing can sit
+                # further back if one of the two players has since been
+                # traded away. Uses the real shared-game COUNT to decide
+                # whether to keep looking, not fragile text-matching.
+                new_teammate_adj_by_stat, new_teammate_note = None, None
+                for _try_season in HEAD_TO_HEAD_SEASONS:
+                    new_teammate_adj_by_stat, new_teammate_note, _shared_count = get_new_teammate_impact_adjustment(
+                        player_id, new_teammate_input, _try_season
+                    )
+                    if _shared_count > 0:
+                        break
+            else:
+                new_teammate_adj_by_stat, new_teammate_note, _ = get_new_teammate_impact_adjustment(
+                    player_id, new_teammate_input, CURRENT_SEASON
+                )
+            opp_missing_adj, opp_missing_note = get_opponent_missing_adjustment(
+                missing_opponents, PREVIOUS_SEASON
+            )
+            _, defender_note = get_defender_matchup_adjustment(
+                player_id, player_full_name, defender_input, CURRENT_SEASON
+            )
 
-        scheme_adj, scheme_note = get_synergy_scheme_adjustment(
-            opponent_id, scheme_input, PREVIOUS_SEASON
-        )
+            scheme_adj, scheme_note = get_synergy_scheme_adjustment(
+                opponent_id, scheme_input, PREVIOUS_SEASON
+            )
 
-        # Same set of adjustments applied proportionally to every
-        # tracked stat -- reasonable since opponent strength, missing
-        # teammates, and scheme plausibly affect all of them together,
-        # though this is less rigorously tested for stats other than
-        # points specifically.
-        total_multiplier = def_adjustment * teammate_adj * opp_missing_adj * scheme_adj
+            # Same set of adjustments applied proportionally to every
+            # tracked stat -- reasonable since opponent strength, missing
+            # teammates, and scheme plausibly affect all of them together,
+            # though this is less rigorously tested for stats other than
+            # points specifically.
+            total_multiplier = def_adjustment * opp_missing_adj * scheme_adj
 
-        line_inputs = {
-            "PTS": pts_line_input,
-            "AST": ast_line_input,
-            "REB": reb_line_input,
-            "STL": stl_line_input,
-            "BLK": blk_line_input,
-            "FG3M": fg3m_line_input,
-            "TOV": tov_line_input,
-        }
-
-        # A thin post-roster-change sample (a team's new-look defense
-        # with only a handful of games played) is a genuinely less
-        # certain read than a full-season number -- widen the likely
-        # range rather than presenting the same false precision.
-        THIN_SAMPLE_SPREAD_MULTIPLIER = 1.5
-
-        predictions = {}
-        for col, _label in STAT_COLUMNS:
-            base_mean, base_std = baseline_stats[col]
-            predicted = base_mean * total_multiplier
-            spread = base_std if pd.notna(base_std) else predicted * 0.2
-            if post_change_thin_sample:
-                spread *= THIN_SAMPLE_SPREAD_MULTIPLIER
-            low = max(0, predicted - spread * 0.6)
-            high = predicted + spread * 0.6
-            predictions[col] = {
-                "base": base_mean,
-                "predicted": predicted,
-                "low": low,
-                "high": high,
+            line_inputs = {
+                "PTS": pts_line_input,
+                "AST": ast_line_input,
+                "REB": reb_line_input,
+                "STL": stl_line_input,
+                "BLK": blk_line_input,
+                "FG3M": fg3m_line_input,
+                "TOV": tov_line_input,
             }
 
-        # If a head-to-head baseline was chosen, keep hit rates and the
-        # trend chart consistent with that same team-specific context
-        # instead of mixing a head-to-head baseline with season-wide
-        # hit rates. Falls back to season-wide if no h2h games exist.
-        using_h2h = baseline_source_input != "Season average (default)"
-        if using_h2h:
-            game_log_for_hitrate = get_head_to_head_log(player_id, opponent_abbr, cutoff_date=h2h_cutoff)
-            if game_log_for_hitrate.empty:
-                using_h2h = False  # nothing to show -- fall back below
+            # A thin post-roster-change sample (a team's new-look defense
+            # with only a handful of games played) is a genuinely less
+            # certain read than a full-season number -- widen the likely
+            # range rather than presenting the same false precision.
+            THIN_SAMPLE_SPREAD_MULTIPLIER = 1.5
 
-        if not using_h2h:
-            try:
-                current_season_check = fetch_combined_game_log(player_id, CURRENT_SEASON)
-            except Exception:
-                current_season_check = pd.DataFrame()
-            hitrate_season = CURRENT_SEASON if len(current_season_check) >= 5 else PREVIOUS_SEASON
-            game_log_for_hitrate = get_full_game_log(player_id, hitrate_season)
-
-    # Stash everything needed to render results into session_state.
-    # This matters because the trend-chart stat picker below is a
-    # widget OUTSIDE this form -- changing it triggers a script rerun
-    # where `submitted` goes back to False (the button wasn't clicked
-    # in that rerun). Without session_state, the whole results section
-    # would vanish the moment someone touched the chart picker.
-    st.session_state["results"] = {
-        "player_id": player_id,
-        "player_full_name": player_full_name,
-        "opponent_full_name": opponent_full_name,
-        "opponent_abbr": opponent_abbr,
-        "source": source,
-        "predictions": predictions,
-        "line_inputs": line_inputs,
-        "def_note": def_note,
-        "teammate_note": teammate_note,
-        "opp_missing_note": opp_missing_note,
-        "defender_note": defender_note,
-        "scheme_note": scheme_note,
-        "scheme_executor_input": scheme_executor_input,
-        "game_log": game_log_for_hitrate,
-        "using_h2h": using_h2h,
-        "h2h_cutoff": h2h_cutoff,
-        "roster_change_active": roster_change_active,
-        "post_change_thin_sample": post_change_thin_sample,
-        "key_player_ids": key_player_ids,
-        "no_combo_data": no_combo_data,
-        "valid_ids": valid_ids,
-    }
-
-if "results" in st.session_state:
-    r = st.session_state["results"]
-    player_id = r["player_id"]
-    player_full_name = r["player_full_name"]
-    opponent_full_name = r["opponent_full_name"]
-    opponent_abbr = r["opponent_abbr"]
-    source = r["source"]
-    predictions = r["predictions"]
-    line_inputs = r["line_inputs"]
-    def_note = r["def_note"]
-    teammate_note = r["teammate_note"]
-    opp_missing_note = r["opp_missing_note"]
-    defender_note = r["defender_note"]
-    scheme_note = r["scheme_note"]
-    scheme_executor_input = r["scheme_executor_input"]
-    game_log_for_hitrate = r["game_log"]
-    using_h2h = r["using_h2h"]
-    h2h_cutoff = r["h2h_cutoff"]
-    roster_change_active = r["roster_change_active"]
-    post_change_thin_sample = r["post_change_thin_sample"]
-    key_player_ids = r["key_player_ids"]
-    no_combo_data = r["no_combo_data"]
-    valid_ids = r["valid_ids"]
-
-    headshot_url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
-    st.markdown(
-        f'<div class="player-headshot-wrap">'
-        f'<img src="{headshot_url}" onerror="this.style.display=\'none\'">'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        f'<div style="text-align:center; font-size:22px; font-weight:800; '
-        f'color:#ffffff; margin: 8px 0 16px 0;">'
-        f'{player_full_name} <span style="color:#9ca3af; font-weight:600;">vs</span> {opponent_full_name}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    def render_stat_card_row(stat_cols):
-        html = '<div class="stat-card-row">'
-        for col in stat_cols:
-            label = dict(STAT_COLUMNS)[col]
-            p = predictions[col]
-            html += (
-                f'<div class="stat-card">'
-                f'<div class="stat-title">{label}</div>'
-                f'<div class="stat-value">{p["predicted"]:.1f}</div>'
-                f'<div class="stat-midpoint">likely range {p["low"]:.0f}-{p["high"]:.0f}</div>'
-                f'</div>'
-            )
-        html += '</div>'
-        st.markdown(html, unsafe_allow_html=True)
-
-    render_stat_card_row(["PTS", "AST", "REB"])
-    render_stat_card_row(["STL", "BLK", "FG3M", "TOV"])
-    st.caption(
-        "This isn't a raw season average -- it's that average adjusted for opponent "
-        "defense, missing teammates, and scheme, using the math shown in \"See how this "
-        "estimate was built\" below. The unadjusted season average is shown separately "
-        "there in step [1] for comparison. \"Likely range\" reflects this player's "
-        "real game-to-game variability."
-    )
-
-    # Save this prediction to the tracker, so you can come back after
-    # the actual game and see how close it was.
-    with st.container():
-        save_col1, save_col2 = st.columns([2, 1])
-        with save_col1:
-            tracked_game_date = st.date_input(
-                "Game date (for tracking accuracy later -- optional)",
-                value=None,
-                key="tracked_game_date_input",
-            )
-        with save_col2:
-            st.write("")  # vertical spacer to align button with input
-            if st.button("💾 Save to tracker", key="save_prediction_btn"):
-                new_id = append_prediction_to_log(
-                    player_id, player_full_name, opponent_full_name,
-                    opponent_abbr, tracked_game_date, predictions,
+            predictions = {}
+            for col, _label in STAT_COLUMNS:
+                base_mean, base_std = baseline_stats[col]
+                stat_multiplier = (
+                    total_multiplier
+                    * teammate_adj_by_stat.get(col, 1.0)
+                    * new_teammate_adj_by_stat.get(col, 1.0)
                 )
-                st.success(f"Saved (id: {new_id}). Check the Prediction Tracker in the sidebar later.")
+                predicted = base_mean * stat_multiplier
+                spread = base_std if pd.notna(base_std) else predicted * 0.2
+                if post_change_thin_sample:
+                    spread *= THIN_SAMPLE_SPREAD_MULTIPLIER
+                low = max(0, predicted - spread * 0.6)
+                high = predicted + spread * 0.6
+                predictions[col] = {
+                    "base": base_mean,
+                    "predicted": predicted,
+                    "low": low,
+                    "high": high,
+                }
 
-    # Recent trend chart -- reuses the same game log already fetched
-    # for hit rates, no extra API call. Lives outside the form so
-    # switching stats doesn't require resubmitting the whole prediction.
-    st.markdown(
-        '<div style="text-align:center; color:#ffffff; font-weight:700; '
-        'font-size:16px; margin-top:28px;">Recent Trend</div>',
-        unsafe_allow_html=True,
-    )
-    trend_stat_label = st.selectbox(
-        "Stat to chart",
-        [label for _col, label in STAT_COLUMNS],
-        index=0,
-        key="trend_stat_selector",
-    )
-    trend_stat_col = {label: col for col, label in STAT_COLUMNS}[trend_stat_label]
+            # If a head-to-head baseline was chosen, keep hit rates and the
+            # trend chart consistent with that same team-specific context
+            # instead of mixing a head-to-head baseline with season-wide
+            # hit rates. Falls back to season-wide if no h2h games exist.
+            using_h2h = baseline_source_input != "Season average (default)"
+            if using_h2h:
+                game_log_for_hitrate = get_head_to_head_log(player_id, opponent_abbr, cutoff_date=h2h_cutoff)
+                if game_log_for_hitrate.empty:
+                    using_h2h = False  # nothing to show -- fall back below
 
-    recent_games = game_log_for_hitrate.head(15).copy()
-    recent_games = recent_games.sort_values("GAME_DATE")  # oldest -> newest, left to right
-    chart_df = recent_games[["GAME_DATE", "MATCHUP", trend_stat_col]].rename(
-        columns={trend_stat_col: "value"}
-    )
+            if not using_h2h:
+                try:
+                    current_season_check = fetch_combined_game_log(player_id, CURRENT_SEASON)
+                except Exception:
+                    current_season_check = pd.DataFrame()
+                hitrate_season = CURRENT_SEASON if len(current_season_check) >= 5 else PREVIOUS_SEASON
+                game_log_for_hitrate = get_full_game_log(player_id, hitrate_season)
 
-    line_layers = [
-        alt.Chart(chart_df)
-        .mark_line(point=alt.OverlayMarkDef(color="#00c853", size=60), color="#00c853")
-        .encode(
-            x=alt.X("GAME_DATE:T", title="Game date"),
-            y=alt.Y("value:Q", title=trend_stat_label),
-            tooltip=["GAME_DATE:T", "MATCHUP:N", "value:Q"],
+        # Stash everything needed to render results into session_state.
+        # This matters because the trend-chart stat picker below is a
+        # widget OUTSIDE this form -- changing it triggers a script rerun
+        # where `submitted` goes back to False (the button wasn't clicked
+        # in that rerun). Without session_state, the whole results section
+        # would vanish the moment someone touched the chart picker.
+        st.session_state["results"] = {
+            "player_id": player_id,
+            "player_full_name": player_full_name,
+            "opponent_full_name": opponent_full_name,
+            "opponent_abbr": opponent_abbr,
+            "source": source,
+            "predictions": predictions,
+            "line_inputs": line_inputs,
+            "def_note": def_note,
+            "teammate_note": teammate_note,
+            "new_teammate_note": new_teammate_note,
+            "opp_missing_note": opp_missing_note,
+            "defender_note": defender_note,
+            "scheme_note": scheme_note,
+            "scheme_executor_input": scheme_executor_input,
+            "game_log": game_log_for_hitrate,
+            "using_h2h": using_h2h,
+            "h2h_cutoff": h2h_cutoff,
+            "roster_change_active": roster_change_active,
+            "post_change_thin_sample": post_change_thin_sample,
+            "key_player_ids": key_player_ids,
+            "no_combo_data": no_combo_data,
+            "valid_ids": valid_ids,
+        }
+
+    if "results" in st.session_state:
+        r = st.session_state["results"]
+        player_id = r["player_id"]
+        player_full_name = r["player_full_name"]
+        opponent_full_name = r["opponent_full_name"]
+        opponent_abbr = r["opponent_abbr"]
+        source = r["source"]
+        predictions = r["predictions"]
+        line_inputs = r["line_inputs"]
+        def_note = r["def_note"]
+        teammate_note = r["teammate_note"]
+        new_teammate_note = r["new_teammate_note"]
+        opp_missing_note = r["opp_missing_note"]
+        defender_note = r["defender_note"]
+        scheme_note = r["scheme_note"]
+        scheme_executor_input = r["scheme_executor_input"]
+        game_log_for_hitrate = r["game_log"]
+        using_h2h = r["using_h2h"]
+        h2h_cutoff = r["h2h_cutoff"]
+        roster_change_active = r["roster_change_active"]
+        post_change_thin_sample = r["post_change_thin_sample"]
+        key_player_ids = r["key_player_ids"]
+        no_combo_data = r["no_combo_data"]
+        valid_ids = r["valid_ids"]
+
+        headshot_url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
+        st.markdown(
+            f'<div class="player-headshot-wrap">'
+            f'<img src="{headshot_url}" onerror="this.style.display=\'none\'">'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-    ]
-    entered_line = line_inputs.get(trend_stat_col, 0)
-    if entered_line and entered_line > 0:
-        rule_df = pd.DataFrame({"y": [entered_line]})
-        line_layers.append(
-            alt.Chart(rule_df).mark_rule(color="#f87171", strokeDash=[6, 4]).encode(y="y:Q")
+
+        st.markdown(
+            f'<div style="text-align:center; font-size:22px; font-weight:800; '
+            f'color:#ffffff; margin: 8px 0 16px 0;">'
+            f'{player_full_name} <span style="color:#9ca3af; font-weight:600;">vs</span> {opponent_full_name}'
+            f'</div>',
+            unsafe_allow_html=True,
         )
 
-    trend_chart = (
-        alt.layer(*line_layers)
-        .properties(height=280)
-        .configure(background="#171a21")
-        .configure_axis(labelColor="#9ca3af", titleColor="#9ca3af",
-                         gridColor="#262a33", domainColor="#262a33")
-        .configure_view(strokeWidth=0)
-    )
-    st.altair_chart(trend_chart, use_container_width=True)
-    trend_context = f"vs. {opponent_full_name} only" if using_h2h else "overall"
-    st.caption(
-        f"Last {len(recent_games)} games ({trend_context}). Dashed red line marks the "
-        f"line you entered for {trend_stat_label}, if any."
-    )
+        def render_stat_card_row(stat_cols):
+            html = '<div class="stat-card-row">'
+            for col in stat_cols:
+                label = dict(STAT_COLUMNS)[col]
+                p = predictions[col]
+                html += (
+                    f'<div class="stat-card">'
+                    f'<div class="stat-title">{label}</div>'
+                    f'<div class="stat-value">{p["predicted"]:.1f}</div>'
+                    f'<div class="stat-midpoint" title="Likely range reflects prediction uncertainty -- narrower with more data, wider with thin samples.">likely range {p["low"]:.0f}-{p["high"]:.0f}</div><!-- patch_likely_range_tooltip -->'
+                    f'</div>'
+                )
+            html += '</div>'
+            st.markdown(html, unsafe_allow_html=True)
 
-    # Head-to-head history vs this specific opponent, across the last
-    # few seasons -- including seasons on a different team, since that
-    # context (e.g. a player traded to a new team) genuinely matters
-    # for how they've performed against this particular opponent.
-    st.markdown(
-        f'<div style="text-align:center; color:#ffffff; font-weight:700; '
-        f'font-size:18px; margin-top:32px;">Head-to-Head vs {opponent_full_name}</div>',
-        unsafe_allow_html=True,
-    )
-    h2h_df = get_head_to_head_log(player_id, opponent_abbr, cutoff_date=h2h_cutoff)
-    if h2h_df.empty:
-        if roster_change_active:
-            st.caption(
-                f"No games found against {opponent_full_name} since "
-                f"{roster_change_date.isoformat()} (post-roster-change) yet."
+        render_stat_card_row(["PTS", "AST", "REB"])
+        render_stat_card_row(["STL", "BLK", "FG3M", "TOV"])
+        st.caption(
+            "This isn't a raw season average -- it's that average adjusted for opponent "
+            "defense, missing teammates, and scheme, using the math shown in \"See how this "
+            "estimate was built\" below. The unadjusted season average is shown separately "
+            "there in step [1] for comparison. \"Likely range\" reflects this player's "
+            "real game-to-game variability."
+        )
+
+        # Save this prediction to the tracker, so you can come back after
+        # the actual game and see how close it was.
+        with st.container():
+            save_col1, save_col2 = st.columns([2, 1])
+            with save_col1:
+                tracked_game_date = st.date_input(
+                    "Game date (for tracking accuracy later -- optional)",
+                    value=None,
+                    key="tracked_game_date_input",
+                )
+            with save_col2:
+                st.write("")  # vertical spacer to align button with input
+                if st.button("💾 Save to tracker", key="save_prediction_btn"):
+                    new_id = append_prediction_to_log(
+                        player_id, player_full_name, opponent_full_name,
+                        opponent_abbr, tracked_game_date, predictions,
+                    )
+                    st.success(f"Saved (id: {new_id}). Check the Prediction Tracker in the sidebar later.")
+
+        # Recent trend chart -- reuses the same game log already fetched
+        # for hit rates, no extra API call. Lives outside the form so
+        # switching stats doesn't require resubmitting the whole prediction.
+        st.markdown(
+            '<div style="text-align:center; color:#ffffff; font-weight:700; '
+            'font-size:16px; margin-top:28px;">Recent Trend</div>',
+            unsafe_allow_html=True,
+        )
+        trend_stat_label = st.selectbox(
+            "Stat to chart",
+            [label for _col, label in STAT_COLUMNS],
+            index=0,
+            key="trend_stat_selector",
+        )
+        trend_stat_col = {label: col for col, label in STAT_COLUMNS}[trend_stat_label]
+
+        recent_games = game_log_for_hitrate.head(15).copy()
+        recent_games = recent_games.sort_values("GAME_DATE")  # oldest -> newest, left to right
+        chart_df = recent_games[["GAME_DATE", "MATCHUP", trend_stat_col]].rename(
+            columns={trend_stat_col: "value"}
+        )
+
+        line_layers = [
+            alt.Chart(chart_df)
+            .mark_line(point=alt.OverlayMarkDef(color="#00c853", size=60), color="#00c853")
+            .encode(
+                x=alt.X("GAME_DATE:T", title="Game date"),
+                y=alt.Y("value:Q", title=trend_stat_label),
+                tooltip=["GAME_DATE:T", "MATCHUP:N", "value:Q"],
             )
-        else:
-            st.caption(f"No games found against {opponent_full_name} in the last few seasons.")
-    else:
-        display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV"]
-        display_cols = [c for c in display_cols if c in h2h_df.columns]
-        h2h_display = h2h_df[display_cols].copy()
-        h2h_display["GAME_DATE"] = h2h_display["GAME_DATE"].dt.strftime("%-m/%-d/%Y")
-        h2h_display = h2h_display.rename(columns={
-            "GAME_DATE": "Date", "MATCHUP": "Matchup", "MIN": "Min", "PTS": "Pts",
-            "REB": "Reb", "AST": "Ast", "STL": "Stl", "BLK": "Blk",
-            "FG3M": "3PM", "TOV": "TOV",
-        })
-        st.dataframe(h2h_display, use_container_width=True, hide_index=True)
-        if roster_change_active:
-            st.caption(
-                f"{len(h2h_df)} game(s) since {roster_change_date.isoformat()} only -- "
-                f"earlier games are excluded since they were against this opponent's old roster."
-            )
-        else:
-            st.caption(
-                f"{len(h2h_df)} game(s) found across the last few seasons "
-                f"({', '.join(HEAD_TO_HEAD_SEASONS)}), including any prior teams."
+        ]
+        entered_line = line_inputs.get(trend_stat_col, 0)
+        if entered_line and entered_line > 0:
+            rule_df = pd.DataFrame({"y": [entered_line]})
+            line_layers.append(
+                alt.Chart(rule_df).mark_rule(color="#f87171", strokeDash=[6, 4]).encode(y="y:Q")
             )
 
-    if key_players_input:
-        for name in key_players_input:
-            pid, _full_name = key_player_ids.get(name, (None, None))
-            st.markdown(
-                f'<div style="text-align:center; color:#ffffff; font-weight:700; '
-                f'font-size:18px; margin-top:32px;">Head-to-Head vs {name} '
-                f'<span style="color:#9ca3af; font-weight:500; font-size:13px;">(any team)</span></div>',
-                unsafe_allow_html=True,
-            )
-            if pid is None:
-                st.caption(f"No player found for '{name}'.")
-                continue
-            vs_player_df, _ = get_head_to_head_vs_player(player_id, pid)
-            if vs_player_df.empty:
-                st.caption(f"No shared games found against {name} in this window.")
-                continue
-            vp_display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV"]
-            vp_display_cols = [c for c in vp_display_cols if c in vs_player_df.columns]
-            vp_display = vs_player_df[vp_display_cols].copy()
-            vp_display["GAME_DATE"] = vp_display["GAME_DATE"].dt.strftime("%-m/%-d/%Y")
-            vp_display = vp_display.rename(columns={
+        trend_chart = (
+            alt.layer(*line_layers)
+            .properties(height=280)
+            .configure(background="#171a21")
+            .configure_axis(labelColor="#9ca3af", titleColor="#9ca3af",
+                             gridColor="#262a33", domainColor="#262a33")
+            .configure_view(strokeWidth=0)
+        )
+        st.altair_chart(trend_chart, use_container_width=True)
+        trend_context = f"vs. {opponent_full_name} only" if using_h2h else "overall"
+        st.caption(
+            f"Last {len(recent_games)} games ({trend_context}). Dashed red line marks the "
+            f"line you entered for {trend_stat_label}, if any."
+        )
+
+        # Head-to-head history vs this specific opponent, across the last
+        # few seasons -- including seasons on a different team, since that
+        # context (e.g. a player traded to a new team) genuinely matters
+        # for how they've performed against this particular opponent.
+        st.markdown(
+            f'<div style="text-align:center; color:#ffffff; font-weight:700; '
+            f'font-size:18px; margin-top:32px;">Head-to-Head vs {opponent_full_name}</div>',
+            unsafe_allow_html=True,
+        )
+        h2h_df = get_head_to_head_log(player_id, opponent_abbr, cutoff_date=h2h_cutoff)
+        if h2h_df.empty:
+            if roster_change_active:
+                st.caption(
+                    f"No games found against {opponent_full_name} since "
+                    f"{roster_change_date.isoformat()} (post-roster-change) yet."
+                )
+            else:
+                st.caption(f"No games found against {opponent_full_name} in the last few seasons.")
+        else:
+            display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV"]
+            display_cols = [c for c in display_cols if c in h2h_df.columns]
+            h2h_display = h2h_df[display_cols].copy()
+            h2h_display["GAME_DATE"] = h2h_display["GAME_DATE"].dt.strftime("%-m/%-d/%Y")
+            h2h_display = h2h_display.rename(columns={
                 "GAME_DATE": "Date", "MATCHUP": "Matchup", "MIN": "Min", "PTS": "Pts",
                 "REB": "Reb", "AST": "Ast", "STL": "Stl", "BLK": "Blk",
                 "FG3M": "3PM", "TOV": "TOV",
             })
-            st.dataframe(vp_display, use_container_width=True, hide_index=True)
-            st.caption(
-                f"{len(vs_player_df)} game(s) found against {name}, on whatever "
-                f"team they were playing for at the time -- across {', '.join(HEAD_TO_HEAD_SEASONS)}."
-            )
-
-        if len(valid_ids) >= 2:
-            combo_label = " + ".join(key_players_input)
-            st.markdown(
-                f'<div style="text-align:center; color:#ffffff; font-weight:700; '
-                f'font-size:18px; margin-top:32px;">Combined: {combo_label} '
-                f'<span style="color:#9ca3af; font-weight:500; font-size:13px;">'
-                f'(same team, at the same time)</span></div>',
-                unsafe_allow_html=True,
-            )
-            if no_combo_data:
-                st.warning(
-                    f"No historical games found with {combo_label} on the same team "
-                    f"together, across {', '.join(HEAD_TO_HEAD_SEASONS)}. This exact "
-                    f"pairing appears to be new -- the prediction above reflects each "
-                    f"player's individual history, not any interaction effect between "
-                    f"them (spacing, shared rim protection, etc.), since that genuinely "
-                    f"can't be measured from data that doesn't exist yet."
+            st.dataframe(h2h_display, use_container_width=True, hide_index=True)
+            if roster_change_active:
+                st.caption(
+                    f"{len(h2h_df)} game(s) since {roster_change_date.isoformat()} only -- "
+                    f"earlier games are excluded since they were against this opponent's old roster."
                 )
             else:
-                combo_df, _ = get_head_to_head_vs_player_combo(player_id, valid_ids)
-                combo_display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV"]
-                combo_display_cols = [c for c in combo_display_cols if c in combo_df.columns]
-                combo_display = combo_df[combo_display_cols].copy()
-                combo_display["GAME_DATE"] = combo_display["GAME_DATE"].dt.strftime("%-m/%-d/%Y")
-                combo_display = combo_display.rename(columns={
+                st.caption(
+                    f"{len(h2h_df)} game(s) found across the last few seasons "
+                    f"({', '.join(HEAD_TO_HEAD_SEASONS)}), including any prior teams."
+                )
+
+        if effective_key_players_input:
+            for name in effective_key_players_input:
+                pid, _full_name = key_player_ids.get(name, (None, None))
+                st.markdown(
+                    f'<div style="text-align:center; color:#ffffff; font-weight:700; '
+                    f'font-size:18px; margin-top:32px;">Head-to-Head vs {name} '
+                    f'<span style="color:#9ca3af; font-weight:500; font-size:13px;">(any team)</span></div>',
+                    unsafe_allow_html=True,
+                )
+                if pid is None:
+                    st.caption(f"No player found for '{name}'.")
+                    continue
+                vs_player_df, _ = get_head_to_head_vs_player(player_id, pid)
+                if vs_player_df.empty:
+                    st.caption(f"No shared games found against {name} in this window.")
+                    continue
+                vp_display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV"]
+                vp_display_cols = [c for c in vp_display_cols if c in vs_player_df.columns]
+                vp_display = vs_player_df[vp_display_cols].copy()
+                vp_display["GAME_DATE"] = vp_display["GAME_DATE"].dt.strftime("%-m/%-d/%Y")
+                vp_display = vp_display.rename(columns={
                     "GAME_DATE": "Date", "MATCHUP": "Matchup", "MIN": "Min", "PTS": "Pts",
                     "REB": "Reb", "AST": "Ast", "STL": "Stl", "BLK": "Blk",
                     "FG3M": "3PM", "TOV": "TOV",
                 })
-                st.dataframe(combo_display, use_container_width=True, hide_index=True)
+                st.dataframe(vp_display, use_container_width=True, hide_index=True)
                 st.caption(
-                    f"{len(combo_df)} game(s) found with {combo_label} on the same team "
-                    f"together, across {', '.join(HEAD_TO_HEAD_SEASONS)}."
+                    f"{len(vs_player_df)} game(s) found against {name}, on whatever "
+                    f"team they were playing for at the time -- across {', '.join(HEAD_TO_HEAD_SEASONS)}."
                 )
 
-    # Hit-rate tables, props.cash style, for all three stats. Each
-    # defaults to that stat's season average if the user left the
-    # line at 0, clearly labeled which source is being used.
-    hit_rate_configs = [
-        (label, line_inputs[col], predictions[col]["base"], col)
-        for col, label in STAT_COLUMNS
-    ]
+            if len(valid_ids) >= 2:
+                combo_label = " + ".join(key_players_input)
+                st.markdown(
+                    f'<div style="text-align:center; color:#ffffff; font-weight:700; '
+                    f'font-size:18px; margin-top:32px;">Combined: {combo_label} '
+                    f'<span style="color:#9ca3af; font-weight:500; font-size:13px;">'
+                    f'(same team, at the same time)</span></div>',
+                    unsafe_allow_html=True,
+                )
+                if no_combo_data:
+                    st.warning(
+                        f"No historical games found with {combo_label} on the same team "
+                        f"together, across {', '.join(HEAD_TO_HEAD_SEASONS)}. This exact "
+                        f"pairing appears to be new -- the prediction above reflects each "
+                        f"player's individual history, not any interaction effect between "
+                        f"them (spacing, shared rim protection, etc.), since that genuinely "
+                        f"can't be measured from data that doesn't exist yet."
+                    )
+                else:
+                    combo_df, _ = get_head_to_head_vs_player_combo(player_id, valid_ids)
+                    combo_display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV"]
+                    combo_display_cols = [c for c in combo_display_cols if c in combo_df.columns]
+                    combo_display = combo_df[combo_display_cols].copy()
+                    combo_display["GAME_DATE"] = combo_display["GAME_DATE"].dt.strftime("%-m/%-d/%Y")
+                    combo_display = combo_display.rename(columns={
+                        "GAME_DATE": "Date", "MATCHUP": "Matchup", "MIN": "Min", "PTS": "Pts",
+                        "REB": "Reb", "AST": "Ast", "STL": "Stl", "BLK": "Blk",
+                        "FG3M": "3PM", "TOV": "TOV",
+                    })
+                    st.dataframe(combo_display, use_container_width=True, hide_index=True)
+                    st.caption(
+                        f"{len(combo_df)} game(s) found with {combo_label} on the same team "
+                        f"together, across {', '.join(HEAD_TO_HEAD_SEASONS)}."
+                    )
 
-    if using_h2h:
-        st.markdown(
-            f'<div style="text-align:center; color:#9ca3af; font-size:13px; '
-            f'margin-top:8px;">Hit rates below are also team-specific -- based on '
-            f'{len(game_log_for_hitrate)} game(s) vs. {opponent_full_name} only, '
-            f'not the full season.</div>',
-            unsafe_allow_html=True,
-        )
+        # Hit-rate tables, props.cash style, for all three stats. Each
+        # defaults to that stat's season average if the user left the
+        # line at 0, clearly labeled which source is being used.
+        hit_rate_configs = [
+            (label, line_inputs[col], predictions[col]["base"], col)
+            for col, label in STAT_COLUMNS
+        ]
 
-    for stat_label, line_val, base_val, col in hit_rate_configs:
-        effective_line = line_val if line_val > 0 else round(base_val, 1)
-        if line_val > 0:
-            line_source_note = "your line"
-        elif using_h2h:
-            line_source_note = f"head-to-head avg vs. {opponent_full_name}"
-        else:
-            line_source_note = "season average"
-
-        hit_rates = get_hit_rate_table(game_log_for_hitrate, effective_line, col)
         if using_h2h:
-            # "Season" doesn't mean much for a head-to-head-only log --
-            # relabel it to reflect what it actually represents here.
-            hit_rates = {("All H2H" if k == "Season" else k): v for k, v in hit_rates.items()}
+            st.markdown(
+                f'<div style="text-align:center; color:#9ca3af; font-size:13px; '
+                f'margin-top:8px;">Hit rates below are also team-specific -- based on '
+                f'{len(game_log_for_hitrate)} game(s) vs. {opponent_full_name} only, '
+                f'not the full season.</div>',
+                unsafe_allow_html=True,
+            )
 
-        st.markdown(
-            f'<div style="text-align:center; color:#ffffff; font-weight:700; '
-            f'font-size:16px; margin-top:20px;">{stat_label} '
-            f'<span style="color:#9ca3af; font-weight:500; font-size:13px;">'
-            f'-- hit rate vs. {effective_line} ({line_source_note})</span></div>',
-            unsafe_allow_html=True,
-        )
-        badges_html = '<div class="hit-rate-row">'
-        for label, (pct, n) in hit_rates.items():
-            if pct is None or n == 0:
-                css_class = "hit-rate-gray"
-                display = "N/A"
+        for stat_label, line_val, base_val, col in hit_rate_configs:
+            effective_line = line_val if line_val > 0 else round(base_val, 1)
+            if line_val > 0:
+                line_source_note = "your line"
+            elif using_h2h:
+                line_source_note = f"head-to-head avg vs. {opponent_full_name}"
             else:
-                css_class = "hit-rate-green" if pct >= 50 else "hit-rate-red"
-                display = f"{pct:.0f}%"
-            badges_html += (
-                f'<div class="hit-rate-badge {css_class}">'
-                f'<div class="label">{label}</div>'
-                f'<div class="pct">{display}</div>'
-                f'</div>'
+                line_source_note = "season average"
+
+            hit_rates = get_hit_rate_table(game_log_for_hitrate, effective_line, col)
+            if using_h2h:
+                # "Season" doesn't mean much for a head-to-head-only log --
+                # relabel it to reflect what it actually represents here.
+                hit_rates = {("All H2H" if k == "Season" else k): v for k, v in hit_rates.items()}
+
+            st.markdown(
+                f'<div style="text-align:center; color:#ffffff; font-weight:700; '
+                f'font-size:16px; margin-top:20px;">{stat_label} '
+                f'<span style="color:#9ca3af; font-weight:500; font-size:13px;">'
+                f'-- hit rate vs. {effective_line} ({line_source_note})</span></div>',
+                unsafe_allow_html=True,
             )
-        badges_html += '</div>'
-        st.markdown(badges_html, unsafe_allow_html=True)
+            badges_html = '<div class="hit-rate-row">'
+            for label, (pct, n) in hit_rates.items():
+                if pct is None or n == 0:
+                    css_class = "hit-rate-gray"
+                    display = "N/A"
+                else:
+                    css_class = "hit-rate-green" if pct >= 50 else "hit-rate-red"
+                    display = f"{pct:.0f}%"
+                badges_html += (
+                    f'<div class="hit-rate-badge {css_class}">'
+                    f'<div class="label">{label}</div>'
+                    f'<div class="pct">{display}</div>'
+                    f'</div>'
+                )
+            badges_html += '</div>'
+            st.markdown(badges_html, unsafe_allow_html=True)
 
-    st.caption(
-        "Note on Turnovers: green here just means the player exceeded the line more "
-        "often than not -- for turnovers, going OVER is bad for the player, so green "
-        "doesn't mean \"good\" the way it does for the other stats."
-    )
-
-    with st.expander("See how this estimate was built (every adjustment step)"):
-        baseline_summary = ", ".join(
-            f"{predictions[col]['base']:.1f} {col}" for col, _ in STAT_COLUMNS
+        st.caption(
+            "Note on Turnovers: green here just means the player exceeded the line more "
+            "often than not -- for turnovers, going OVER is bad for the player, so green "
+            "doesn't mean \"good\" the way it does for the other stats."
         )
-        st.write(f"**[1] Baseline** ({source}): {baseline_summary}")
-        st.write(f"**[2] Opponent defense:** {def_note}")
-        st.write(f"**[3] Missing teammates:** {teammate_note}")
-        st.write(f"**[4] Missing opponent players:** {opp_missing_note}")
-        st.write(f"**[5] Primary defender:** {defender_note}")
-        st.write(f"**[6] Scheme:** {scheme_note}")
-        if scheme_executor_input:
-            st.write(f"**[7] Scheme executed by (reference only):** {scheme_executor_input} "
-                     f"-- not used in the calculation, no data exists to attribute schemes to individual players.")
-        if post_change_thin_sample:
-            st.write(
-                f"**[8] Roster-change uncertainty:** the likely range above was widened "
-                f"x{THIN_SAMPLE_SPREAD_MULTIPLIER} since the post-change sample is small -- "
-                f"treat this prediction as a rougher estimate than usual until more games "
-                f"have been played with the new roster."
-            )
 
+        with st.expander("See how this estimate was built (every adjustment step)"):
+            baseline_summary = ", ".join(
+                f"{predictions[col]['base']:.1f} {col}" for col, _ in STAT_COLUMNS
+            )
+            st.write(f"**[1] Baseline** ({source}): {baseline_summary}")
+            st.write(f"**[2] Opponent defense:** {def_note}")
+            st.write(f"**[3] Missing teammates:** {teammate_note}")
+            st.write(f"**[4] Missing opponent players:** {opp_missing_note}")
+            st.write(f"**[5] New teammate arriving:** {new_teammate_note}")
+            st.write(f"**[6] Primary defender:** {defender_note}")
+            st.write(f"**[7] Scheme:** {scheme_note}")
+            if scheme_executor_input:
+                st.write(f"**[8] Scheme executed by (reference only):** {scheme_executor_input} "
+                         f"-- not used in the calculation, no data exists to attribute schemes to individual players.")
+            if post_change_thin_sample:
+                st.write(
+                    f"**[9] Roster-change uncertainty:** the likely range above was widened "
+                    f"x{THIN_SAMPLE_SPREAD_MULTIPLIER} since the post-change sample is small -- "
+                    f"treat this prediction as a rougher estimate than usual until more games "
+                    f"have been played with the new roster."
+                )
+
+        st.caption(
+            "Remember: this is a transparent estimate built from a handful of adjustments, "
+            "not a trained predictive model. Treat it as a starting point for your own analysis."
+        )
+
+with tab2:
+    st.subheader("Predict a full matchup")
     st.caption(
-        "Remember: this is a transparent estimate built from a handful of adjustments, "
-        "not a trained predictive model. Treat it as a starting point for your own analysis."
+        "Projects a full box score for both teams using each player's live "
+        "current roster spot (so departed players drop off and new arrivals "
+        "show up automatically) and the same season-baseline + "
+        "opponent-defense engine as the single-player tool above. This does "
+        "not model rotations or minutes -- every player is projected at "
+        "their own adjusted season-average rate, not a coach's actual "
+        "rotation plan. Per-player nuance (missing/new teammates, primary "
+        "defender, scheme) stays in the single-player tool for now."
     )
+
+def get_team_roster(team_id):
+    """Pull current live roster for a team via commonteamroster, with the
+    same timeout=5 treatment as every other live call in this app.
+    Returns a list of (player_id, player_name) tuples, or [] on failure."""
+    from nba_api.stats.endpoints import commonteamroster
+    for attempt_timeout in (5, 10):
+        try:
+            roster = commonteamroster.CommonTeamRoster(
+                team_id=team_id, season=CURRENT_SEASON, timeout=attempt_timeout
+            )
+            df = roster.get_data_frames()[0]
+            return list(zip(df["PLAYER_ID"], df["PLAYER"]))
+        except Exception as e:
+            print(
+                f"[get_team_roster] attempt (timeout={attempt_timeout}) failed "
+                f"for team_id={team_id}: {type(e).__name__}: {e}"
+            )
+    return []
+
+
+def predict_player_vs_opponent(player_id, player_name, opponent_id):
+    """MVP matchup-predictor engine: season baseline + opponent-defense
+    adjustment only. Deliberately excludes missing/new-teammate, primary
+    defender, and scheme adjustments -- that nuance stays in the
+    single-player tool, per the approved v1 scope.
+
+    Returns None if there isn't enough real data for this player (e.g. a
+    true rookie with no NBA history) so the caller can flag it rather
+    than silently guessing.
+    """
+    try:
+        season_stats, season_source = get_season_baseline(player_id, player_name)
+    except Exception:
+        return None
+    if not season_stats:
+        return None
+
+    team_def_rating, league_avg_def, def_source_note = get_opponent_defense_with_fallback(opponent_id)
+
+    DEF_ADJUSTMENT_STRENGTH = 0.5
+    if team_def_rating is not None:
+        def_gap_pct = (team_def_rating - league_avg_def) / league_avg_def
+        def_adjustment = 1 + (def_gap_pct * DEF_ADJUSTMENT_STRENGTH)
+    else:
+        def_adjustment = 1.0
+
+    predictions = {}
+    for col, _label in STAT_COLUMNS:
+        base_mean, _base_std = season_stats[col]
+        predictions[col] = {"predicted": base_mean * def_adjustment}
+
+    return predictions, season_source, def_source_note
+
+
+
+with tab2:
+    with st.form("matchup_form"):
+        mcol1, mcol2 = st.columns(2)
+        with mcol1:
+            default_a = team_names.index("Oklahoma City Thunder") if "Oklahoma City Thunder" in team_names else None
+            team_a_input = st.selectbox(
+                "Team A", options=team_names, index=default_a,
+                placeholder="Search a team..."
+            )
+        with mcol2:
+            default_b = team_names.index("San Antonio Spurs") if "San Antonio Spurs" in team_names else None
+            team_b_input = st.selectbox(
+                "Team B", options=team_names, index=default_b,
+                placeholder="Search a team..."
+            )
+        matchup_submitted = st.form_submit_button("Predict matchup")
+
+    if matchup_submitted:
+        if not team_a_input or not team_b_input:
+            st.error("Please select both teams.")
+            st.stop()
+        if team_a_input == team_b_input:
+            st.error("Please select two different teams.")
+            st.stop()
+
+        with st.spinner("Pulling rosters and calculating..."):
+            team_a_id, team_a_full, team_a_abbr = get_team_id(team_a_input)
+            team_b_id, team_b_full, team_b_abbr = get_team_id(team_b_input)
+
+            def build_team_projection(team_id, opponent_id):
+                roster = get_team_roster(team_id)
+                rows = []
+                skipped = []
+                for pid, pname in roster:
+                    result = predict_player_vs_opponent(pid, pname, opponent_id)
+                    if result is None:
+                        skipped.append(pname)
+                        continue
+                    predictions, _season_source, _def_source_note = result
+                    row = {"Player": pname}
+                    for col, label in STAT_COLUMNS:
+                        row[label] = round(predictions[col]["predicted"], 1)
+                    rows.append(row)
+                return rows, skipped
+
+            team_a_rows, team_a_skipped = build_team_projection(team_a_id, team_b_id)
+            team_b_rows, team_b_skipped = build_team_projection(team_b_id, team_a_id)
+
+        st.markdown(f"**{team_a_full}** projected box score")
+        if team_a_rows:
+            st.dataframe(pd.DataFrame(team_a_rows), width="stretch", hide_index=True)
+        else:
+            st.info("No players with enough data to project.")
+        if team_a_skipped:
+            st.caption(f"Not enough data to project: {', '.join(team_a_skipped)}")
+
+        st.markdown(f"**{team_b_full}** projected box score")
+        if team_b_rows:
+            st.dataframe(pd.DataFrame(team_b_rows), width="stretch", hide_index=True)
+        else:
+            st.info("No players with enough data to project.")
+        if team_b_skipped:
+            st.caption(f"Not enough data to project: {', '.join(team_b_skipped)}")

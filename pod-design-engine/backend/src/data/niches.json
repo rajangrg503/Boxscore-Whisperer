@@ -1,0 +1,58 @@
+{
+  "kids_birthday": {
+    "label": "Kids Birthday",
+    "defaultPalette": "playful_bright",
+    "fontStack": "'Baloo 2', 'Poppins', sans-serif",
+    "fontWeight": 800,
+    "textTransform": "none"
+  },
+  "kids_soft": {
+    "label": "Kids Soft / Nursery",
+    "defaultPalette": "pastel_soft",
+    "fontStack": "'Fredoka', 'Poppins', sans-serif",
+    "fontWeight": 700,
+    "textTransform": "capitalize"
+  },
+  "premium_apparel": {
+    "label": "Premium Streetwear",
+    "defaultPalette": "premium_neutral",
+    "fontStack": "'Bebas Neue', 'Oswald', sans-serif",
+    "fontWeight": 400,
+    "textTransform": "uppercase"
+  },
+  "retro_vintage": {
+    "label": "Retro / Vintage",
+    "defaultPalette": "bold_retro",
+    "fontStack": "'Anton', 'Oswald', sans-serif",
+    "fontWeight": 400,
+    "textTransform": "uppercase"
+  },
+  "minimal_editorial": {
+    "label": "Minimal Editorial",
+    "defaultPalette": "monochrome_editorial",
+    "fontStack": "'Helvetica Neue', Arial, sans-serif",
+    "fontWeight": 300,
+    "textTransform": "none"
+  },
+  "real_estate_agents": {
+    "label": "Real Estate Agents (Premium Minimalist)",
+    "defaultPalette": "real_estate_premium",
+    "fontStack": "'Cinzel', 'Times New Roman', serif",
+    "fontWeight": 600,
+    "textTransform": "uppercase"
+  },
+  "aesthetic_services": {
+    "label": "Aesthetic Services / Lash Techs (Trendy Neutral)",
+    "defaultPalette": "aesthetic_trendy_neutral",
+    "fontStack": "'Cormorant Garamond', Georgia, serif",
+    "fontWeight": 500,
+    "textTransform": "none"
+  },
+  "corporate_coaches": {
+    "label": "Corporate Coaches (Bold Swiss/Geometric)",
+    "defaultPalette": "corporate_swiss",
+    "fontStack": "'Inter', 'Helvetica Neue', Arial, sans-serif",
+    "fontWeight": 800,
+    "textTransform": "uppercase"
+  }
+}

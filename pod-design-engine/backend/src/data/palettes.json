@@ -1,0 +1,50 @@
+{
+  "playful_bright": {
+    "label": "Playful Bright",
+    "colors": ["#FF6B6B", "#FFD93D", "#4ECDC4", "#1A1A2E"],
+    "textColor": "#1A1A2E",
+    "accentColor": "#FF6B6B"
+  },
+  "pastel_soft": {
+    "label": "Pastel Soft",
+    "colors": ["#FFD6E8", "#C9F2C7", "#B5DEFF", "#3A3A3A"],
+    "textColor": "#3A3A3A",
+    "accentColor": "#FFB5D8"
+  },
+  "premium_neutral": {
+    "label": "Premium Neutral",
+    "colors": ["#2B2B2B", "#D4AF37", "#F5F1E8", "#2B2B2B"],
+    "textColor": "#2B2B2B",
+    "accentColor": "#D4AF37"
+  },
+  "bold_retro": {
+    "label": "Bold Retro",
+    "colors": ["#E76F51", "#F4A261", "#264653", "#E9C46A"],
+    "textColor": "#264653",
+    "accentColor": "#E76F51"
+  },
+  "monochrome_editorial": {
+    "label": "Monochrome Editorial",
+    "colors": ["#111111", "#FFFFFF", "#8A8A8A", "#111111"],
+    "textColor": "#111111",
+    "accentColor": "#111111"
+  },
+  "real_estate_premium": {
+    "label": "Real Estate Premium Minimalist",
+    "colors": ["#F5F1E8", "#2B2B2B", "#C9A227", "#F5F1E8"],
+    "textColor": "#2B2B2B",
+    "accentColor": "#C9A227"
+  },
+  "aesthetic_trendy_neutral": {
+    "label": "Aesthetic Trendy Neutral",
+    "colors": ["#F2E4DD", "#3A2E28", "#C97D60", "#F2E4DD"],
+    "textColor": "#3A2E28",
+    "accentColor": "#C97D60"
+  },
+  "corporate_swiss": {
+    "label": "Corporate Bold Swiss",
+    "colors": ["#FFFFFF", "#111111", "#111111", "#FFFFFF"],
+    "textColor": "#111111",
+    "accentColor": "#111111"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+storage/exports/*
+!storage/exports/.gitkeep
+.env
+*.log
+storage/canva-tokens.json
