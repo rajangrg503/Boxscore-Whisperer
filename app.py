@@ -99,12 +99,23 @@ def cached_or_live(key, fetch_fn):
     Returns (dataframe, source_label) where source_label is "live" or
     "cached (<timestamp>)", so callers can show which one was actually
     used. Re-raises the live error only if no cached copy exists
-    either -- at that point there's genuinely nothing to show."""
+    either -- at that point there's genuinely nothing to show.
+
+    Once a live call has failed once in this session, subsequent calls
+    skip straight to a cached copy (when one exists) instead of
+    re-attempting and re-waiting-out a live call already known to be
+    unreachable this session (e.g. on Streamlit Cloud)."""  # patch_session_live_skip
+    if st.session_state.get("_live_nba_api_blocked"):
+        cached_df, cached_at = _load_df_cache(key)
+        if cached_df is not None:
+            label = f"cached copy from {cached_at}" if cached_at else "cached copy"
+            return cached_df, label
     try:
         df = fetch_fn()
         _save_df_cache(key, df)
         return df, "live"
     except Exception as live_error:
+        st.session_state["_live_nba_api_blocked"] = True
         cached_df, cached_at = _load_df_cache(key)
         if cached_df is not None:
             label = f"cached copy from {cached_at}" if cached_at else "cached copy"
@@ -309,7 +320,20 @@ def fetch_combined_game_log(player_id, season):
     (e.g. nba_api blocked on this host). In that case this falls back
     to a cached local copy via cached_or_live() instead of silently
     returning an empty, columnless DataFrame that breaks every
-    downstream stat lookup with a confusing KeyError."""
+    downstream stat lookup with a confusing KeyError.
+
+    Once a live call has failed once this session, subsequent calls
+    skip the live attempt entirely and go straight to a cached copy if
+    one exists -- see cached_or_live()'s docstring for why."""  # patch_session_live_skip
+    cache_key = f"gamelog_{player_id}_{season}"
+
+    if st.session_state.get("_live_nba_api_blocked"):
+        cached_df, _cached_at = _load_df_cache(cache_key)
+        if cached_df is not None:
+            return cached_df
+        # no cached copy for this specific key -- fall through and try
+        # live anyway, nothing to lose.
+
     frames = []
     regular_season_error = None
     for season_type in ["Regular Season", "Playoffs"]:
@@ -326,9 +350,8 @@ def fetch_combined_game_log(player_id, season):
                 regular_season_error = e
             continue
 
-    cache_key = f"gamelog_{player_id}_{season}"
-
     if regular_season_error is not None and not frames:
+        st.session_state["_live_nba_api_blocked"] = True
         cached_df, _cached_at = _load_df_cache(cache_key)
         if cached_df is not None:
             return cached_df
