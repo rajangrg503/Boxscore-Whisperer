@@ -630,7 +630,8 @@ def get_league_advanced_team_stats(season):
     fetched and cached from a local run."""
     def _fetch():
         stats = leaguedashteamstats.LeagueDashTeamStats(
-            season=season, measure_type_detailed_defense="Advanced"
+            season=season, measure_type_detailed_defense="Advanced",
+            timeout=5,  # patch_missing_timeout
         )
         df = stats.get_data_frames()[0]
         cols = ["TEAM_ID", "TEAM_NAME", "DEF_RATING", "PACE", "GP"]
