@@ -2052,6 +2052,7 @@ with tab1:
             "roster_change_active": roster_change_active,
             "post_change_thin_sample": post_change_thin_sample,
             "key_player_ids": key_player_ids,
+            "effective_key_players_input": effective_key_players_input,
             "no_combo_data": no_combo_data,
             "valid_ids": valid_ids,
         }
@@ -2078,6 +2079,7 @@ with tab1:
         roster_change_active = r["roster_change_active"]
         post_change_thin_sample = r["post_change_thin_sample"]
         key_player_ids = r["key_player_ids"]
+        effective_key_players_input = r["effective_key_players_input"]
         no_combo_data = r["no_combo_data"]
         valid_ids = r["valid_ids"]
 
