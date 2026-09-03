@@ -1201,24 +1201,22 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season):
 
     if play_type is None:
         if scheme_label == "Man-to-man (standard)":
-            if st.session_state.get("_live_nba_api_blocked"):
-                return manual_value, (
-                    f"'{scheme_label}' has no real Synergy play-type equivalent, and "
-                    f"live disruption data is unavailable this session -- using your "
-                    f"manual estimate \U0001F9E9 Scheme Layer Applied \u2014 x{manual_value:.3f} (not data-backed)."
-                )
+            
             from nba_api.stats.endpoints import leaguehustlestatsteam
-
             DEFLECTIONS_ADJUSTMENT_STRENGTH = 0.4  # kept modest -- this is a
                                                      # supplementary disruption
                                                      # signal, not a full defense
                                                      # rating replacement
             for try_season in [season, PREVIOUS_SEASON]:
-                try:
-                    hustle = leaguehustlestatsteam.LeagueHustleStatsTeam(
-                        season=try_season, per_mode_time="PerGame", timeout=10
-                    )
-                    hustle_df = hustle.get_data_frames()[0]
+                        try:
+            def _fetch_hustle():
+                hustle = leaguehustlestatsteam.LeagueHustleStatsTeam(
+                    season=try_season, per_mode_time="PerGame", timeout=10
+                )
+                return hustle.get_data_frames()[0]
+            hustle_df, _hustle_source = cached_or_live(
+                f"hustle_team_stats_{try_season}", _fetch_hustle
+            )
                 except Exception:
                     continue
                 if hustle_df.empty or "DEFLECTIONS" not in hustle_df.columns:
