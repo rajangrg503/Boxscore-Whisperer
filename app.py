@@ -2369,21 +2369,44 @@ with tab2:
 def get_team_roster(team_id):
     """Pull current live roster for a team via commonteamroster, with the
     same timeout=5 treatment as every other live call in this app.
-    Returns a list of (player_id, player_name) tuples, or [] on failure."""
+
+    Routes through cached_or_live() like every other real nba_api call in
+    this file (see the comment near the top), so on Cloud -- where live
+    nba_api calls are blocked -- this falls back to a local data_cache/
+    copy instead of silently returning an empty roster. Requires
+    batch_cache_rosters.py to have been run locally and data_cache/
+    committed, same as every other cached endpoint.
+
+    Returns a list of (player_id, player_name) tuples, or [] if neither a
+    live fetch nor a cached copy is available.
+    """  # patch_roster_cache_fallback
     from nba_api.stats.endpoints import commonteamroster
-    for attempt_timeout in (5, 10):
-        try:
-            roster = commonteamroster.CommonTeamRoster(
-                team_id=team_id, season=CURRENT_SEASON, timeout=attempt_timeout
-            )
-            df = roster.get_data_frames()[0]
-            return list(zip(df["PLAYER_ID"], df["PLAYER"]))
-        except Exception as e:
-            print(
-                f"[get_team_roster] attempt (timeout={attempt_timeout}) failed "
-                f"for team_id={team_id}: {type(e).__name__}: {e}"
-            )
-    return []
+
+    def _fetch():
+        last_error = None
+        for attempt_timeout in (5, 10):
+            try:
+                roster = commonteamroster.CommonTeamRoster(
+                    team_id=team_id, season=CURRENT_SEASON, timeout=attempt_timeout
+                )
+                return roster.get_data_frames()[0]
+            except Exception as e:
+                last_error = e
+                print(
+                    f"[get_team_roster] attempt (timeout={attempt_timeout}) failed "
+                    f"for team_id={team_id}: {type(e).__name__}: {e}"
+                )
+        raise last_error if last_error else RuntimeError("get_team_roster: no attempts made")
+
+    try:
+        df, _source = cached_or_live(f"roster_{team_id}", _fetch)
+    except Exception as e:
+        print(f"[get_team_roster] no live or cached roster for team_id={team_id}: {e}")
+        return []
+
+    if df is None or df.empty:
+        return []
+    return list(zip(df["PLAYER_ID"], df["PLAYER"]))
 
 
 def predict_player_vs_opponent(player_id, player_name, opponent_id):
