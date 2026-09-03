@@ -331,8 +331,7 @@ def fetch_combined_game_log(player_id, season):
         cached_df, _cached_at = _load_df_cache(cache_key)
         if cached_df is not None:
             return cached_df
-        # no cached copy for this specific key -- fall through and try
-        # live anyway, nothing to lose.
+        raise ConnectionError("Live NBA data fetch skipped -- already confirmed unreachable this session.")
 
     frames = []
     regular_season_error = None
