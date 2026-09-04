@@ -1007,9 +1007,6 @@ def get_new_teammate_impact_adjustment(player_id, new_teammate_name, season):
 def get_opponent_missing_adjustment(missing_opponents, season):
     if not missing_opponents:
         return 1.0, "No missing opponent players specified -- no adjustment."
-    if st.session_state.get("_live_nba_api_blocked"):
-        return 1.0, ("Live NBA data already confirmed unreachable this session -- "
-                      "skipping opponent-missing-player adjustment.")
 
     # Pull league-wide estimated net ratings once (not per player) so a
     # missing player's real two-way impact -- not just their minutes --
@@ -1020,11 +1017,16 @@ def get_opponent_missing_adjustment(missing_opponents, season):
     net_rating_by_id = {}
     metrics_season_used = None
     for try_season in [season, PREVIOUS_SEASON]:
-        try:
+        def _fetch_metrics():
             metrics = playerestimatedmetrics.PlayerEstimatedMetrics(
                 season=try_season, timeout=10
             )
-            metrics_df = metrics.get_data_frames()[0]
+            return metrics.get_data_frames()[0]
+
+        try:
+            metrics_df, _source = cached_or_live(
+                f"player_estimated_metrics_{try_season}", _fetch_metrics
+            )
         except Exception:
             continue
         if not metrics_df.empty:
@@ -1045,8 +1047,12 @@ def get_opponent_missing_adjustment(missing_opponents, season):
             if not match:
                 continue
             pid = match[0]["id"]
-            career = playercareerstats.PlayerCareerStats(player_id=pid, timeout=5)
-            df = career.get_data_frames()[0]
+
+            def _fetch_career():
+                career = playercareerstats.PlayerCareerStats(player_id=pid, timeout=5)
+                return career.get_data_frames()[0]
+
+            df, _source = cached_or_live(f"career_stats_{pid}", _fetch_career)
             season_row = df[df["SEASON_ID"] == season]
             if season_row.empty:
                 season_row = df.tail(1)
