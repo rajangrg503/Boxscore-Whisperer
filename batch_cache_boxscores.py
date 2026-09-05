@@ -46,6 +46,8 @@ from pathlib import Path
 import pandas as pd
 from nba_api.stats.endpoints import leaguegamelog, boxscoretraditionalv3
 
+from data_watchdog.gate import require_valid
+
 CACHE_DIR = Path("data_cache")
 CURRENT_SEASON = "2026-27"   # keep in sync with app.py's CURRENT_SEASON
 PREVIOUS_SEASON = "2025-26"  # keep in sync with app.py's PREVIOUS_SEASON
@@ -111,6 +113,9 @@ def cache_boxscore(game_id: str) -> str:
 
 
 def main():
+    require_valid("boxscore_traditional_v3")  # blocking pre-flight check -- crashes
+    # loudly here, before touching data_cache/, if this endpoint's schema/row-count
+    # no longer matches what get_teammate_availability_adjustment() actually expects.
     CACHE_DIR.mkdir(exist_ok=True)
 
     all_game_ids = []

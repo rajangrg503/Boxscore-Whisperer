@@ -17,20 +17,17 @@ are always refreshed in full -- that part covers all 30 teams
 automatically.
 """
 
-import os
-import json
 import time
-import datetime
 
 import pandas as pd
 from nba_api.stats.static import players
 from nba_api.stats.endpoints import playergamelog, leaguedashteamstats, synergyplaytypes
 
+from engine.cache import CACHE_DIR, _save_df_cache as save_df_cache
+
 CURRENT_SEASON = "2026-27"   # keep in sync with app.py
 PREVIOUS_SEASON = "2025-26"
 HEAD_TO_HEAD_SEASONS = [CURRENT_SEASON, PREVIOUS_SEASON, "2024-25", "2023-24"]
-
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_cache")
 
 # Add any players you want the cloud app to reliably support -- their
 # names must match nba_api's full-name lookup exactly.
@@ -46,21 +43,6 @@ PLAYERS_TO_CACHE = [
     "Anthony Edwards",
     "Victor Wembanyama",
 ]
-
-
-def _cache_key_to_path(key):
-    safe_key = "".join(c if (c.isalnum() or c in "_-") else "_" for c in key)
-    return os.path.join(CACHE_DIR, f"{safe_key}.json")
-
-
-def save_df_cache(key, df):
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    payload = {
-        "cached_at": datetime.datetime.now().isoformat(timespec="seconds"),
-        "data": df.to_dict(orient="records"),
-    }
-    with open(_cache_key_to_path(key), "w") as f:
-        json.dump(payload, f)
 
 
 def fetch_combined_game_log(player_id, season):

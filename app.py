@@ -41,89 +41,12 @@ CURRENT_SEASON = "2026-27"   # update each year
 PREVIOUS_SEASON = "2025-26"
 
 # ---------- Local-to-cloud data cache ----------
-# nba_api works fine when this app runs locally, but is blocked by the
-# NBA's unofficial stats site when running on Streamlit Community
-# Cloud's shared IP range (a known, confirmed limitation -- see the
-# module docstring above). Rather than the app simply breaking on the
-# cloud, every real nba_api call below routes through cached_or_live():
-# it tries the live call first (works locally, and would work on any
-# host nba_api isn't blocking), and falls back to a cached local copy
-# of the same data if the live call fails.
-#
-# WORKFLOW: run this app locally periodically (or run refresh_cache.py,
-# see below) to populate/update data_cache/*.json with fresh data, then
-# commit and push that folder to GitHub. The deployed cloud app reads
-# whatever is in data_cache/ at deploy time -- it never needs to write
-# there itself, since Streamlit Cloud's filesystem doesn't persist
-# writes between sessions anyway.
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_cache")
-
-
-def _cache_key_to_path(key):
-    safe_key = "".join(c if (c.isalnum() or c in "_-") else "_" for c in key)
-    return os.path.join(CACHE_DIR, f"{safe_key}.json")
-
-
-def _save_df_cache(key, df):
-    """Best-effort local cache write -- safe to fail silently (e.g. on
-    a read-only filesystem). Caching is a local-machine workflow; the
-    deployed cloud app only ever reads these files."""
-    try:
-        os.makedirs(CACHE_DIR, exist_ok=True)
-        payload = {
-            "cached_at": datetime.datetime.now().isoformat(timespec="seconds"),
-            "data": df.to_dict(orient="records"),
-        }
-        with open(_cache_key_to_path(key), "w") as f:
-            import json
-            json.dump(payload, f)
-    except Exception:
-        pass
-
-
-def _load_df_cache(key):
-    """Returns (dataframe, cached_at_string) if a cache file exists for
-    this key, else (None, None)."""
-    path = _cache_key_to_path(key)
-    if not os.path.exists(path):
-        return None, None
-    try:
-        import json
-        with open(path) as f:
-            payload = json.load(f)
-        return pd.DataFrame(payload["data"]), payload.get("cached_at")
-    except Exception:
-        return None, None
-
-
-def cached_or_live(key, fetch_fn):
-    """Try a live nba_api call first; fall back to a cached local copy
-    if the live call raises (e.g. nba_api blocked on this host).
-    Returns (dataframe, source_label) where source_label is "live" or
-    "cached (<timestamp>)", so callers can show which one was actually
-    used. Re-raises the live error only if no cached copy exists
-    either -- at that point there's genuinely nothing to show.
-
-    Once a live call has failed once in this session, subsequent calls
-    skip straight to a cached copy (when one exists) instead of
-    re-attempting and re-waiting-out a live call already known to be
-    unreachable this session (e.g. on Streamlit Cloud)."""  # patch_session_live_skip
-    if st.session_state.get("_live_nba_api_blocked"):
-        cached_df, cached_at = _load_df_cache(key)
-        if cached_df is not None:
-            label = f"cached copy from {cached_at}" if cached_at else "cached copy"
-            return cached_df, label
-    try:
-        df = fetch_fn()
-        _save_df_cache(key, df)
-        return df, "live"
-    except Exception as live_error:
-        st.session_state["_live_nba_api_blocked"] = True
-        cached_df, cached_at = _load_df_cache(key)
-        if cached_df is not None:
-            label = f"cached copy from {cached_at}" if cached_at else "cached copy"
-            return cached_df, label
-        raise live_error
+# Moved to engine/cache.py (CACHE_DIR, cached_or_live, etc.) -- see that
+# module's docstring for the cloud-blocking rationale. WORKFLOW: run
+# refresh_all.py locally to populate/update data_cache/*.json (each
+# endpoint gated by data_watchdog/ before it's allowed to refresh), then
+# commit and push data_cache/ so the deployed app picks it up.
+from engine.cache import cached_or_live
 
 
 SCHEME_ADJUSTMENTS = {

@@ -49,6 +49,8 @@ import pandas as pd
 from nba_api.stats.static import players
 from nba_api.stats.endpoints import leagueseasonmatchups
 
+from data_watchdog.gate import require_valid
+
 CACHE_DIR = Path("data_cache")
 CURRENT_SEASON = "2026-27"   # keep in sync with app.py's CURRENT_SEASON
 PREVIOUS_SEASON = "2025-26"  # keep in sync with app.py's PREVIOUS_SEASON
@@ -126,6 +128,9 @@ def cache_defender_matchups(defender_id: int, defender_name: str, season: str) -
 
 
 def main():
+    require_valid("league_season_matchups")  # blocking pre-flight check -- crashes
+    # loudly here, before touching data_cache/, if this endpoint's schema/row-count
+    # no longer matches what get_defender_matchup_adjustment() actually expects.
     CACHE_DIR.mkdir(exist_ok=True)
 
     active_players = players.get_active_players()

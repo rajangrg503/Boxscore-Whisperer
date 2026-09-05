@@ -30,6 +30,8 @@ import pandas as pd
 from nba_api.stats.static import teams
 from nba_api.stats.endpoints import commonteamroster
 
+from data_watchdog.gate import require_valid
+
 CACHE_DIR = Path("data_cache")
 CURRENT_SEASON = "2026-27"  # keep in sync with app.py's CURRENT_SEASON
 REQUEST_DELAY = 0.6  # seconds between calls, to avoid getting rate-limited
@@ -82,6 +84,9 @@ def cache_team_roster(team_id: int, team_full_name: str) -> str:
 
 
 def main():
+    require_valid("common_team_roster")  # blocking pre-flight check -- crashes
+    # loudly here, before touching data_cache/, if this endpoint's schema/row-count
+    # no longer matches what get_team_roster() actually expects.
     CACHE_DIR.mkdir(exist_ok=True)
 
     all_teams = teams.get_teams()

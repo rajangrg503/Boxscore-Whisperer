@@ -1,4 +1,7 @@
 __pycache__/
 *.pyc
-__pycache__/
-*.pyc
+
+# Locally-generated watchdog diagnostic state -- changes on every run,
+# not application data that should travel with the repo.
+data_cache/_watchdog_status.json
+logs/

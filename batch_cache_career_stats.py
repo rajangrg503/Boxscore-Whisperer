@@ -34,6 +34,8 @@ import pandas as pd
 from nba_api.stats.static import players
 from nba_api.stats.endpoints import playercareerstats
 
+from data_watchdog.gate import require_valid
+
 CACHE_DIR = Path("data_cache")
 REQUEST_DELAY = 0.6
 MAX_RETRIES = 3
@@ -79,6 +81,9 @@ def cache_career_stats(player_id: int, player_name: str) -> str:
 
 
 def main():
+    require_valid("player_career_stats")  # blocking pre-flight check -- crashes
+    # loudly here, before touching data_cache/, if this endpoint's schema/row-count
+    # no longer matches what get_opponent_missing_adjustment() etc. actually expect.
     CACHE_DIR.mkdir(exist_ok=True)
     active_players = players.get_active_players()
     total = len(active_players)

@@ -27,6 +27,8 @@ from pathlib import Path
 import pandas as pd
 from nba_api.stats.endpoints import playerestimatedmetrics
 
+from data_watchdog.gate import require_valid
+
 CACHE_DIR = Path("data_cache")
 CURRENT_SEASON = "2026-27"   # keep in sync with app.py's CURRENT_SEASON
 PREVIOUS_SEASON = "2025-26"  # keep in sync with app.py's PREVIOUS_SEASON
@@ -75,6 +77,9 @@ def cache_metrics(season: str) -> str:
 
 
 def main():
+    require_valid("player_estimated_metrics")  # blocking pre-flight check -- crashes
+    # loudly here, before touching data_cache/, if this endpoint's schema/row-count
+    # no longer matches what get_opponent_missing_adjustment() etc. actually expect.
     CACHE_DIR.mkdir(exist_ok=True)
     print(f"Caching player estimated metrics for {len(SEASONS)} season(s): {SEASONS}\n")
 
