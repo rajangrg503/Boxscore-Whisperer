@@ -34,6 +34,9 @@ from nba_api.stats.endpoints import (
     leagueseasonmatchups,
 )
 
+from engine.players import get_player_id, get_team_id
+from engine.career_stats import resolve_season_mpg
+
 CURRENT_SEASON = "2026-27"   # update each year
 PREVIOUS_SEASON = "2025-26"
 
@@ -161,20 +164,9 @@ SCHEME_TO_SYNERGY_PLAYTYPE = {
 
 
 # ---------- Data functions (same logic as the terminal version) ----------
-
-def get_player_id(name):
-    match = players.find_players_by_full_name(name)
-    if not match:
-        return None, None
-    return match[0]["id"], match[0]["full_name"]
-
-
-def get_team_id(name):
-    match = teams.find_teams_by_full_name(name)
-    if not match:
-        return None, None, None
-    return match[0]["id"], match[0]["full_name"], match[0]["abbreviation"]
-
+# get_player_id / get_team_id now live in engine/players.py (imported above) --
+# get_player_id disambiguates same-name players (e.g. an active vs. a retired
+# "Brandon Williams") instead of blindly trusting the first regex match.
 
 STAT_COLUMNS = [
     ("PTS", "Points"),
@@ -936,10 +928,9 @@ def get_new_teammate_impact_adjustment(player_id, new_teammate_name, season):
     if not new_teammate_name:
         return neutral, "No new teammate specified -- no adjustment.", 0
 
-    match = players.find_players_by_full_name(new_teammate_name)
-    if not match:
+    teammate_id, _teammate_full_name, ambiguity_note = get_player_id(new_teammate_name)
+    if teammate_id is None:
         return neutral, f"No player found named '{new_teammate_name}' -- check spelling, skipping.", 0
-    teammate_id = match[0]["id"]
 
     try:
         player_df = fetch_combined_game_log(player_id, season)
@@ -995,7 +986,9 @@ def get_new_teammate_impact_adjustment(player_id, new_teammate_name, season):
         )
 
     summary = ", ".join(per_stat_notes)
+    ambiguity_prefix = f"{ambiguity_note} " if ambiguity_note else ""
     return adjustments, (
+        f"{ambiguity_prefix}"
         f"Found {len(shared)} shared games with {new_teammate_name} -- comparing the "
         f"{len(heavy)} game(s) where {new_teammate_name} played "
         f"{HEAVY_MINUTES_THRESHOLD}+ minutes vs. the {len(light)} game(s) with lighter "
@@ -1040,33 +1033,33 @@ def get_opponent_missing_adjustment(missing_opponents, season):
 
     total_weighted_mpg = 0.0
     found_players = []
+    skipped_zero_gp = []
     for name in missing_opponents:
         try:
-            match = players.find_players_by_full_name(name)
-            if not match:
+            pid, resolved_name, ambiguity_note = get_player_id(name)
+            if pid is None:
                 continue
-            pid = match[0]["id"]
 
             def _fetch_career():
                 career = playercareerstats.PlayerCareerStats(player_id=pid, timeout=5)
                 return career.get_data_frames()[0]
 
             df, _source = cached_or_live(f"career_stats_{pid}", _fetch_career)
-            season_row = df[df["SEASON_ID"] == season]
-            if season_row.empty:
-                season_row = df.tail(1)
-            mpg = season_row["MIN"].values[0] / season_row["GP"].values[0]
+            mpg, skip_reason = resolve_season_mpg(df, season)
+            if mpg is None:
+                skipped_zero_gp.append((name, skip_reason))
+                continue
 
             net_rating = net_rating_by_id.get(pid)
             if net_rating is not None:
                 quality_multiplier = max(MIN_QUALITY_MULTIPLIER, 1 + (net_rating / QUALITY_SCALE))
                 weighted_mpg = mpg * quality_multiplier
-                found_players.append((name, round(mpg, 1), round(net_rating, 1)))
+                found_players.append((name, round(mpg, 1), round(net_rating, 1), ambiguity_note))
             else:
                 weighted_mpg = mpg  # no estimated-metrics data found for this
                                      # player -- fall back to raw MPG rather
                                      # than dropping them entirely
-                found_players.append((name, round(mpg, 1), None))
+                found_players.append((name, round(mpg, 1), None, ambiguity_note))
 
             total_weighted_mpg += weighted_mpg
             time.sleep(0.5)
@@ -1074,22 +1067,34 @@ def get_opponent_missing_adjustment(missing_opponents, season):
             continue
 
     if not found_players:
+        if skipped_zero_gp:
+            skipped_detail = ", ".join(f"{n} ({reason})" for n, reason in skipped_zero_gp)
+            return 1.0, (f"Found {skipped_detail}, but excluded -- no real minutes to weight "
+                         f"this adjustment by, skipping.")
         return 1.0, f"Could not find stats for {missing_opponents} -- skipping adjustment."
 
     minutes_fraction = total_weighted_mpg / 240
     adjustment = 1 + (minutes_fraction * 0.35)
     detail_parts = []
-    for n, m, nr in found_players:
+    ambiguity_notes = []
+    for n, m, nr, amb in found_players:
         if nr is not None:
             detail_parts.append(f"{n} ({m} MPG, {nr:+.1f} net rtg)")
         else:
             detail_parts.append(f"{n} ({m} MPG, net rtg unavailable)")
+        if amb:
+            ambiguity_notes.append(amb)
     detail = ", ".join(detail_parts)
     if metrics_season_used:
         metrics_note = f" [quality-weighted using {metrics_season_used} estimated net ratings]"
     else:
         metrics_note = " [net rating data unavailable -- weighted by MPG only]"
-    return adjustment, (f"Missing: {detail}{metrics_note} -> "
+    skip_note = (
+        f" (excluded: {', '.join(f'{n} ({reason})' for n, reason in skipped_zero_gp)})"
+        if skipped_zero_gp else ""
+    )
+    ambiguity_prefix = (" ".join(ambiguity_notes) + " ") if ambiguity_notes else ""
+    return adjustment, (f"{ambiguity_prefix}Missing: {detail}{metrics_note}{skip_note} -> "
                          f"\U0001F691 Opponent Missing Players Layer Applied \u2014 x{adjustment:.3f}")
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1126,10 +1131,9 @@ def get_defender_matchup_adjustment(player_id, player_full_name, defender_name, 
     if not defender_name:
         return 1.0, "No primary defender specified -- no adjustment."
 
-    match = players.find_players_by_full_name(defender_name)
-    if not match:
+    defender_id, _defender_full_name, ambiguity_note = get_player_id(defender_name)
+    if defender_id is None:
         return 1.0, f"No player found named '{defender_name}' -- check spelling, skipping."
-    defender_id = match[0]["id"]
 
     for try_season in [season, PREVIOUS_SEASON]:
         def _fetch():
@@ -1174,7 +1178,9 @@ def get_defender_matchup_adjustment(player_id, player_full_name, defender_name, 
         if matchup_min is not None and matchup_min < 10:
             sample_flag = " -- small sample, treat as context not a hard signal."
 
+        ambiguity_prefix = f"{ambiguity_note} " if ambiguity_note else ""
         return 1.0, (
+            f"{ambiguity_prefix}"
             f"REAL matchup data ({try_season}): {defender_name} has guarded "
             f"{player_full_name} for {', '.join(details)}.{sample_flag} Shown as "
             f"context -- not folded into the number above since sample sizes here "
@@ -1773,10 +1779,12 @@ with tab1:
             st.stop()
 
         with st.spinner("Pulling data and calculating..."):
-            player_id, player_full_name = get_player_id(player_input)
+            player_id, player_full_name, player_ambiguity_note = get_player_id(player_input)
             if player_id is None:
                 st.error(f"No player found for '{player_input}'. Check spelling.")
                 st.stop()
+            if player_ambiguity_note:
+                st.warning(player_ambiguity_note)
 
             opponent_id, opponent_full_name, opponent_abbr = get_team_id(opponent_input)
             if opponent_id is None:
@@ -1810,7 +1818,7 @@ with tab1:
                 # Resolve every selected key player to an ID up front.
                 key_player_ids = {}
                 for name in effective_key_players_input:
-                    pid, full_name = get_player_id(name)
+                    pid, full_name, _key_player_ambiguity_note = get_player_id(name)
                     key_player_ids[name] = (pid, full_name)
 
                 combo_stats, combo_n, combo_note = None, 0, None
