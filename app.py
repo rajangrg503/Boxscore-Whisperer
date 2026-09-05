@@ -29,7 +29,7 @@ from nba_api.stats.endpoints import (
     playergamelog,
     playercareerstats,
     leaguedashteamstats,
-    boxscoretraditionalv2,
+    boxscoretraditionalv3,
     synergyplaytypes,
     leagueseasonmatchups,
 )
@@ -850,10 +850,6 @@ def get_teammate_availability_adjustment(player_id, missing_names, season):
         return neutral, (f"No game log available for {season} (live fetch failed, not yet "
                           f"cached) -- skipping this adjustment."), 0
 
-    if st.session_state.get("_live_nba_api_blocked"):
-        return neutral, (f"Live NBA data already confirmed unreachable this session -- "
-                          f"skipping per-game teammate-availability scan."), 0
-
     matching_games = []
     consecutive_failures = 0
     games_checked = 0
@@ -872,9 +868,12 @@ def get_teammate_availability_adjustment(player_id, missing_names, season):
         game_id = row["Game_ID"]
         games_checked += 1
         try:
-            box = boxscoretraditionalv2.BoxScoreTraditionalV2(game_id=game_id, timeout=5)
-            box_df = box.get_data_frames()[0]
-            players_in_game = set(box_df["PLAYER_NAME"])
+            def _fetch_box():
+                box = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id, timeout=5)
+                return box.get_data_frames()[0]
+
+            box_df, _source = cached_or_live(f"boxscore_{game_id}", _fetch_box)
+            players_in_game = set(box_df["firstName"] + " " + box_df["familyName"])
         except Exception:
             consecutive_failures += 1
             continue
