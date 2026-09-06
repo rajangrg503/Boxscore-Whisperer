@@ -38,6 +38,12 @@ from engine.players import get_player_id, get_team_id
 from engine.career_stats import resolve_season_mpg
 from engine.season import CURRENT_SEASON, PREVIOUS_SEASON
 from engine.stat_columns import STAT_COLUMNS
+from engine.tracker import (
+    LOG_PATH,
+    load_prediction_log,
+    append_prediction_to_log,
+    refresh_pending_predictions,
+)
 from engine.game_log import fetch_combined_game_log
 
 # ---------- Local-to-cloud data cache ----------
@@ -64,124 +70,12 @@ from engine.adjustments.defense import (
 # get_player_id disambiguates same-name players (e.g. an active vs. a retired
 # "Brandon Williams") instead of blindly trusting the first regex match.
 
-# ---------- Prediction tracker: local file-based log ----------
-# Uses a plain CSV sitting next to app.py. This is the right call for
-# a locally-run app -- it persists across restarts on this machine.
-# KNOWN LIMITATION: if this app is later deployed to a cloud host
-# (e.g. Streamlit Community Cloud), the filesystem there is typically
-# ephemeral -- this log would NOT reliably survive redeploys or app
-# sleep/wake cycles. A real database would be needed for that. Not a
-# concern for local use, which is where this stands today.
-LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prediction_log.csv")
-
-LOG_COLUMNS = ["id", "saved_at", "player_id", "player_full_name", "opponent_full_name",
-               "opponent_abbr", "game_date", "status"]
-for _col, _ in STAT_COLUMNS:
-    LOG_COLUMNS += [f"{_col}_low", f"{_col}_mid", f"{_col}_high", f"{_col}_actual", f"{_col}_hit"]
-
-
-def load_prediction_log():
-    if os.path.exists(LOG_PATH):
-        try:
-            return pd.read_csv(LOG_PATH)
-        except Exception:
-            return pd.DataFrame(columns=LOG_COLUMNS)
-    return pd.DataFrame(columns=LOG_COLUMNS)
-
-
-def save_prediction_log(df):
-    df.to_csv(LOG_PATH, index=False)
-
-
-def append_prediction_to_log(player_id, player_full_name, opponent_full_name,
-                              opponent_abbr, game_date, predictions):
-    """predictions is the same dict built in main(): {col: {"low", "predicted", "high", ...}}"""
-    row = {
-        "id": uuid.uuid4().hex[:8],
-        "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
-        "player_id": player_id,
-        "player_full_name": player_full_name,
-        "opponent_full_name": opponent_full_name,
-        "opponent_abbr": opponent_abbr,
-        "game_date": game_date.isoformat() if game_date else "",
-        "status": "pending",
-    }
-    for col, _ in STAT_COLUMNS:
-        p = predictions[col]
-        row[f"{col}_low"] = round(p["low"], 1)
-        row[f"{col}_mid"] = round(p["predicted"], 1)
-        row[f"{col}_high"] = round(p["high"], 1)
-        row[f"{col}_actual"] = None
-        row[f"{col}_hit"] = None
-
-    df = load_prediction_log()
-    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    save_prediction_log(df)
-    return row["id"]
-
-
-def try_resolve_prediction(row):
-    """Look up the player's actual game log for the saved game_date and
-    opponent. If a matching game is found, fill in actual values and
-    mark hit/miss per stat (within the predicted low-high range).
-    Returns the updated row (as a dict) whether or not it resolved."""
-    row = dict(row)
-    if not row.get("game_date") or pd.isna(row.get("game_date")) or row["game_date"] == "":
-        return row  # nothing to check against
-
-    try:
-        game_date = pd.to_datetime(row["game_date"]).date()
-    except Exception:
-        return row
-
-    if game_date > datetime.date.today():
-        return row  # game hasn't happened yet
-
-    player_id = int(row["player_id"])
-    opponent_abbr = row["opponent_abbr"]
-
-    match_df = get_head_to_head_log(player_id, opponent_abbr)
-    if match_df.empty:
-        if (datetime.date.today() - game_date).days > 1:
-            row["status"] = "no_game_found"
-        return row
-
-    match_df["GAME_DATE_ONLY"] = match_df["GAME_DATE"].dt.date
-    game_row = match_df[match_df["GAME_DATE_ONLY"] == game_date]
-    if game_row.empty:
-        if (datetime.date.today() - game_date).days > 1:
-            row["status"] = "no_game_found"
-        return row
-
-    actual = game_row.iloc[0]
-    for col, _ in STAT_COLUMNS:
-        if col not in actual:
-            continue
-        actual_val = actual[col]
-        row[f"{col}_actual"] = actual_val
-        low, high = row.get(f"{col}_low"), row.get(f"{col}_high")
-        if pd.notna(low) and pd.notna(high):
-            row[f"{col}_hit"] = bool(low <= actual_val <= high)
-    row["status"] = "resolved"
-    return row
-
-
-def refresh_pending_predictions():
-    """Try to resolve every pending prediction in the log against real
-    results. Safe to call repeatedly -- already-resolved rows are
-    skipped."""
-    df = load_prediction_log()
-    if df.empty:
-        return df
-    updated_rows = []
-    for _, row in df.iterrows():
-        if row.get("status") == "pending":
-            updated_rows.append(try_resolve_prediction(row))
-        else:
-            updated_rows.append(dict(row))
-    new_df = pd.DataFrame(updated_rows)
-    save_prediction_log(new_df)
-    return new_df
+# Prediction tracker (LOG_PATH, load/save/append/resolve) now lives in
+# engine/tracker.py (imported above) -- hardened with file locking
+# (fixes a lost-update race between concurrent saves) and atomic
+# writes (fixes torn writes on a crash mid-write). Schema extended
+# with {STAT}_base and layers_json, built from AdjustmentResult
+# objects at save time.
 
 
 HEAD_TO_HEAD_SEASONS = [CURRENT_SEASON, PREVIOUS_SEASON, "2024-25", "2023-24"]
@@ -808,7 +702,7 @@ with st.sidebar:
     st.markdown("### 📊 Prediction Tracker")
     if st.button("🔄 Check for results", key="refresh_tracker_btn"):
         with st.spinner("Checking saved predictions against real results..."):
-            refresh_pending_predictions()
+            refresh_pending_predictions(get_head_to_head_log)
 
     log_df = load_prediction_log()
     if log_df.empty:
@@ -1308,6 +1202,16 @@ with tab1:
             "source": source,
             "predictions": predictions,
             "line_inputs": line_inputs,
+            # Additive, for layers_json (engine/tracker.py) -- duplicates the
+            # *_note strings below by design, not by oversight (those stay
+            # for the existing "how this was built" display panel, which
+            # reads them directly; revisit if that panel gets refactored).
+            "layer_results": {
+                res.layer: res for res in [
+                    defense_result, opp_missing_result, scheme_result,
+                    teammate_result, new_teammate_result,
+                ]
+            },
             "def_note": def_note,
             "teammate_note": teammate_note,
             "new_teammate_note": new_teammate_note,
@@ -1335,6 +1239,7 @@ with tab1:
         source = r["source"]
         predictions = r["predictions"]
         line_inputs = r["line_inputs"]
+        layer_results = r["layer_results"]
         def_note = r["def_note"]
         teammate_note = r["teammate_note"]
         new_teammate_note = r["new_teammate_note"]
@@ -1409,6 +1314,7 @@ with tab1:
                     new_id = append_prediction_to_log(
                         player_id, player_full_name, opponent_full_name,
                         opponent_abbr, tracked_game_date, predictions,
+                        layer_results=layer_results,
                     )
                     st.success(f"Saved (id: {new_id}). Check the Prediction Tracker in the sidebar later.")
 
