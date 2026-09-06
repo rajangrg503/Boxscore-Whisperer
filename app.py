@@ -36,9 +36,9 @@ from nba_api.stats.endpoints import (
 
 from engine.players import get_player_id, get_team_id
 from engine.career_stats import resolve_season_mpg
-
-CURRENT_SEASON = "2026-27"   # update each year
-PREVIOUS_SEASON = "2025-26"
+from engine.season import CURRENT_SEASON, PREVIOUS_SEASON
+from engine.stat_columns import STAT_COLUMNS
+from engine.game_log import fetch_combined_game_log
 
 # ---------- Local-to-cloud data cache ----------
 # Moved to engine/cache.py (CACHE_DIR, cached_or_live, etc.) -- see that
@@ -47,59 +47,22 @@ PREVIOUS_SEASON = "2025-26"
 # endpoint gated by data_watchdog/ before it's allowed to refresh), then
 # commit and push data_cache/ so the deployed app picks it up.
 from engine.cache import cached_or_live
-
-
-SCHEME_ADJUSTMENTS = {
-    "Drop coverage": 1.03,             # big sags back in the paint on PnR -- favors pull-up scorers
-    "Switch everything": 0.97,         # limits easy paint/rim looks, creates size mismatches
-    "Aggressive double-team / blitz": 0.90,   # meaningfully suppresses usage on the ball-handler
-    "Zone defense": 1.05,              # often favors driving/playmaking scorers, weaker vs. shooters
-    "Man-to-man (standard)": 1.00,     # neutral baseline
-    "Nail help": 0.96,                 # help from the foul-line area collapses driving lanes
-    "Weak-side / tagging": 0.97,       # help from the far side discourages drives, allows more kick-outs
-    "Bigs roaming (free safety)": 0.95,  # a big leaves his man to protect the rim, suppresses paint scoring
-    "Ice / blue (PnR sideline)": 0.97,   # forces ball-handler away from a sideline screen
-    "Hard hedge (no full blitz)": 0.95,  # big shows hard on PnR without fully trapping
-    "Deny / face-guard": 0.88,         # denies the ball entirely to a specific shooter off screens
-    "Full-court press": 0.93,          # pressures possessions, forces tempo/turnovers
-    "Pack the paint": 1.02,            # packs the paint against non-shooters, can favor perimeter scorers
-    "None / unsure": 1.00,
-}
-
-# Where a real Synergy play-type roughly overlaps with one of the
-# manual scheme labels above, we use REAL team defensive data instead
-# of the guessed multiplier. Not every scheme has a genuine Synergy
-# equivalent (e.g. "Zone defense" and "Man-to-man" aren't tracked as
-# distinct play types), so those fall back to the manual estimate.
-SCHEME_TO_SYNERGY_PLAYTYPE = {
-    "Drop coverage": "PRBallHandler",
-    "Switch everything": "PRBallHandler",
-    "Aggressive double-team / blitz": "PRBallHandler",
-    "Ice / blue (PnR sideline)": "PRBallHandler",
-    "Hard hedge (no full blitz)": "PRBallHandler",
-    "Nail help": "Isolation",
-    "Weak-side / tagging": "Isolation",
-    "Bigs roaming (free safety)": "PRRollman",
-    "Deny / face-guard": "OffScreen",
-    "Full-court press": "Transition",
-    "Pack the paint": "Postup",
-}
+from engine.adjustments.missing_players import get_opponent_missing_adjustment
+from engine.adjustments.defender import get_defender_matchup_adjustment
+from engine.adjustments.scheme import get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS
+from engine.adjustments.teammates import get_teammate_availability_adjustment, get_new_teammate_impact_adjustment
+from engine.adjustments.defense import (
+    get_league_advanced_team_stats,
+    get_opponent_defense_with_fallback,
+    get_opponent_defense_post_change,
+    get_defense_adjustment,
+)
 
 
 # ---------- Data functions (same logic as the terminal version) ----------
 # get_player_id / get_team_id now live in engine/players.py (imported above) --
 # get_player_id disambiguates same-name players (e.g. an active vs. a retired
 # "Brandon Williams") instead of blindly trusting the first regex match.
-
-STAT_COLUMNS = [
-    ("PTS", "Points"),
-    ("AST", "Assists"),
-    ("REB", "Rebounds"),
-    ("STL", "Steals"),
-    ("BLK", "Blocks"),
-    ("FG3M", "3-Pointers Made"),
-    ("TOV", "Turnovers"),
-]
 
 # ---------- Prediction tracker: local file-based log ----------
 # Uses a plain CSV sitting next to app.py. This is the right call for
@@ -219,65 +182,6 @@ def refresh_pending_predictions():
     new_df = pd.DataFrame(updated_rows)
     save_prediction_log(new_df)
     return new_df
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_combined_game_log(player_id, season):
-    """Fetch a player's game log for a season, blending regular season
-    and playoff games into one combined dataset. Playoffs come from a
-    separate season_type query and simply get concatenated on -- a
-    missing playoff log is normal (most players didn't make the
-    playoffs that year) and isn't treated as an error.
-
-    A failure on the Regular Season call specifically is a different
-    story -- every rostered player has some current/recent regular
-    season log, so that failing means the live API call itself broke
-    (e.g. nba_api blocked on this host). In that case this falls back
-    to a cached local copy via cached_or_live() instead of silently
-    returning an empty, columnless DataFrame that breaks every
-    downstream stat lookup with a confusing KeyError.
-
-    Once a live call has failed once this session, subsequent calls
-    skip the live attempt entirely and go straight to a cached copy if
-    one exists -- see cached_or_live()'s docstring for why."""  # patch_session_live_skip
-    cache_key = f"gamelog_{player_id}_{season}"
-
-    if st.session_state.get("_live_nba_api_blocked"):
-        cached_df, _cached_at = _load_df_cache(cache_key)
-        if cached_df is not None:
-            return cached_df
-        raise ConnectionError("Live NBA data fetch skipped -- already confirmed unreachable this session.")
-
-    frames = []
-    regular_season_error = None
-    for season_type in ["Regular Season", "Playoffs"]:
-        try:
-            log = playergamelog.PlayerGameLog(
-                player_id=player_id, season=season, season_type_all_star=season_type,
-                timeout=5,
-            )
-            df = log.get_data_frames()[0]
-            if not df.empty:
-                frames.append(df)
-        except Exception as e:
-            if season_type == "Regular Season":
-                regular_season_error = e
-            continue
-
-    if regular_season_error is not None and not frames:
-        st.session_state["_live_nba_api_blocked"] = True
-        cached_df, _cached_at = _load_df_cache(cache_key)
-        if cached_df is not None:
-            return cached_df
-        raise ConnectionError(
-            f"Live NBA data fetch failed for player {player_id}, season {season}, "
-            f"and no cached copy exists yet."
-        ) from regular_season_error
-
-    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    if not combined.empty:
-        _save_df_cache(cache_key, combined)
-    return combined
 
 
 HEAD_TO_HEAD_SEASONS = [CURRENT_SEASON, PREVIOUS_SEASON, "2024-25", "2023-24"]
@@ -532,63 +436,9 @@ def get_season_baseline(player_id, player_name):
     return stats_dict, source
 
 
-def get_league_advanced_team_stats(season):
-    """Full-league snapshot of DEF_RATING and PACE for every team, in a
-    single API call -- this powers both get_team_defensive_rating
-    (below) and the 'Opponent Defensive Profile' dropdown labels, so
-    they never make two separate calls for the same season.
-
-    Tries a live nba_api call first; falls back to a cached local copy
-    (see cached_or_live) if the live call fails -- e.g. nba_api is
-    blocked on Streamlit Community Cloud but this season was already
-    fetched and cached from a local run."""
-    def _fetch():
-        stats = leaguedashteamstats.LeagueDashTeamStats(
-            season=season, measure_type_detailed_defense="Advanced",
-            timeout=5,  # patch_missing_timeout
-        )
-        df = stats.get_data_frames()[0]
-        cols = ["TEAM_ID", "TEAM_NAME", "DEF_RATING", "PACE", "GP"]
-        return df[[c for c in cols if c in df.columns]].copy()
-
-    df, _source = cached_or_live(f"team_stats_advanced_{season}", _fetch)
-    return df
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_team_defensive_rating(team_id, season):
-    df = get_league_advanced_team_stats(season)
-    if df.empty or "DEF_RATING" not in df.columns:
-        return None, None, None
-    league_avg = df["DEF_RATING"].mean()
-    team_row = df[df["TEAM_ID"] == team_id]
-    if team_row.empty:
-        return None, league_avg, None
-    games_played = team_row["GP"].values[0] if "GP" in team_row.columns else None
-    return team_row["DEF_RATING"].values[0], league_avg, games_played
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_opponent_defense_with_fallback(team_id):
-    """Prefer the CURRENT season's defensive rating, since it reflects
-    the team's actual roster right now -- trades, injuries, coaching
-    changes and all. Last season's full-year number can be genuinely
-    stale (e.g. a team that traded away a key defender). Falls back to
-    last season only if the current season doesn't have enough games
-    played yet to be a reliable read."""
-    MIN_GAMES_FOR_CURRENT_SEASON = 5
-
-    def_rating, league_avg, games_played = get_team_defensive_rating(team_id, CURRENT_SEASON)
-    if def_rating is not None and games_played is not None and games_played >= MIN_GAMES_FOR_CURRENT_SEASON:
-        return def_rating, league_avg, f"{CURRENT_SEASON} so far ({games_played} games) -- reflects current roster"
-
-    prev_def_rating, prev_league_avg, prev_games = get_team_defensive_rating(team_id, PREVIOUS_SEASON)
-    note = (
-        f"{PREVIOUS_SEASON} full season -- {CURRENT_SEASON} doesn't have enough games "
-        f"played yet ({games_played or 0}); this may not reflect recent trades or "
-        f"roster changes."
-    )
-    return prev_def_rating, prev_league_avg, note
+# get_league_advanced_team_stats, get_team_defensive_rating,
+# get_opponent_defense_with_fallback now live in
+# engine/adjustments/defense.py (imported above).
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -659,58 +509,9 @@ def get_team_profiles():
     return profiles
 
 
-def get_league_advanced_team_stats_since(date_from_str):
-    """Same idea as get_league_advanced_team_stats, but restricted to
-    games from date_from_str (MM/DD/YYYY) onward, current season only.
-    Used when a team just made a major trade -- the season-long
-    DEF_RATING/PACE blends pre- and post-trade games together, which
-    is actively misleading right after a roster shakeup like adding a
-    superstar."""
-    def _fetch():
-        stats = leaguedashteamstats.LeagueDashTeamStats(
-            season=CURRENT_SEASON, measure_type_detailed_defense="Advanced",
-            date_from_nullable=date_from_str,
-            timeout=5,
-        )
-        df = stats.get_data_frames()[0]
-        cols = ["TEAM_ID", "TEAM_NAME", "DEF_RATING", "PACE", "GP"]
-        return df[[c for c in cols if c in df.columns]].copy()
-
-    safe_date = date_from_str.replace("/", "-")
-    df, _source = cached_or_live(f"team_stats_since_{safe_date}", _fetch)
-    return df
-
-
-def get_opponent_defense_post_change(team_id, change_date):
-    """Defensive rating computed only from games since a flagged
-    roster-change date. Returns (def_rating, league_avg, note,
-    games_played, is_thin_sample). is_thin_sample is True when there
-    aren't enough post-change games yet to trust the number much --
-    the caller should widen the prediction's uncertainty range in
-    that case rather than presenting a false-precision estimate."""
-    MIN_GAMES_POST_CHANGE = 3
-    date_str = change_date.strftime("%m/%d/%Y")
-    try:
-        df = get_league_advanced_team_stats_since(date_str)
-    except Exception as e:
-        return None, None, f"Couldn't fetch post-change data: {e}", 0, True
-
-    if df.empty or "DEF_RATING" not in df.columns:
-        return None, None, f"No games found since {change_date.isoformat()} yet.", 0, True
-
-    league_avg = df["DEF_RATING"].mean()
-    team_row = df[df["TEAM_ID"] == team_id]
-    if team_row.empty:
-        return None, None, "Team not found in the post-change window.", 0, True
-
-    games_played = int(team_row["GP"].values[0]) if "GP" in team_row.columns else 0
-    is_thin = games_played < MIN_GAMES_POST_CHANGE
-    note = (
-        f"games since {change_date.isoformat()} only ({games_played} game(s)) -- "
-        + ("very small sample, treat this prediction as high-uncertainty"
-           if is_thin else "reflects the new roster")
-    )
-    return team_row["DEF_RATING"].values[0], league_avg, note, games_played, is_thin
+# get_league_advanced_team_stats_since, get_opponent_defense_post_change,
+# and get_defense_adjustment now live in engine/adjustments/defense.py
+# (imported above).
 
 
 def get_opponent_dropdown_options():
@@ -736,486 +537,21 @@ def get_opponent_dropdown_options():
     return options, label_to_name
 
 
-def get_teammate_availability_adjustment(player_id, missing_names, season):
-    """Measures how this player's production differs in real games
-    where a specific teammate did NOT play vs. games where they did,
-    within the same season -- a genuine natural experiment, not a
-    guess.
-
-    Returns (adjustments, note, matching_game_count). adjustments is a
-    dict mapping each STAT_COLUMNS key to its OWN ratio -- a center's
-    rebounds and a guard's assists can move differently, so this does
-    NOT blend everything into one scoring-based number.
-
-    Requires a real sample of games BOTH missing the teammate AND with
-    them present. If a teammate has left the team entirely, every game
-    this season trivially "misses" them -- that's not a genuine
-    comparison, so it's detected and skipped rather than silently
-    returning a near-meaningless ratio. matching_game_count is 0
-    whenever there's no usable comparison, so callers can fall back to
-    an earlier season without relying on fragile text-matching."""
-    neutral = {col: 1.0 for col, _ in STAT_COLUMNS}
-
-    if not missing_names:
-        return neutral, "No missing teammates specified -- no adjustment.", 0
-
-    try:
-        df = fetch_combined_game_log(player_id, season)
-    except Exception:
-        return neutral, (f"No game log available for {season} (live fetch failed, not yet "
-                          f"cached) -- skipping this adjustment."), 0
-
-    matching_games = []
-    consecutive_failures = 0
-    games_checked = 0
-    MAX_CONSECUTIVE_FAILURES = 3  # after this many in a row, assume the
-                                   # live host is blocked for this whole
-                                   # request and stop paying the timeout
-                                   # cost on every remaining game
-    MAX_GAMES_TO_CHECK = 20        # bound the worst case even when the
-                                    # live host IS reachable
-
-    for _, row in df.iterrows():
-        if games_checked >= MAX_GAMES_TO_CHECK:
-            break
-        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-            break
-        game_id = row["Game_ID"]
-        games_checked += 1
-        try:
-            def _fetch_box():
-                box = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id, timeout=5)
-                return box.get_data_frames()[0]
-
-            box_df, _source = cached_or_live(f"boxscore_{game_id}", _fetch_box)
-            players_in_game = set(box_df["firstName"] + " " + box_df["familyName"])
-        except Exception:
-            consecutive_failures += 1
-            continue
-        consecutive_failures = 0  # reset streak on any success
-        time.sleep(0.5)
-        if all(name not in players_in_game for name in missing_names):
-            matching_games.append(row)
-
-    present_count = games_checked - len(matching_games)
-
-    if len(matching_games) < 3 or present_count < 3:
-        return neutral, (f"Found {len(matching_games)} game(s) missing {missing_names} "
-                          f"out of {games_checked} checked (and {present_count} with them "
-                          f"present) -- not enough real contrast in both directions to "
-                          f"trust a comparison, skipping this adjustment."), 0
-
-    matched_df = pd.DataFrame(matching_games)
-    adjustments = {}
-    per_stat_notes = []
-    for col, _label in STAT_COLUMNS:
-        avg_with_missing = matched_df[col].mean()
-        avg_overall = df[col].mean()
-        ratio = avg_with_missing / avg_overall if avg_overall else 1.0
-        adjustments[col] = ratio
-        per_stat_notes.append(
-            f"{col} {avg_with_missing:.1f} vs {avg_overall:.1f} overall ({(ratio - 1) * 100:+.1f}%)"
-        )
-
-    summary = ", ".join(per_stat_notes)
-    return adjustments, (
-        f"Found {len(matching_games)} games missing {missing_names} (vs. {present_count} "
-        f"with them present), stat-by-stat: {summary}."
-    ), len(matching_games)
-def get_new_teammate_impact_adjustment(player_id, new_teammate_name, season):
-    """Measures how a specific teammate's HEAVY on-court presence has
-    historically correlated with this player's production, using real
-    shared games -- not a guess. Splits games where both players were
-    on the same team into "teammate played heavy minutes" vs. "teammate
-    played light/no minutes", and compares this player's stats between
-    those two buckets.
-
-    Returns (adjustments, note, shared_game_count). adjustments is a
-    dict mapping each STAT_COLUMNS key to its OWN ratio -- a center's
-    rebounding and a point guard's assists can move in different
-    directions (or not at all) when a new ball-handler arrives, so
-    this deliberately does NOT blend everything into one scoring-based
-    number. shared_game_count is a real integer (not a parsed message)
-    so callers can decide whether to check an earlier season without
-    relying on fragile text-matching.
-
-    A neutral dict (all 1.0) and a count of 0 are returned whenever
-    there isn't enough real data to trust a comparison.
-
-    Only works when the two players have actual shared game history on
-    the same team -- a brand-new pairing that has never shared the
-    floor has no data to measure an effect from yet, and this function
-    says so plainly rather than guessing."""
-    neutral = {col: 1.0 for col, _ in STAT_COLUMNS}
-
-    if not new_teammate_name:
-        return neutral, "No new teammate specified -- no adjustment.", 0
-
-    teammate_id, _teammate_full_name, ambiguity_note = get_player_id(new_teammate_name)
-    if teammate_id is None:
-        return neutral, f"No player found named '{new_teammate_name}' -- check spelling, skipping.", 0
-
-    try:
-        player_df = fetch_combined_game_log(player_id, season)
-        teammate_df = fetch_combined_game_log(teammate_id, season)
-    except Exception:
-        return neutral, ("Game log unavailable for this season (live fetch failed, not "
-                          "yet cached) -- skipping this adjustment."), 0
-
-    if player_df.empty or teammate_df.empty:
-        return neutral, (f"No shared game history found between this player and "
-                          f"{new_teammate_name} yet -- likely a brand-new pairing. This "
-                          f"adjustment needs real games played together to measure an "
-                          f"effect, so it's skipped rather than guessed at."), 0
-
-    # Only trust games where they were on the SAME team, not games where
-    # they happened to face each other as opponents (that's a different
-    # question, already covered by the head-to-head features).
-    player_df = player_df.copy()
-    teammate_df = teammate_df.copy()
-    player_df["_team_abbr"] = player_df["MATCHUP"].str.split().str[0]
-    teammate_df["_team_abbr"] = teammate_df["MATCHUP"].str.split().str[0]
-
-    shared = player_df.merge(
-        teammate_df[["Game_ID", "MIN", "_team_abbr"]],
-        on="Game_ID", suffixes=("", "_teammate"),
-    )
-    shared = shared[shared["_team_abbr"] == shared["_team_abbr_teammate"]]
-
-    if len(shared) < 5:
-        return neutral, (f"Only found {len(shared)} shared game(s) as teammates with "
-                          f"{new_teammate_name} this season -- too few to trust, "
-                          f"skipping this adjustment."), len(shared)
-
-    HEAVY_MINUTES_THRESHOLD = 25
-    heavy = shared[shared["MIN_teammate"] >= HEAVY_MINUTES_THRESHOLD]
-    light = shared[shared["MIN_teammate"] < HEAVY_MINUTES_THRESHOLD]
-
-    if len(heavy) < 3 or len(light) < 3:
-        return neutral, (f"Found {len(shared)} shared games with {new_teammate_name}, but "
-                          f"not enough of a split between heavy-minute and light-minute "
-                          f"games ({len(heavy)} vs {len(light)}) to trust a comparison -- "
-                          f"skipping."), len(shared)
-
-    adjustments = {}
-    per_stat_notes = []
-    for col, _label in STAT_COLUMNS:
-        avg_heavy = heavy[col].mean()
-        avg_light = light[col].mean()
-        ratio = avg_heavy / avg_light if avg_light else 1.0
-        adjustments[col] = ratio
-        per_stat_notes.append(
-            f"{col} {avg_heavy:.1f} vs {avg_light:.1f} ({(ratio - 1) * 100:+.1f}%)"
-        )
-
-    summary = ", ".join(per_stat_notes)
-    ambiguity_prefix = f"{ambiguity_note} " if ambiguity_note else ""
-    return adjustments, (
-        f"{ambiguity_prefix}"
-        f"Found {len(shared)} shared games with {new_teammate_name} -- comparing the "
-        f"{len(heavy)} game(s) where {new_teammate_name} played "
-        f"{HEAVY_MINUTES_THRESHOLD}+ minutes vs. the {len(light)} game(s) with lighter "
-        f"minutes, stat-by-stat: {summary}."
-    ), len(shared)
+# get_teammate_availability_adjustment and get_new_teammate_impact_adjustment
+# now live in engine/adjustments/teammates.py (imported above) -- return
+# an AdjustmentResult instead of a raw tuple.
 
 
-def get_opponent_missing_adjustment(missing_opponents, season):
-    if not missing_opponents:
-        return 1.0, "No missing opponent players specified -- no adjustment."
+# get_opponent_missing_adjustment now lives in engine/adjustments/missing_players.py
+# (imported above) -- returns an AdjustmentResult instead of a raw tuple.
 
-    # Pull league-wide estimated net ratings once (not per player) so a
-    # missing player's real two-way impact -- not just their minutes --
-    # informs how much their absence should matter. Falls back to last
-    # season if the current one has no games yet (e.g. preseason).
-    from nba_api.stats.endpoints import playerestimatedmetrics
+# _safe_float and get_defender_matchup_adjustment now live in
+# engine/adjustments/defender.py (imported above) -- returns an
+# AdjustmentResult instead of a raw tuple.
 
-    net_rating_by_id = {}
-    metrics_season_used = None
-    for try_season in [season, PREVIOUS_SEASON]:
-        def _fetch_metrics():
-            metrics = playerestimatedmetrics.PlayerEstimatedMetrics(
-                season=try_season, timeout=10
-            )
-            return metrics.get_data_frames()[0]
-
-        try:
-            metrics_df, _source = cached_or_live(
-                f"player_estimated_metrics_{try_season}", _fetch_metrics
-            )
-        except Exception:
-            continue
-        if not metrics_df.empty:
-            net_rating_by_id = dict(zip(metrics_df["PLAYER_ID"], metrics_df["E_NET_RATING"]))
-            metrics_season_used = try_season
-            break
-
-    QUALITY_SCALE = 10.0  # a player at +10 E_NET_RATING roughly doubles
-                           # their raw-MPG weight; -10 roughly zeroes it out.
-    MIN_QUALITY_MULTIPLIER = 0.2  # floor, so a very poor E_NET_RATING never
-                                   # flips a player's contribution negative
-
-    total_weighted_mpg = 0.0
-    found_players = []
-    skipped_zero_gp = []
-    for name in missing_opponents:
-        try:
-            pid, resolved_name, ambiguity_note = get_player_id(name)
-            if pid is None:
-                continue
-
-            def _fetch_career():
-                career = playercareerstats.PlayerCareerStats(player_id=pid, timeout=5)
-                return career.get_data_frames()[0]
-
-            df, _source = cached_or_live(f"career_stats_{pid}", _fetch_career)
-            mpg, skip_reason = resolve_season_mpg(df, season)
-            if mpg is None:
-                skipped_zero_gp.append((name, skip_reason))
-                continue
-
-            net_rating = net_rating_by_id.get(pid)
-            if net_rating is not None:
-                quality_multiplier = max(MIN_QUALITY_MULTIPLIER, 1 + (net_rating / QUALITY_SCALE))
-                weighted_mpg = mpg * quality_multiplier
-                found_players.append((name, round(mpg, 1), round(net_rating, 1), ambiguity_note))
-            else:
-                weighted_mpg = mpg  # no estimated-metrics data found for this
-                                     # player -- fall back to raw MPG rather
-                                     # than dropping them entirely
-                found_players.append((name, round(mpg, 1), None, ambiguity_note))
-
-            total_weighted_mpg += weighted_mpg
-            time.sleep(0.5)
-        except Exception:
-            continue
-
-    if not found_players:
-        if skipped_zero_gp:
-            skipped_detail = ", ".join(f"{n} ({reason})" for n, reason in skipped_zero_gp)
-            return 1.0, (f"Found {skipped_detail}, but excluded -- no real minutes to weight "
-                         f"this adjustment by, skipping.")
-        return 1.0, f"Could not find stats for {missing_opponents} -- skipping adjustment."
-
-    minutes_fraction = total_weighted_mpg / 240
-    adjustment = 1 + (minutes_fraction * 0.35)
-    detail_parts = []
-    ambiguity_notes = []
-    for n, m, nr, amb in found_players:
-        if nr is not None:
-            detail_parts.append(f"{n} ({m} MPG, {nr:+.1f} net rtg)")
-        else:
-            detail_parts.append(f"{n} ({m} MPG, net rtg unavailable)")
-        if amb:
-            ambiguity_notes.append(amb)
-    detail = ", ".join(detail_parts)
-    if metrics_season_used:
-        metrics_note = f" [quality-weighted using {metrics_season_used} estimated net ratings]"
-    else:
-        metrics_note = " [net rating data unavailable -- weighted by MPG only]"
-    skip_note = (
-        f" (excluded: {', '.join(f'{n} ({reason})' for n, reason in skipped_zero_gp)})"
-        if skipped_zero_gp else ""
-    )
-    ambiguity_prefix = (" ".join(ambiguity_notes) + " ") if ambiguity_notes else ""
-    return adjustment, (f"{ambiguity_prefix}Missing: {detail}{metrics_note}{skip_note} -> "
-                         f"\U0001F691 Opponent Missing Players Layer Applied \u2014 x{adjustment:.3f}")
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _safe_float(value):
-    """The matchups endpoint sometimes returns numeric fields as
-    strings (occasionally MM:SS format for minutes). Coerce to a
-    float where possible, otherwise return None so callers can skip
-    that detail cleanly instead of crashing."""
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        value = value.strip()
-        if ":" in value:  # "MM:SS" format
-            try:
-                mins, secs = value.split(":")
-                return float(mins) + float(secs) / 60
-            except ValueError:
-                return None
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
-
-
-def get_defender_matchup_adjustment(player_id, player_full_name, defender_name, season):
-    """Pull REAL player-vs-player matchup data (from NBA's tracking
-    cameras) showing exactly how this player has performed specifically
-    when guarded by the named defender -- not team-wide stats. Coverage
-    depends on how much these two have actually matched up; small
-    sample sizes are flagged rather than treated as a hard adjustment."""
-    if not defender_name:
-        return 1.0, "No primary defender specified -- no adjustment."
-
-    defender_id, _defender_full_name, ambiguity_note = get_player_id(defender_name)
-    if defender_id is None:
-        return 1.0, f"No player found named '{defender_name}' -- check spelling, skipping."
-
-    for try_season in [season, PREVIOUS_SEASON]:
-        def _fetch():
-            data = leagueseasonmatchups.LeagueSeasonMatchups(
-                off_player_id_nullable=player_id,
-                def_player_id_nullable=defender_id,
-                season=try_season,
-                timeout=5,
-            )
-            return data.get_data_frames()[0]
-
-        try:
-            df, _source = cached_or_live(
-                f"matchup_{player_id}_{defender_id}_{try_season}", _fetch
-            )
-        except Exception:
-            continue
-
-        if df.empty:
-            continue
-
-        row = df.iloc[0]
-        details = []
-        matchup_min = _safe_float(row.get("MATCHUP_MIN"))
-        partial_poss = _safe_float(row.get("PARTIAL_POSS"))
-        player_pts = _safe_float(row.get("PLAYER_PTS"))
-        fg_pct = _safe_float(row.get("MATCHUP_FG_PCT"))
-
-        if matchup_min is not None:
-            details.append(f"{matchup_min:.1f} matchup minutes")
-        if partial_poss is not None:
-            details.append(f"{partial_poss:.1f} possessions")
-        if player_pts is not None:
-            details.append(f"{player_pts:.0f} points scored in those minutes")
-        if fg_pct is not None:
-            details.append(f"{fg_pct*100:.0f}% FG in the matchup")
-
-        if not details:
-            continue
-
-        sample_flag = ""
-        if matchup_min is not None and matchup_min < 10:
-            sample_flag = " -- small sample, treat as context not a hard signal."
-
-        ambiguity_prefix = f"{ambiguity_note} " if ambiguity_note else ""
-        return 1.0, (
-            f"{ambiguity_prefix}"
-            f"REAL matchup data ({try_season}): {defender_name} has guarded "
-            f"{player_full_name} for {', '.join(details)}.{sample_flag} Shown as "
-            f"context -- not folded into the number above since sample sizes here "
-            f"are usually too small to trust as a hard multiplier."
-        )
-
-    return 1.0, (
-        f"No recorded head-to-head matchup minutes found between this player and "
-        f"{defender_name} in {season} or {PREVIOUS_SEASON} -- skipping."
-    )
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_synergy_scheme_adjustment(team_id, scheme_label, season):
-    """For scheme labels with a real Synergy play-type equivalent,
-    pull actual team defensive efficiency (points per possession) for
-    that play type and use it instead of the guessed multiplier.
-    Falls back to the manual estimate if no mapping exists or the
-    data can't be fetched.
-
-    Special case: 'Man-to-man (standard)' has no Synergy play-type
-    equivalent, but real disruption data (deflections/game vs. league
-    average) is available and genuinely reflects man-to-man defensive
-    quality without double-counting the separate Opponent Defense
-    Layer (which measures points-allowed efficiency, a different
-    dimension from ball pressure/disruption)."""
-    play_type = SCHEME_TO_SYNERGY_PLAYTYPE.get(scheme_label)
-    manual_value = SCHEME_ADJUSTMENTS[scheme_label]
-
-    if play_type is None:
-        if scheme_label == "Man-to-man (standard)":
-            
-            from nba_api.stats.endpoints import leaguehustlestatsteam
-            DEFLECTIONS_ADJUSTMENT_STRENGTH = 0.4  # kept modest -- this is a
-                                                     # supplementary disruption
-                                                     # signal, not a full defense
-                                                     # rating replacement
-            for try_season in [season, PREVIOUS_SEASON]:
-                try:
-                    def _fetch_hustle():
-                        hustle = leaguehustlestatsteam.LeagueHustleStatsTeam(
-                            season=try_season, per_mode_time="PerGame", timeout=10
-                        )
-                        return hustle.get_data_frames()[0]
-                    hustle_df, _hustle_source = cached_or_live(
-                        f"hustle_team_stats_{try_season}", _fetch_hustle
-                    )
-                except Exception:
-                    continue
-                if hustle_df.empty or "DEFLECTIONS" not in hustle_df.columns:
-                    continue
-                team_row = hustle_df[hustle_df["TEAM_ID"] == team_id]
-                if team_row.empty:
-                    continue
-                team_deflections = team_row["DEFLECTIONS"].values[0]
-                league_avg_deflections = hustle_df["DEFLECTIONS"].mean()
-                gap_pct = (team_deflections - league_avg_deflections) / league_avg_deflections
-                real_adjustment = 1 - (gap_pct * DEFLECTIONS_ADJUSTMENT_STRENGTH)
-                if try_season == season:
-                    source_note = ""
-                else:
-                    source_note = f" (from {try_season}, {season} not available yet)"
-                return real_adjustment, (
-                    f"'Man-to-man (standard)' has no real Synergy play-type "
-                    f"equivalent, but real disruption data is available{source_note}: "
-                    f"{team_deflections:.1f} deflections/game vs. league avg "
-                    f"{league_avg_deflections:.1f} -> \U0001F9E9 Scheme Layer Applied "
-                    f"\u2014 x{real_adjustment:.3f}"
-                )
-            # hustle data unavailable in any season checked -- fall through
-            # to the plain manual estimate below
-
-        return manual_value, (
-            f"'{scheme_label}' has no real Synergy play-type equivalent -- "
-            f"using your manual estimate \U0001F9E9 Scheme Layer Applied \u2014 x{manual_value:.3f} (not data-backed)."
-        )
-
-    def _fetch():
-        data = synergyplaytypes.SynergyPlayTypes(
-            league_id="00",
-            per_mode_simple="PerGame",
-            player_or_team_abbreviation="T",
-            season_type_all_star="Regular Season",
-            season=season,
-            type_grouping_nullable="defensive",
-            play_type_nullable=play_type,
-            timeout=5,
-        )
-        return data.get_data_frames()[0]
-    try:
-        df, source = cached_or_live(f"synergy_{play_type}_{season}", _fetch)
-        team_row = df[df["TEAM_ID"] == team_id]
-        if team_row.empty or len(df) < 5:
-            return manual_value, (
-                f"Synergy '{play_type}' data unavailable for this team -- "
-                f"falling back to manual estimate \U0001F9E9 Scheme Layer Applied \u2014 x{manual_value:.3f}."
-            )
-        team_ppp = team_row["PPP"].values[0]
-        league_avg_ppp = df["PPP"].mean()
-        gap_pct = (team_ppp - league_avg_ppp) / league_avg_ppp
-        real_adjustment = 1 + (gap_pct * 0.5)  # same damping as opponent DEF_RATING
-        source_note = "" if source == "live" else f" (from a {source})"
-        return real_adjustment, (
-            f"REAL DATA{source_note}: {scheme_label} maps to Synergy '{play_type}' "
-            f"defense -- team allows {team_ppp:.2f} PPP vs. league avg "
-            f"{league_avg_ppp:.2f} PPP -> \U0001F9E9 Scheme Layer Applied \u2014 x{real_adjustment:.3f}."
-        )
-    except Exception as e:
-        return manual_value, (
-            f"Synergy data fetch failed ({e}) -- falling back to manual estimate "
-            f"\U0001F9E9 Scheme Layer Applied \u2014 x{manual_value:.3f}."
-        )
+# get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS, and
+# SCHEME_TO_SYNERGY_PLAYTYPE now live in engine/adjustments/scheme.py
+# (imported above) -- returns an AdjustmentResult instead of a raw tuple.
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_full_game_log(player_id, season):
@@ -1840,70 +1176,67 @@ with tab1:
             # on top would partly double-count it. A vs-player average
             # reflects that one matchup, not the rest of the team's
             # defense, so it doesn't create the same redundancy.
-            DEF_ADJUSTMENT_STRENGTH = 0.5
             team_h2h_weight = blend_weights["team_h2h"]
-            if team_def_rating is not None:
-                def_gap_pct = (team_def_rating - league_avg_def) / league_avg_def
-                effective_strength = DEF_ADJUSTMENT_STRENGTH * (1 - team_h2h_weight)
-                def_adjustment = 1 + (def_gap_pct * effective_strength)
-                def_note = (f"{opponent_full_name} DEF_RATING: {team_def_rating:.1f} "
-                            f"(league avg {league_avg_def:.1f}, source: {def_source_note}) "
-                            f"-> adjustment 🛡️ Opponent Defense Layer Applied — x{def_adjustment:.3f}")
-                if team_h2h_weight > 0:
-                    def_note += (f" (scaled down from the usual x{DEF_ADJUSTMENT_STRENGTH} strength "
-                                 f"since the baseline already carries {team_h2h_weight:.0%} team head-to-head weight)")
-            else:
-                def_adjustment = 1.0
-                def_note = "Opponent defensive rating unavailable -- no adjustment."
+            defense_result = get_defense_adjustment(
+                team_def_rating, league_avg_def, def_source_note,
+                opponent_full_name=opponent_full_name, team_h2h_weight=team_h2h_weight,
+            )
+            def_note = defense_result.note
 
             if missing_teammates:
-                teammate_adj_by_stat, teammate_note = None, None
+                teammate_result = None
                 for _try_season in HEAD_TO_HEAD_SEASONS:
-                    teammate_adj_by_stat, teammate_note, _teammate_count = get_teammate_availability_adjustment(
+                    teammate_result = get_teammate_availability_adjustment(
                         player_id, missing_teammates, _try_season
                     )
-                    if _teammate_count > 0:
+                    if teammate_result.applied:
                         break
             else:
-                teammate_adj_by_stat, teammate_note, _ = get_teammate_availability_adjustment(
+                teammate_result = get_teammate_availability_adjustment(
                     player_id, missing_teammates, CURRENT_SEASON
                 )
+            teammate_note = teammate_result.note
             if new_teammate_input:
                 # Check the full multi-season window (same one used for
                 # opponent head-to-head elsewhere) rather than stopping
                 # after just one fallback season -- a real pairing can sit
                 # further back if one of the two players has since been
-                # traded away. Uses the real shared-game COUNT to decide
-                # whether to keep looking, not fragile text-matching.
-                new_teammate_adj_by_stat, new_teammate_note = None, None
+                # traded away. Uses AdjustmentResult.applied (True only
+                # when a genuine comparison was found) to decide whether
+                # to keep looking, not fragile text-matching.
+                new_teammate_result = None
                 for _try_season in HEAD_TO_HEAD_SEASONS:
-                    new_teammate_adj_by_stat, new_teammate_note, _shared_count = get_new_teammate_impact_adjustment(
+                    new_teammate_result = get_new_teammate_impact_adjustment(
                         player_id, new_teammate_input, _try_season
                     )
-                    if _shared_count > 0:
+                    if new_teammate_result.applied:
                         break
             else:
-                new_teammate_adj_by_stat, new_teammate_note, _ = get_new_teammate_impact_adjustment(
+                new_teammate_result = get_new_teammate_impact_adjustment(
                     player_id, new_teammate_input, CURRENT_SEASON
                 )
-            opp_missing_adj, opp_missing_note = get_opponent_missing_adjustment(
+            new_teammate_note = new_teammate_result.note
+            opp_missing_result = get_opponent_missing_adjustment(
                 missing_opponents, PREVIOUS_SEASON
             )
-            _, defender_note = get_defender_matchup_adjustment(
+            opp_missing_note = opp_missing_result.note
+            defender_note = get_defender_matchup_adjustment(
                 player_id, player_full_name, defender_input, CURRENT_SEASON
-            )
+            ).note
 
-            scheme_adj, scheme_note = get_synergy_scheme_adjustment(
+            scheme_result = get_synergy_scheme_adjustment(
                 opponent_id, scheme_input, PREVIOUS_SEASON
             )
+            scheme_note = scheme_result.note
 
             # Same set of adjustments applied proportionally to every
             # tracked stat -- reasonable since opponent strength, missing
             # teammates, and scheme plausibly affect all of them together,
             # though this is less rigorously tested for stats other than
-            # points specifically.
-            total_multiplier = def_adjustment * opp_missing_adj * scheme_adj
-
+            # points specifically. Each AdjustmentResult is looked up
+            # per-stat below via multiplier_for() -- opp_missing/scheme/
+            # defense are uniform across stats today, teammate/new_teammate
+            # genuinely vary by stat.
             line_inputs = {
                 "PTS": pts_line_input,
                 "AST": ast_line_input,
@@ -1924,9 +1257,11 @@ with tab1:
             for col, _label in STAT_COLUMNS:
                 base_mean, base_std = baseline_stats[col]
                 stat_multiplier = (
-                    total_multiplier
-                    * teammate_adj_by_stat.get(col, 1.0)
-                    * new_teammate_adj_by_stat.get(col, 1.0)
+                    defense_result.multiplier_for(col)
+                    * opp_missing_result.multiplier_for(col)
+                    * scheme_result.multiplier_for(col)
+                    * teammate_result.multiplier_for(col)
+                    * new_teammate_result.multiplier_for(col)
                 )
                 predicted = base_mean * stat_multiplier
                 spread = base_std if pd.notna(base_std) else predicted * 0.2
@@ -2399,18 +1734,15 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id):
         return None
 
     team_def_rating, league_avg_def, def_source_note = get_opponent_defense_with_fallback(opponent_id)
-
-    DEF_ADJUSTMENT_STRENGTH = 0.5
-    if team_def_rating is not None:
-        def_gap_pct = (team_def_rating - league_avg_def) / league_avg_def
-        def_adjustment = 1 + (def_gap_pct * DEF_ADJUSTMENT_STRENGTH)
-    else:
-        def_adjustment = 1.0
+    # No team_h2h_weight here (tab2 has no head-to-head baseline blending
+    # at all) -- defaults to 0.0, reproducing this tab's old unscaled
+    # x0.5 strength exactly. See engine/adjustments/defense.py.
+    defense_result = get_defense_adjustment(team_def_rating, league_avg_def, def_source_note)
 
     predictions = {}
     for col, _label in STAT_COLUMNS:
         base_mean, _base_std = season_stats[col]
-        predictions[col] = {"predicted": base_mean * def_adjustment}
+        predictions[col] = {"predicted": base_mean * defense_result.multiplier_for(col)}
 
     return predictions, season_source, def_source_note
 
