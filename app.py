@@ -63,6 +63,7 @@ from engine.adjustments.defense import (
     get_opponent_defense_post_change,
     get_defense_adjustment,
 )
+from analytics.layer_accuracy import layer_hit_rate, format_layer_accuracy
 
 
 # ---------- Data functions (same logic as the terminal version) ----------
@@ -1544,12 +1545,18 @@ with tab1:
                 f"{predictions[col]['base']:.1f} {col}" for col, _ in STAT_COLUMNS
             )
             st.write(f"**[1] Baseline** ({source}): {baseline_summary}")
-            st.write(f"**[2] Opponent defense:** {def_note}")
-            st.write(f"**[3] Missing teammates:** {teammate_note}")
-            st.write(f"**[4] Missing opponent players:** {opp_missing_note}")
-            st.write(f"**[5] New teammate arriving:** {new_teammate_note}")
-            st.write(f"**[6] Primary defender:** {defender_note}")
-            st.write(f"**[7] Scheme:** {scheme_note}")
+            st.write(f"**[2] Opponent defense:** {def_note} "
+                     f"_{format_layer_accuracy(layer_hit_rate('opponent_defense', 'PTS'))}_")
+            st.write(f"**[3] Missing teammates:** {teammate_note} "
+                     f"_{format_layer_accuracy(layer_hit_rate('missing_teammates', 'PTS'))}_")
+            st.write(f"**[4] Missing opponent players:** {opp_missing_note} "
+                     f"_{format_layer_accuracy(layer_hit_rate('missing_opponents', 'PTS'))}_")
+            st.write(f"**[5] New teammate arriving:** {new_teammate_note} "
+                     f"_{format_layer_accuracy(layer_hit_rate('new_teammate', 'PTS'))}_")
+            st.write(f"**[6] Primary defender:** {defender_note} "
+                     f"_{format_layer_accuracy(layer_hit_rate('defender_matchup', 'PTS'))}_")
+            st.write(f"**[7] Scheme:** {scheme_note} "
+                     f"_{format_layer_accuracy(layer_hit_rate('scheme', 'PTS'))}_")
             if scheme_executor_input:
                 st.write(f"**[8] Scheme executed by (reference only):** {scheme_executor_input} "
                          f"-- not used in the calculation, no data exists to attribute schemes to individual players.")

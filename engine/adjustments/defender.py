@@ -30,6 +30,13 @@ from engine.adjustments.base import AdjustmentResult, ALL_STATS
 
 LAYER = "defender_matchup"
 
+# applied is ALWAYS False for this layer, by design (see module docstring
+# and AdjustmentResult rule 3) -- never inferred from log data, which
+# could never reliably tell "structurally never applies" apart from
+# "just hasn't had enough resolved predictions yet." Consumed directly
+# by analytics/layer_accuracy.py.
+CONTEXT_ONLY_BY_DESIGN = True
+
 
 def _safe_float(value):
     """The matchups endpoint sometimes returns numeric fields as
