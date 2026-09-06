@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from engine.tracker import load_prediction_log
-from engine.adjustments.base import ALL_STATS
+from engine.adjustments.base import AdjustmentResult
 from engine.adjustments.defender import CONTEXT_ONLY_BY_DESIGN as DEFENDER_CONTEXT_ONLY
 
 MIN_SAMPLE = 5
@@ -43,13 +43,6 @@ class LayerAccuracy:
     n: int                     # real number of scored (row, stat) pairs
     reason: Optional[str] = None  # set only when hit_rate is None:
                                    # "context_only_by_design" | "insufficient_data"
-
-
-def _multiplier_for(value: dict, stat_col: str) -> float:
-    """Same lookup as AdjustmentResult.multiplier_for() -- duplicated
-    here (not imported) because this operates on a plain dict decoded
-    from JSON, not a live AdjustmentResult object."""
-    return value.get(stat_col, value.get(ALL_STATS, 1.0))
 
 
 def layer_hit_rate(layer_name: str, stat_col: str, window: int = 50) -> LayerAccuracy:
@@ -89,7 +82,15 @@ def layer_hit_rate(layer_name: str, stat_col: str, window: int = 50) -> LayerAcc
         if not layer_entry or not layer_entry.get("applied"):
             continue
 
-        multiplier = _multiplier_for(layer_entry.get("value", {}), stat_col)
+        temp_result = AdjustmentResult(
+            layer=layer_name,
+            value=layer_entry.get("value", {}),
+            note="",
+            data_quality=layer_entry.get("data_quality", "unavailable"),
+            sample_n=layer_entry.get("sample_n", 0),
+            applied=layer_entry.get("applied", False),
+        )
+        multiplier = temp_result.multiplier_for(stat_col)
         if abs(multiplier - 1.0) < 1e-9:
             continue  # no directional assertion for this stat
 
