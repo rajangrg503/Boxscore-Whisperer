@@ -757,45 +757,60 @@ div[data-testid="stExpander"] div[data-testid="stMarkdownContainer"] p {
 # ---------- Prediction Tracker (sidebar, always visible) ----------
 with st.sidebar:
     st.markdown("### 📊 Prediction Tracker")
+    tracker_email = st.text_input(
+        "Your email (to find your saved predictions)",
+        key="tracker_email_input",
+        placeholder="you@example.com",
+    )
+    st.caption(
+        "Just a filter, not a login -- no password, nothing verified. "
+        "Anyone who enters this exact email sees the same predictions."
+    )
     if st.button("🔄 Check for results", key="refresh_tracker_btn"):
         with st.spinner("Checking saved predictions against real results..."):
             refresh_pending_predictions(get_head_to_head_log)
 
-    log_df = load_prediction_log()
-    if log_df.empty:
-        st.caption("No saved predictions yet. Save one after running a prediction below.")
+    entered_email = tracker_email.strip().lower()
+    if not entered_email:
+        st.caption("Enter your email above to see your saved predictions.")
     else:
-        resolved = log_df[log_df["status"] == "resolved"]
-        pending = log_df[log_df["status"] == "pending"]
-        no_game = log_df[log_df["status"] == "no_game_found"]
+        log_df = load_prediction_log()
+        my_log_df = log_df[log_df["saved_by_email"].fillna("") == entered_email]
 
-        st.caption(
-            f"{len(log_df)} saved -- {len(resolved)} resolved, "
-            f"{len(pending)} pending, {len(no_game)} no game found."
-        )
+        if my_log_df.empty:
+            st.caption("No saved predictions yet for this email. Save one after running a prediction below.")
+        else:
+            resolved = my_log_df[my_log_df["status"] == "resolved"]
+            pending = my_log_df[my_log_df["status"] == "pending"]
+            no_game = my_log_df[my_log_df["status"] == "no_game_found"]
 
-        if not resolved.empty:
-            st.markdown("**Accuracy so far (Points):**")
-            pts_hits = resolved["PTS_hit"].dropna()
-            if len(pts_hits) > 0:
-                hit_rate = pts_hits.mean() * 100
-                st.metric("Points landed in range", f"{hit_rate:.0f}%", f"{int(pts_hits.sum())}/{len(pts_hits)}")
-
-        with st.expander("View all saved predictions"):
-            display_log = log_df[[
-                "saved_at", "player_full_name", "opponent_full_name", "game_date",
-                "status", "PTS_low", "PTS_mid", "PTS_high", "PTS_actual", "PTS_hit",
-            ]].rename(columns={
-                "saved_at": "Saved", "player_full_name": "Player",
-                "opponent_full_name": "Opponent", "game_date": "Game Date",
-                "status": "Status", "PTS_low": "Pts Low", "PTS_mid": "Pts Mid",
-                "PTS_high": "Pts High", "PTS_actual": "Pts Actual", "PTS_hit": "Pts Hit?",
-            })
-            st.dataframe(display_log, use_container_width=True, hide_index=True)
             st.caption(
-                "Showing Points only here for space -- all 7 tracked stats are saved "
-                f"in the underlying file at {os.path.basename(LOG_PATH)}."
+                f"{len(my_log_df)} saved -- {len(resolved)} resolved, "
+                f"{len(pending)} pending, {len(no_game)} no game found."
             )
+
+            if not resolved.empty:
+                st.markdown("**Accuracy so far (Points):**")
+                pts_hits = resolved["PTS_hit"].dropna()
+                if len(pts_hits) > 0:
+                    hit_rate = pts_hits.mean() * 100
+                    st.metric("Points landed in range", f"{hit_rate:.0f}%", f"{int(pts_hits.sum())}/{len(pts_hits)}")
+
+            with st.expander("View all saved predictions"):
+                display_log = my_log_df[[
+                    "saved_at", "player_full_name", "opponent_full_name", "game_date",
+                    "status", "PTS_low", "PTS_mid", "PTS_high", "PTS_actual", "PTS_hit",
+                ]].rename(columns={
+                    "saved_at": "Saved", "player_full_name": "Player",
+                    "opponent_full_name": "Opponent", "game_date": "Game Date",
+                    "status": "Status", "PTS_low": "Pts Low", "PTS_mid": "Pts Mid",
+                    "PTS_high": "Pts High", "PTS_actual": "Pts Actual", "PTS_hit": "Pts Hit?",
+                })
+                st.dataframe(display_log, use_container_width=True, hide_index=True)
+                st.caption(
+                    "Showing Points only here for space -- all 7 tracked stats are saved "
+                    f"in the underlying file at {os.path.basename(LOG_PATH)}."
+                )
 
 st.markdown(
     '''<div class="hero-title">
@@ -1528,12 +1543,19 @@ with tab1:
             with save_col2:
                 st.write("")  # vertical spacer to align button with input
                 if st.button("💾 Save to tracker", key="save_prediction_btn"):
-                    new_id = append_prediction_to_log(
-                        player_id, player_full_name, opponent_full_name,
-                        opponent_abbr, tracked_game_date, predictions,
-                        layer_results=layer_results,
-                    )
-                    st.success(f"Saved (id: {new_id}). Check the Prediction Tracker in the sidebar later.")
+                    save_email = st.session_state.get("tracker_email_input", "").strip().lower()
+                    if not save_email:
+                        st.warning(
+                            "Enter your email in the Prediction Tracker (sidebar) first, "
+                            "so you can find this prediction again."
+                        )
+                    else:
+                        new_id = append_prediction_to_log(
+                            player_id, player_full_name, opponent_full_name,
+                            opponent_abbr, tracked_game_date, predictions,
+                            layer_results=layer_results, saved_by_email=save_email,
+                        )
+                        st.success(f"Saved (id: {new_id}). Check the Prediction Tracker in the sidebar later.")
 
         # Recent trend chart -- reuses the same game log already fetched
         # for hit rates, no extra API call. Lives outside the form so

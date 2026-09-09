@@ -43,6 +43,20 @@ AdjustmentResult that fired: {"applied", "data_quality", "sample_n",
 objects at save time, not reconstructed from note text). Additive
 only: old rows read back fine with these columns as NaN/missing,
 pandas' pd.concat handles the column-set union automatically.
+
+Privacy scoping (saved_by_email): lightweight, NOT real authentication
+-- no password, no verification, just a plain string a visitor types
+into the sidebar before saving. app.py filters the sidebar's display
+to rows whose saved_by_email matches whatever's currently entered, so
+a random visitor doesn't see every other visitor's saved predictions
+by default (the original audit finding). Anyone who knows/guesses
+another person's email can still type it in and see that email's
+rows -- this solves "zero-effort visibility to strangers," not
+"data is protected from someone who has the email." Same additive
+principle as the columns above: rows saved before this existed have
+no email, normalize to "", and are therefore not visible to anyone
+through the filtered UI -- an accepted, honest consequence of not
+being able to retroactively invent an owner, not a bug.
 """
 
 import contextlib
@@ -62,7 +76,7 @@ LOG_PATH = os.path.join(
 LOCK_PATH = LOG_PATH + ".lock"
 
 LOG_COLUMNS = ["id", "saved_at", "player_id", "player_full_name", "opponent_full_name",
-               "opponent_abbr", "game_date", "status"]
+               "opponent_abbr", "game_date", "status", "saved_by_email"]
 for _col, _ in STAT_COLUMNS:
     LOG_COLUMNS += [f"{_col}_low", f"{_col}_mid", f"{_col}_high", f"{_col}_actual", f"{_col}_hit", f"{_col}_base"]
 LOG_COLUMNS += ["layers_json"]
@@ -94,9 +108,26 @@ def _atomic_write_csv(df, path):
 
 
 def load_prediction_log():
+    """Loads the CSV and guarantees every column in LOG_COLUMNS is
+    present, in that order -- reindex() adds any column the on-disk
+    file predates as NaN, rather than leaving it simply absent.
+
+    This matters beyond just "doesn't crash": every additive schema
+    change so far (PTS_base, layers_json, now saved_by_email) happened
+    to be safe for existing callers only because they all read columns
+    via row.get(...) on individual rows, which tolerates a missing key.
+    Direct column indexing on the whole DataFrame (df["saved_by_email"],
+    which app.py's sidebar filter needs) does NOT tolerate a missing
+    column -- pandas raises KeyError, not NaN. A real on-disk
+    prediction_log.csv that predates this file's current LOG_COLUMNS
+    (any file that hasn't had a row appended since the last schema
+    change) hits exactly this. Reindexing here once, centrally, makes
+    the "additive schema, old rows stay valid" guarantee actually true
+    for every caller, not just the ones that happened to use .get()."""
     if os.path.exists(LOG_PATH):
         try:
-            return pd.read_csv(LOG_PATH)
+            df = pd.read_csv(LOG_PATH)
+            return df.reindex(columns=LOG_COLUMNS)
         except Exception:
             return pd.DataFrame(columns=LOG_COLUMNS)
     return pd.DataFrame(columns=LOG_COLUMNS)
@@ -125,11 +156,16 @@ def _build_layers_json(layer_results):
 
 
 def append_prediction_to_log(player_id, player_full_name, opponent_full_name,
-                              opponent_abbr, game_date, predictions, layer_results=None):
+                              opponent_abbr, game_date, predictions, layer_results=None,
+                              saved_by_email=None):
     """predictions is the same dict built in main(): {col: {"low", "predicted",
     "high", "base"}}. layer_results is {layer_name: AdjustmentResult} for every
     layer that fired on this prediction -- optional, so old call shapes without
-    it still work (layers_json is just "{}" in that case)."""
+    it still work (layers_json is just "{}" in that case). saved_by_email is the
+    plain string typed into the sidebar's tracker email input -- optional and
+    normalized here (stripped, lowercased) so app.py's filter comparison doesn't
+    have to repeat that; see this module's docstring for what this does and
+    doesn't protect against."""
     row = {
         "id": uuid.uuid4().hex[:8],
         "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -139,6 +175,7 @@ def append_prediction_to_log(player_id, player_full_name, opponent_full_name,
         "opponent_abbr": opponent_abbr,
         "game_date": game_date.isoformat() if game_date else "",
         "status": "pending",
+        "saved_by_email": (saved_by_email or "").strip().lower(),
     }
     for col, _ in STAT_COLUMNS:
         p = predictions[col]
