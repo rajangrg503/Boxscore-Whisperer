@@ -63,7 +63,7 @@ from engine.adjustments.defense import (
     get_opponent_defense_post_change,
     get_defense_adjustment,
 )
-from analytics.layer_accuracy import layer_hit_rate, format_layer_accuracy
+from analytics.layer_accuracy import build_layer_lines
 
 
 # ---------- Data functions (same logic as the terminal version) ----------
@@ -301,11 +301,15 @@ def get_head_to_head_vs_player_combo(player_id, opponent_player_ids, seasons=HEA
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_season_baseline(player_id, player_name):
-    """Returns (stats_dict, source_label). stats_dict maps each stat
-    column (PTS, AST, REB, STL, BLK, FG3M, TOV) to a (mean, std) tuple.
-    Using a dict here instead of a long positional tuple avoids the
-    kind of unpacking-count bugs that come from adding a new stat
-    later and forgetting to update every call site.
+    """Returns (stats_dict, source_label, n_games). stats_dict maps each
+    stat column (PTS, AST, REB, STL, BLK, FG3M, TOV) to a (mean, std)
+    tuple. Using a dict here instead of a long positional tuple avoids
+    the kind of unpacking-count bugs that come from adding a new stat
+    later and forgetting to update every call site. n_games is the real
+    game count this baseline is drawn from -- same number already
+    embedded in source_label's prose, exposed as an actual int here so
+    callers (e.g. engine/confidence.py's baseline_sample_n) don't have
+    to parse it back out of a display string.
 
     Tries CURRENT_SEASON first; falls through to PREVIOUS_SEASON both
     when there aren't enough current-season games yet (early in a new
@@ -328,7 +332,7 @@ def get_season_baseline(player_id, player_name):
     for col, _ in STAT_COLUMNS:
         stats_dict[col] = (df[col].mean(), df[col].std())
 
-    return stats_dict, source
+    return stats_dict, source, len(df)
 
 
 # get_league_advanced_team_stats, get_team_defensive_rating,
@@ -949,7 +953,7 @@ with tab1:
             h2h_cutoff = roster_change_date if roster_change_active else None
 
             try:
-                season_stats, season_source = get_season_baseline(player_id, player_full_name)
+                season_stats, season_source, season_n = get_season_baseline(player_id, player_full_name)
 
                 team_h2h_stats, team_h2h_n = None, 0
                 team_h2h_note = None
@@ -1041,6 +1045,17 @@ with tab1:
                         source += (f" -- NOTE: no historical games found with {combo_label} on the same "
                                    f"team together ({combo_note}); this combination appears to be new, "
                                    f"so the estimate reflects each individually, not their combined effect")
+
+                # Real games actually behind `baseline_stats` above -- season_n
+                # plus every real (non-shrinkage-prior) source that contributed,
+                # for engine/confidence.py's baseline_sample_n input. Computed
+                # the same way regardless of which branch above fired: in the
+                # season-only branch team_h2h_n and the extra_sources sum are
+                # both 0 by the very condition that selected that branch, so
+                # this reduces to season_n there without a separate case.
+                baseline_sample_n = season_n + team_h2h_n + sum(
+                    n for _, stats, n in extra_sources if stats is not None
+                )
             except Exception as e:
                 st.error(
                     f"Couldn't fetch data from the NBA stats API: {e}\n\n"
@@ -1115,9 +1130,10 @@ with tab1:
                 missing_opponents, PREVIOUS_SEASON
             )
             opp_missing_note = opp_missing_result.note
-            defender_note = get_defender_matchup_adjustment(
+            defender_result = get_defender_matchup_adjustment(
                 player_id, player_full_name, defender_input, CURRENT_SEASON
-            ).note
+            )
+            defender_note = defender_result.note
 
             scheme_result = get_synergy_scheme_adjustment(
                 opponent_id, scheme_input, PREVIOUS_SEASON
@@ -1210,9 +1226,14 @@ with tab1:
             "layer_results": {
                 res.layer: res for res in [
                     defense_result, opp_missing_result, scheme_result,
-                    teammate_result, new_teammate_result,
+                    teammate_result, new_teammate_result, defender_result,
                 ]
             },
+            # Additive, for engine/confidence.py (Phase 5) -- real games
+            # actually behind `baseline_stats` above, computed once at
+            # save time (see the "Real games actually behind..." comment
+            # near blend_baseline_stats' call sites).
+            "baseline_sample_n": baseline_sample_n,
             "def_note": def_note,
             "teammate_note": teammate_note,
             "new_teammate_note": new_teammate_note,
@@ -1241,6 +1262,7 @@ with tab1:
         predictions = r["predictions"]
         line_inputs = r["line_inputs"]
         layer_results = r["layer_results"]
+        baseline_sample_n = r["baseline_sample_n"]
         def_note = r["def_note"]
         teammate_note = r["teammate_note"]
         new_teammate_note = r["new_teammate_note"]
@@ -1545,18 +1567,16 @@ with tab1:
                 f"{predictions[col]['base']:.1f} {col}" for col, _ in STAT_COLUMNS
             )
             st.write(f"**[1] Baseline** ({source}): {baseline_summary}")
-            st.write(f"**[2] Opponent defense:** {def_note} "
-                     f"_{format_layer_accuracy(layer_hit_rate('opponent_defense', 'PTS'))}_")
-            st.write(f"**[3] Missing teammates:** {teammate_note} "
-                     f"_{format_layer_accuracy(layer_hit_rate('missing_teammates', 'PTS'))}_")
-            st.write(f"**[4] Missing opponent players:** {opp_missing_note} "
-                     f"_{format_layer_accuracy(layer_hit_rate('missing_opponents', 'PTS'))}_")
-            st.write(f"**[5] New teammate arriving:** {new_teammate_note} "
-                     f"_{format_layer_accuracy(layer_hit_rate('new_teammate', 'PTS'))}_")
-            st.write(f"**[6] Primary defender:** {defender_note} "
-                     f"_{format_layer_accuracy(layer_hit_rate('defender_matchup', 'PTS'))}_")
-            st.write(f"**[7] Scheme:** {scheme_note} "
-                     f"_{format_layer_accuracy(layer_hit_rate('scheme', 'PTS'))}_")
+            notes_by_layer = {
+                "opponent_defense": def_note,
+                "missing_teammates": teammate_note,
+                "missing_opponents": opp_missing_note,
+                "new_teammate": new_teammate_note,
+                "defender_matchup": defender_note,
+                "scheme": scheme_note,
+            }
+            for line in build_layer_lines(notes_by_layer):
+                st.write(line)
             if scheme_executor_input:
                 st.write(f"**[8] Scheme executed by (reference only):** {scheme_executor_input} "
                          f"-- not used in the calculation, no data exists to attribute schemes to individual players.")
@@ -1640,7 +1660,7 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id):
     than silently guessing.
     """
     try:
-        season_stats, season_source = get_season_baseline(player_id, player_name)
+        season_stats, season_source, _season_n = get_season_baseline(player_id, player_name)
     except Exception:
         return None
     if not season_stats:

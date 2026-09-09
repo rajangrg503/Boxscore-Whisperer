@@ -24,6 +24,7 @@ from typing import Optional
 from engine.tracker import load_prediction_log
 from engine.adjustments.base import AdjustmentResult
 from engine.adjustments.defender import CONTEXT_ONLY_BY_DESIGN as DEFENDER_CONTEXT_ONLY
+from engine.adjustments.registry import LAYER_DISPLAY
 
 MIN_SAMPLE = 5
 
@@ -122,3 +123,22 @@ def format_layer_accuracy(result: LayerAccuracy) -> str:
         return "not enough resolved predictions yet to show a reliability track record for this layer."
     return (f"this type of adjustment has been directionally correct "
             f"{result.hit_rate:.0f}% of the time over the last {result.n} resolved prediction(s).")
+
+
+def build_layer_lines(notes_by_layer: dict) -> list:
+    """The [2]-[7] numbered lines for the "how this was built" expander,
+    in the fixed order and with the labels from
+    engine.adjustments.registry.LAYER_DISPLAY -- single source of
+    truth, so the panel can't drift out of sync with that list.
+
+    notes_by_layer: {layer_key: note_string}, one entry per key in
+    LAYER_DISPLAY. Numbering starts at 2 since [1] (the unadjusted
+    baseline) isn't a layer and is rendered separately by the caller."""
+    lines = []
+    for i, (layer_key, label) in enumerate(LAYER_DISPLAY, start=2):
+        note = notes_by_layer[layer_key]
+        lines.append(
+            f"**[{i}] {label}:** {note} "
+            f"_{format_layer_accuracy(layer_hit_rate(layer_key, 'PTS'))}_"
+        )
+    return lines

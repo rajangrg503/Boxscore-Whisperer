@@ -97,3 +97,57 @@ def test_skips_rows_where_layer_absent_from_layers_json(temp_log):
     _write_rows(temp_log, rows)
     result = layer_accuracy.layer_hit_rate("opponent_defense", "PTS")
     assert result.n == 0
+
+
+def test_build_layer_lines_matches_old_hardcoded_output(temp_log):
+    """Proves build_layer_lines() (the loop-based replacement for
+    app.py's 6 hardcoded st.write() blocks) produces BYTE-FOR-BYTE
+    identical text to those blocks, for the exact same inputs -- not
+    just that it runs without error. old_expected below is copied
+    verbatim from app.py's pre-refactor source (the f-string templates
+    at the 6 call sites), not paraphrased or reconstructed from memory.
+
+    Exercises all three LayerAccuracy branches at once: real-percentage
+    (opponent_defense, scheme -- each with 5 resolved rows), insufficient
+    data (missing_teammates, missing_opponents, new_teammate -- 0 rows),
+    and context_only_by_design (defender_matchup, always)."""
+    rows = (
+        [_make_row(f"def_hit{i}", 20.0, 15.0, 0.9, layer_name="opponent_defense") for i in range(3)]
+        + [_make_row(f"def_miss{i}", 20.0, 25.0, 0.9, layer_name="opponent_defense") for i in range(2)]
+        + [_make_row(f"sch_hit{i}", 20.0, 25.0, 1.1, layer_name="scheme") for i in range(4)]
+        + [_make_row("sch_miss0", 20.0, 15.0, 1.1, layer_name="scheme")]
+    )
+    _write_rows(temp_log, rows)
+
+    notes_by_layer = {
+        "opponent_defense": "DEF_NOTE_TEXT",
+        "missing_teammates": "TEAMMATE_NOTE_TEXT",
+        "missing_opponents": "OPP_MISSING_NOTE_TEXT",
+        "new_teammate": "NEW_TEAMMATE_NOTE_TEXT",
+        "defender_matchup": "DEFENDER_NOTE_TEXT",
+        "scheme": "SCHEME_NOTE_TEXT",
+    }
+
+    # Verbatim from app.py's pre-refactor source (lines 1548-1559).
+    old_expected = [
+        f"**[2] Opponent defense:** {notes_by_layer['opponent_defense']} "
+        f"_{layer_accuracy.format_layer_accuracy(layer_accuracy.layer_hit_rate('opponent_defense', 'PTS'))}_",
+        f"**[3] Missing teammates:** {notes_by_layer['missing_teammates']} "
+        f"_{layer_accuracy.format_layer_accuracy(layer_accuracy.layer_hit_rate('missing_teammates', 'PTS'))}_",
+        f"**[4] Missing opponent players:** {notes_by_layer['missing_opponents']} "
+        f"_{layer_accuracy.format_layer_accuracy(layer_accuracy.layer_hit_rate('missing_opponents', 'PTS'))}_",
+        f"**[5] New teammate arriving:** {notes_by_layer['new_teammate']} "
+        f"_{layer_accuracy.format_layer_accuracy(layer_accuracy.layer_hit_rate('new_teammate', 'PTS'))}_",
+        f"**[6] Primary defender:** {notes_by_layer['defender_matchup']} "
+        f"_{layer_accuracy.format_layer_accuracy(layer_accuracy.layer_hit_rate('defender_matchup', 'PTS'))}_",
+        f"**[7] Scheme:** {notes_by_layer['scheme']} "
+        f"_{layer_accuracy.format_layer_accuracy(layer_accuracy.layer_hit_rate('scheme', 'PTS'))}_",
+    ]
+
+    actual = layer_accuracy.build_layer_lines(notes_by_layer)
+
+    assert actual == old_expected
+    assert "60%" in actual[0]
+    assert "80%" in actual[5]
+    assert "not enough resolved predictions" in actual[1]
+    assert "context only" in actual[4]
