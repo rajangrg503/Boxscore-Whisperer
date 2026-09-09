@@ -634,19 +634,45 @@ div[data-testid="stCaptionContainer"] p {
     margin-top: 4px;
 }
 
-/* Player headshot */
-.player-headshot-wrap {
+/* Player avatar -- designed circle, not a real photo/likeness. See
+   TEAM_COLORS + get_player_team_and_number() for why. */
+.player-avatar-wrap {
     display: flex;
-    justify-content: center;
+    flex-direction: column;
+    align-items: center;
     margin: 20px 0 4px 0;
 }
-.player-headshot-wrap img {
+.player-avatar-circle {
     width: 120px;
     height: 120px;
-    object-fit: cover;
     border-radius: 50%;
     border: 3px solid #262a33;
-    background-color: #171a21;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+}
+.player-avatar-circle svg {
+    width: 42px;
+    height: 42px;
+    opacity: 0.9;
+}
+.player-avatar-jersey {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+    line-height: 1;
+}
+.player-avatar-name {
+    margin-top: 10px;
+    font-size: 14px;
+    color: #e5e7eb;
+    font-weight: 500;
+}
+.player-avatar-team {
+    font-size: 12px;
+    color: #9ca3af;
 }
 
 div[data-testid="stForm"] label,
@@ -859,6 +885,118 @@ def get_team_name_list():
 
 player_names = get_player_name_list()
 team_names = get_team_name_list()
+
+# Real official team primary colors, for the player-avatar circle
+# background (see get_player_team_and_number() below). Hardcoded because
+# neither nba_api.stats.static.teams nor any cached data in this repo
+# provides team colors -- confirmed by checking both before adding this.
+# Where a team's brand has both a dark and a light official color (e.g.
+# Warriors blue/yellow, Nuggets navy/gold, Suns purple/orange), the
+# darker one is used here so white icon/text stays legible -- verified
+# via WCAG contrast ratio, worst case (Hawks/Blazers red) is 4.34:1,
+# every team clears the 3:1 minimum for large graphics/text.
+TEAM_COLORS = {
+    1610612737: "#E03A3E",  # ATL Hawks
+    1610612738: "#007A33",  # BOS Celtics
+    1610612751: "#000000",  # BKN Nets
+    1610612766: "#1D1160",  # CHA Hornets
+    1610612741: "#CE1141",  # CHI Bulls
+    1610612739: "#860038",  # CLE Cavaliers
+    1610612742: "#00538C",  # DAL Mavericks
+    1610612743: "#0E2240",  # DEN Nuggets
+    1610612765: "#C8102E",  # DET Pistons
+    1610612744: "#1D428A",  # GSW Warriors
+    1610612745: "#CE1141",  # HOU Rockets
+    1610612754: "#002D62",  # IND Pacers
+    1610612746: "#C8102E",  # LAC Clippers
+    1610612747: "#552583",  # LAL Lakers
+    1610612763: "#5D76A9",  # MEM Grizzlies
+    1610612748: "#98002E",  # MIA Heat
+    1610612749: "#00471B",  # MIL Bucks
+    1610612750: "#0C2340",  # MIN Timberwolves
+    1610612740: "#0C2340",  # NOP Pelicans
+    1610612752: "#006BB6",  # NYK Knicks
+    1610612760: "#007AC1",  # OKC Thunder
+    1610612753: "#0077C0",  # ORL Magic
+    1610612755: "#006BB6",  # PHI 76ers
+    1610612756: "#1D1160",  # PHX Suns
+    1610612757: "#E03A3E",  # POR Trail Blazers
+    1610612758: "#5A2D81",  # SAC Kings
+    1610612759: "#000000",  # SAS Spurs
+    1610612761: "#CE1141",  # TOR Raptors
+    1610612762: "#002B5C",  # UTA Jazz
+    1610612764: "#002B5C",  # WAS Wizards
+}
+TEAM_COLOR_FALLBACK = "#262a33"  # this app's existing border-gray, used when a player isn't found on any cached roster
+
+
+def _load_roster_df(team_id):
+    """Shared cache read behind get_team_roster() and
+    get_player_team_and_number() -- one cached_or_live() call per team,
+    not duplicated between the two callers. Returns the raw roster
+    DataFrame (all commonteamroster columns), or None if neither a live
+    fetch nor a cached copy is available. Same timeout=5/10 retry and
+    Cloud-fallback behavior as before (see get_team_roster's docstring).
+    """  # patch_roster_cache_fallback
+    from nba_api.stats.endpoints import commonteamroster
+
+    def _fetch():
+        last_error = None
+        for attempt_timeout in (5, 10):
+            try:
+                roster = commonteamroster.CommonTeamRoster(
+                    team_id=team_id, season=CURRENT_SEASON, timeout=attempt_timeout
+                )
+                return roster.get_data_frames()[0]
+            except Exception as e:
+                last_error = e
+                print(
+                    f"[_load_roster_df] attempt (timeout={attempt_timeout}) failed "
+                    f"for team_id={team_id}: {type(e).__name__}: {e}"
+                )
+        raise last_error if last_error else RuntimeError("_load_roster_df: no attempts made")
+
+    try:
+        df, _source = cached_or_live(f"roster_{team_id}", _fetch)
+    except Exception as e:
+        print(f"[_load_roster_df] no live or cached roster for team_id={team_id}: {e}")
+        return None
+    return df
+
+
+def get_team_roster(team_id):
+    """Pull current roster for a team (cached, with live fallback -- see
+    _load_roster_df()). Returns a list of (player_id, player_name)
+    tuples, or [] if no roster is available."""
+    df = _load_roster_df(team_id)
+    if df is None or df.empty:
+        return []
+    return list(zip(df["PLAYER_ID"], df["PLAYER"]))
+
+
+def get_player_team_and_number(player_id):
+    """Resolve a player's current team and jersey number by scanning
+    every team's cached roster (data_cache/roster_{team_id}.json, the
+    same cache get_team_roster() reads) for this player_id -- no new
+    fetch, this data is already on disk for all 30 teams.
+
+    Returns (team_id, team_abbr, team_full_name, jersey) where jersey is
+    a string like "23", or (None, None, None, "-") if the player isn't
+    found on any current roster (e.g. a very recent signing not yet
+    cached, or a free agent) -- callers must degrade gracefully, not
+    assume a match.
+    """
+    for t in teams.get_teams():
+        df = _load_roster_df(t["id"])
+        if df is None or df.empty:
+            continue
+        match = df[df["PLAYER_ID"] == player_id]
+        if not match.empty:
+            num = match.iloc[0]["NUM"]
+            jersey = str(int(num)) if pd.notna(num) else "-"
+            return t["id"], t["abbreviation"], t["full_name"], jersey
+    return None, None, None, "-"
+
 
 tab1, tab2 = st.tabs(["Single Player", "Full Matchup"])  # patch_tabs_split
 
@@ -1314,10 +1452,17 @@ with tab1:
         no_combo_data = r["no_combo_data"]
         valid_ids = r["valid_ids"]
 
-        headshot_url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
+        _avatar_team_id, _avatar_team_abbr, _avatar_team_full, _avatar_jersey = get_player_team_and_number(player_id)
+        _avatar_color = TEAM_COLORS.get(_avatar_team_id, TEAM_COLOR_FALLBACK)
+        _avatar_team_label = _avatar_team_full or "Team unavailable"
         st.markdown(
-            f'<div class="player-headshot-wrap">'
-            f'<img src="{headshot_url}" onerror="this.style.display=\'none\'">'
+            f'<div class="player-avatar-wrap">'
+            f'<div class="player-avatar-circle" style="background-color:{_avatar_color};">'
+            f'<svg viewBox="0 0 24 24" fill="#ffffff"><path d="M12 12c2.7 0 4.9-2.2 4.9-4.9S14.7 2.2 12 2.2 7.1 4.4 7.1 7.1 9.3 12 12 12zm0 2.4c-3.3 0-9.8 1.6-9.8 4.9v2.5h19.6v-2.5c0-3.3-6.5-4.9-9.8-4.9z"/></svg>'
+            f'<span class="player-avatar-jersey">#{_avatar_jersey}</span>'
+            f'</div>'
+            f'<div class="player-avatar-name">{player_full_name}</div>'
+            f'<div class="player-avatar-team">{_avatar_team_label}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -1579,49 +1724,6 @@ with tab2:
         "rotation plan. Per-player nuance (missing/new teammates, primary "
         "defender, scheme) stays in the single-player tool for now."
     )
-
-def get_team_roster(team_id):
-    """Pull current live roster for a team via commonteamroster, with the
-    same timeout=5 treatment as every other live call in this app.
-
-    Routes through cached_or_live() like every other real nba_api call in
-    this file (see the comment near the top), so on Cloud -- where live
-    nba_api calls are blocked -- this falls back to a local data_cache/
-    copy instead of silently returning an empty roster. Requires
-    batch_cache_rosters.py to have been run locally and data_cache/
-    committed, same as every other cached endpoint.
-
-    Returns a list of (player_id, player_name) tuples, or [] if neither a
-    live fetch nor a cached copy is available.
-    """  # patch_roster_cache_fallback
-    from nba_api.stats.endpoints import commonteamroster
-
-    def _fetch():
-        last_error = None
-        for attempt_timeout in (5, 10):
-            try:
-                roster = commonteamroster.CommonTeamRoster(
-                    team_id=team_id, season=CURRENT_SEASON, timeout=attempt_timeout
-                )
-                return roster.get_data_frames()[0]
-            except Exception as e:
-                last_error = e
-                print(
-                    f"[get_team_roster] attempt (timeout={attempt_timeout}) failed "
-                    f"for team_id={team_id}: {type(e).__name__}: {e}"
-                )
-        raise last_error if last_error else RuntimeError("get_team_roster: no attempts made")
-
-    try:
-        df, _source = cached_or_live(f"roster_{team_id}", _fetch)
-    except Exception as e:
-        print(f"[get_team_roster] no live or cached roster for team_id={team_id}: {e}")
-        return []
-
-    if df is None or df.empty:
-        return []
-    return list(zip(df["PLAYER_ID"], df["PLAYER"]))
-
 
 def predict_player_vs_opponent(player_id, player_name, opponent_id):
     """MVP matchup-predictor engine: season baseline + opponent-defense
