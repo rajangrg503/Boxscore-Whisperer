@@ -50,6 +50,45 @@ def test_append_then_load_roundtrip(temp_log):
     assert pd.isna(df.iloc[0]["saved_by_email"]) or df.iloc[0]["saved_by_email"] == ""
 
 
+def test_id_column_survives_pandas_numeric_misparse(temp_log):
+    """Regression test for the flaky-test issue documented in the
+    project plan's Known Issues: ids are 8-char hex
+    (uuid.uuid4().hex[:8]), and without an explicit dtype, pandas'
+    read_csv() misreads some of them as numbers instead of strings --
+    breaking any later `df["id"] == some_string` comparison. There are
+    TWO independent triggers, confirmed empirically while fixing this
+    (not assumed from the plan's original "all-digit" description
+    alone): an all-digit id gets read as int64, AND a hex id that
+    merely *contains* one "e" digit with only digits after it (e.g.
+    "5e123456") gets misread as scientific-notation float -- pandas'
+    C parser doesn't require the whole string to be digits, just that
+    it matches a numeric grammar. A fix that only guarded against
+    all-digit ids (e.g. regenerate-if-`.isdigit()`) would have missed
+    the second case entirely, since "5e123456" is not all-digit.
+    load_prediction_log()'s dtype={"id": str} fixes both uniformly by
+    not depending on knowing every way pandas' inference could misfire."""
+    old_columns = ["id", "saved_at", "player_id", "player_full_name", "opponent_full_name",
+                   "opponent_abbr", "game_date", "status", "saved_by_email"]
+    for col, _ in tracker.STAT_COLUMNS:
+        old_columns += [f"{col}_low", f"{col}_mid", f"{col}_high", f"{col}_actual", f"{col}_hit", f"{col}_base"]
+    old_columns += ["layers_json"]
+
+    problem_ids = ["12345678", "5e123456"]  # all-digit, and scientific-notation-shaped
+    rows = [{c: None for c in old_columns} for _ in problem_ids]
+    for row, pid in zip(rows, problem_ids):
+        row.update({"id": pid, "player_id": 1, "player_full_name": "X", "status": "pending"})
+    pd.DataFrame(rows).to_csv(temp_log, index=False)
+
+    df = tracker.load_prediction_log()
+    # The exact dtype label pandas reports for dtype=str varies by
+    # version ("object" vs a StringDtype) -- what actually matters is
+    # that it's not numeric, and that values compare correctly below.
+    assert not pd.api.types.is_numeric_dtype(df["id"])
+    assert list(df["id"]) == problem_ids
+    for pid in problem_ids:
+        assert not df[df["id"] == pid].empty, f"{pid!r} did not survive as a comparable string"
+
+
 def test_saved_by_email_is_normalized(temp_log):
     tracker.append_prediction_to_log(
         2544, "LeBron James", "Boston Celtics", "BOS",

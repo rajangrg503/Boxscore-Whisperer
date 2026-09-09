@@ -123,10 +123,27 @@ def load_prediction_log():
     (any file that hasn't had a row appended since the last schema
     change) hits exactly this. Reindexing here once, centrally, makes
     the "additive schema, old rows stay valid" guarantee actually true
-    for every caller, not just the ones that happened to use .get()."""
+    for every caller, not just the ones that happened to use .get().
+
+    dtype={"id": str} fixes the flaky-test issue documented in the
+    project plan's Known Issues: ids are 8-char hex
+    (uuid.uuid4().hex[:8]), and pandas' default type inference sometimes
+    reads one as a number instead of a string, breaking any later
+    string comparison (e.g. `df["id"] == some_id_string`). Confirmed
+    two independent triggers, not just one: an all-digit id (e.g.
+    "41502247") gets read as int64, AND an id that merely *contains* a
+    single "e" with only digits after it (e.g. "5e123456" -- "e" is a
+    legal hex digit) gets misread as scientific-notation float, since
+    pandas' parser only needs the string to match a numeric grammar,
+    not be all-digit. Forcing the dtype here fixes both uniformly and
+    is correct regardless of what any id happens to look like, rather
+    than trying to constrain id generation against every string shape
+    pandas' inference might misfire on -- see
+    test_id_column_survives_pandas_numeric_misparse for both cases
+    pinned as a permanent regression test."""
     if os.path.exists(LOG_PATH):
         try:
-            df = pd.read_csv(LOG_PATH)
+            df = pd.read_csv(LOG_PATH, dtype={"id": str})
             return df.reindex(columns=LOG_COLUMNS)
         except Exception:
             return pd.DataFrame(columns=LOG_COLUMNS)
