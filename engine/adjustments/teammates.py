@@ -29,7 +29,7 @@ MISSING_TEAMMATES_LAYER = "missing_teammates"
 NEW_TEAMMATE_LAYER = "new_teammate"
 
 
-def get_teammate_availability_adjustment(player_id, missing_names, season) -> AdjustmentResult:
+def get_teammate_availability_adjustment(player_id, missing_names, season, df=None) -> AdjustmentResult:
     """Measures how this player's production differs in real games
     where a specific teammate did NOT play vs. games where they did,
     within the same season -- a genuine natural experiment, not a
@@ -39,7 +39,15 @@ def get_teammate_availability_adjustment(player_id, missing_names, season) -> Ad
     them present. If a teammate has left the team entirely, every game
     this season trivially "misses" them -- that's not a genuine
     comparison, so it's detected and skipped rather than silently
-    returning a near-meaningless ratio."""
+    returning a near-meaningless ratio.
+
+    df=None (the default, used by the live app): fetches the player's
+    gamelog itself, exactly as before. df=<a dataframe>: uses it
+    directly instead of fetching -- for the backtesting project, which
+    must pass in a date-filtered, correctly-sorted subset (see
+    engine/backtest_point_in_time.py's point_in_time_missing_teammate_games())
+    rather than let this function see the player's whole, not-reliably-
+    chronological cached log."""
     neutral = {col: 1.0 for col, _ in STAT_COLUMNS}
 
     if not missing_names:
@@ -49,15 +57,16 @@ def get_teammate_availability_adjustment(player_id, missing_names, season) -> Ad
             data_quality="unavailable", sample_n=0, applied=False,
         )
 
-    try:
-        df = fetch_combined_game_log(player_id, season)
-    except Exception:
-        return AdjustmentResult(
-            layer=MISSING_TEAMMATES_LAYER, value=neutral,
-            note=(f"No game log available for {season} (live fetch failed, not yet "
-                  f"cached) -- skipping this adjustment."),
-            data_quality="unavailable", sample_n=0, applied=False,
-        )
+    if df is None:
+        try:
+            df = fetch_combined_game_log(player_id, season)
+        except Exception:
+            return AdjustmentResult(
+                layer=MISSING_TEAMMATES_LAYER, value=neutral,
+                note=(f"No game log available for {season} (live fetch failed, not yet "
+                      f"cached) -- skipping this adjustment."),
+                data_quality="unavailable", sample_n=0, applied=False,
+            )
 
     matching_games = []
     consecutive_failures = 0

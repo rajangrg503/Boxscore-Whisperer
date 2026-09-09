@@ -65,6 +65,7 @@ from engine.adjustments.defense import (
 )
 from analytics.layer_accuracy import build_layer_lines
 from engine.confidence import score_prediction
+from engine.baseline_stats import stats_from_gamelog
 
 
 # ---------- Data functions (same logic as the terminal version) ----------
@@ -329,11 +330,9 @@ def get_season_baseline(player_id, player_name):
         df = fetch_combined_game_log(player_id, PREVIOUS_SEASON)  # let this one raise if it fails -- nothing left to fall back to
         source = f"{PREVIOUS_SEASON} full season, incl. playoffs ({len(df)} games)"
 
-    stats_dict = {}
-    for col, _ in STAT_COLUMNS:
-        stats_dict[col] = (df[col].mean(), df[col].std())
+    stats_dict, n_games = stats_from_gamelog(df)
 
-    return stats_dict, source, len(df)
+    return stats_dict, source, n_games
 
 
 # get_league_advanced_team_stats, get_team_defensive_rating,

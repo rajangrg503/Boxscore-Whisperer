@@ -36,7 +36,7 @@ class LayerAccuracy:
                                    # "context_only_by_design" | "insufficient_data"
 
 
-def layer_hit_rate(layer_name: str, stat_col: str, window: int = 50) -> LayerAccuracy:
+def layer_hit_rate(layer_name: str, stat_col: str, window: int = 50, df: pd.DataFrame = None) -> LayerAccuracy:
     """Over the last `window` RESOLVED predictions where this layer
     was applied and asserted a real direction for this stat: what
     fraction had the actual value land on the same side of the
@@ -45,15 +45,26 @@ def layer_hit_rate(layer_name: str, stat_col: str, window: int = 50) -> LayerAcc
     Returns hit_rate=None (with a reason) rather than a fabricated
     number whenever there's nothing honest to report -- either the
     layer structurally never applies, or fewer than MIN_SAMPLE real
-    directional data points exist yet."""
+    directional data points exist yet.
+
+    df=None (the default, used by the live app): loads from the live
+    tracked prediction log via load_prediction_log() and applies the
+    rolling `window` limit, exactly as before. df=<a dataframe> (the
+    backtesting project): scores every row in the given dataframe
+    directly, ignoring `window` entirely -- a backtest wants the full
+    real sample, not a rolling recent-N window built for the live
+    app's continuously-growing tracker."""
     if NEVER_APPLIED_BY_DESIGN.get(layer_name):
         return LayerAccuracy(hit_rate=None, n=0, reason="context_only_by_design")
 
-    df = load_prediction_log()
-    resolved = df[df["status"] == "resolved"]
-    if "saved_at" in resolved.columns:
-        resolved = resolved.sort_values("saved_at", ascending=False)
-    resolved = resolved.head(window)
+    if df is None:
+        df = load_prediction_log()
+        resolved = df[df["status"] == "resolved"]
+        if "saved_at" in resolved.columns:
+            resolved = resolved.sort_values("saved_at", ascending=False)
+        resolved = resolved.head(window)
+    else:
+        resolved = df[df["status"] == "resolved"]
 
     base_col = f"{stat_col}_base"
     actual_col = f"{stat_col}_actual"
