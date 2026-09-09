@@ -549,6 +549,39 @@ html, body, [class*="css"] {
 .legal-disclaimer a:hover {
     color: #00e676;
 }
+.methodology-teaser {
+    max-width: 640px;
+    margin: 0 auto 4px auto;
+    padding: 12px 18px;
+    border: 1px solid #262a33;
+    border-radius: 12px;
+    background-color: #171a21;
+    color: #9ca3af;
+    font-size: 11.5px;
+    line-height: 1.5;
+    text-align: center;
+}
+.methodology-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 13px;
+}
+.methodology-table th, .methodology-table td {
+    padding: 8px 12px;
+    text-align: center;
+    border-bottom: 1px solid #262a33;
+}
+.methodology-table th {
+    color: #9ca3af;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+}
+.methodology-table td {
+    color: #ffffff;
+}
 
 /* Search-bar-style container around the form */
 div[data-testid="stForm"] {
@@ -831,6 +864,44 @@ st.markdown(
     '</div>',
     unsafe_allow_html=True,
 )
+st.markdown(
+    '<div class="methodology-teaser">'
+    'Backtested across 29,914 real player-games from the last 3 NBA seasons, using only '
+    'data available before each game — no lookahead. See methodology ↓'
+    '</div>',
+    unsafe_allow_html=True,
+)
+with st.expander("📊 See methodology"):
+    st.markdown(
+        "**How we know this works**\n\n"
+        "Most prediction tools show you a number and ask you to trust it. We'd rather "
+        "show you the evidence.\n\n"
+        "Before launch, we ran Boxscore Whisperer's core prediction engine against every "
+        "eligible regular-season game from the last three NBA seasons -- 2023-24 through "
+        "2025-26 -- using only data that would have genuinely been available before each "
+        "game was played. No lookahead, no using a season's final stats to \"predict\" "
+        "its opening week. That's 29,914 real, independently verified predictions.\n\n"
+        "Here's what we found: our season-baseline predictions are solid. Our "
+        "opponent-defense adjustment currently adds a small, statistically real but "
+        "practically modest edge over the raw baseline -- and for some stats, "
+        "essentially none yet. We're not going to round that up. We think a tool that "
+        "only tells you the flattering parts isn't one you should trust with real "
+        "decisions, so we're publishing this now, and we'll publish updates as we keep "
+        "working on it."
+    )
+    st.markdown(
+        '<table class="methodology-table">'
+        '<tr><th>Stat</th><th>Directional Accuracy</th><th>N</th></tr>'
+        '<tr><td>PTS</td><td>51.8%</td><td>29,791</td></tr>'
+        '<tr><td>AST</td><td>51.6%</td><td>29,610</td></tr>'
+        '<tr><td>REB</td><td>50.6%</td><td>29,663</td></tr>'
+        '<tr><td>STL</td><td>51.1%</td><td>29,456</td></tr>'
+        '<tr><td>BLK</td><td>50.4%</td><td>29,339</td></tr>'
+        '<tr><td>FG3M</td><td>50.4%</td><td>28,138</td></tr>'
+        '<tr><td>TOV</td><td>49.2%</td><td>29,523</td></tr>'
+        '</table>',
+        unsafe_allow_html=True,
+    )
 
 # Pull the current name lists once per session for the searchable
 # dropdowns -- typing inside these boxes filters the list live, no
