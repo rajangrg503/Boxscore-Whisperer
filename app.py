@@ -64,6 +64,7 @@ from engine.adjustments.defense import (
     get_defense_adjustment,
 )
 from analytics.layer_accuracy import build_layer_lines
+from engine.confidence import score_prediction
 
 
 # ---------- Data functions (same logic as the terminal version) ----------
@@ -699,6 +700,39 @@ div[data-testid="stExpander"] div[data-testid="stMarkdownContainer"] p {
     background-color: #1a1d24;
     color: #9ca3af;
 }
+
+/* Per-prediction confidence badge -- ONE per prediction (not per stat
+   card, since score_prediction() scores the whole prediction), shown
+   prominently between the header and the stat cards, not buried in
+   the "how this was built" expander. Reuses the same dark-tinted-bg +
+   bright-text pairing as .hit-rate-green/red above (same "status
+   pill" visual language), plus one new amber pair for Medium. */
+.confidence-badge-wrap {
+    display: flex;
+    justify-content: center;
+    margin: 4px 0 16px 0;
+}
+.confidence-badge {
+    display: inline-block;
+    padding: 8px 20px;
+    border-radius: 999px;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+.confidence-high {
+    background-color: #0d2818;
+    color: #34d399;
+}
+.confidence-medium {
+    background-color: #2d2410;
+    color: #fbbf24;
+}
+.confidence-low {
+    background-color: #2d1215;
+    color: #f87171;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1295,6 +1329,21 @@ with tab1:
             f'</div>',
             unsafe_allow_html=True,
         )
+
+        confidence_result = score_prediction(layer_results, baseline_sample_n)
+        _confidence_css_class = {
+            "High": "confidence-high",
+            "Medium": "confidence-medium",
+            "Low": "confidence-low",
+        }[confidence_result.label]
+        st.markdown(
+            f'<div class="confidence-badge-wrap">'
+            f'<span class="confidence-badge {_confidence_css_class}">{confidence_result.label.upper()} CONFIDENCE</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if confidence_result.label != "High" and confidence_result.reasons:
+            st.caption(" • ".join(confidence_result.reasons[:2]))
 
         def render_stat_card_row(stat_cols):
             html = '<div class="stat-card-row">'
