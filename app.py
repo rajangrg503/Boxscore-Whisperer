@@ -531,6 +531,25 @@ html, body, [class*="css"] {
     text-align: center;
     margin-bottom: 48px;  /* patch_hero_breathing_room */
 }
+.legal-disclaimer {
+    max-width: 640px;
+    margin: 0 auto 32px auto;
+    padding: 12px 18px;
+    border: 1px solid #262a33;
+    border-radius: 12px;
+    background-color: #171a21;
+    color: #9ca3af;
+    font-size: 11.5px;
+    line-height: 1.5;
+    text-align: center;
+}
+.legal-disclaimer a {
+    color: #34d399;
+    text-decoration: underline;
+}
+.legal-disclaimer a:hover {
+    color: #00e676;
+}
 
 /* Search-bar-style container around the form */
 div[data-testid="stForm"] {
@@ -797,6 +816,20 @@ st.markdown(
 st.markdown(
     '<div class="hero-subtitle">A transparent statline estimate tool -- not a trained ML model. '
     'Every adjustment is shown so you can judge it yourself.</div>',
+    unsafe_allow_html=True,
+)
+st.markdown(
+    '<div class="legal-disclaimer">'
+    'Boxscore Whisperer is an independent, unofficial statistical tool and is not '
+    'affiliated with, endorsed by, or connected to the NBA, its teams, or the National '
+    'Basketball Players Association. All player and team data is sourced from publicly '
+    'available statistics. Predictions are transparent statistical estimates, not '
+    'guarantees -- for entertainment and informational purposes only, not betting advice. '
+    'If sports betting is a concern for you, resources are available at '
+    '<a href="https://ncpgambling.org" target="_blank">ncpgambling.org</a> '
+    'or 1-800-GAMBLER. Must be 18+ (or the legal age in your jurisdiction) to use any '
+    'information here in connection with wagering.'
+    '</div>',
     unsafe_allow_html=True,
 )
 
