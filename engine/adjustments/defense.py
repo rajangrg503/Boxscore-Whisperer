@@ -124,6 +124,35 @@ def get_league_advanced_team_stats_since(date_from_str):
     return df
 
 
+def get_league_advanced_team_stats_through(season, date_to):
+    """Point-in-time opponent defense: DEF_RATING/PACE for `season`
+    using only games up to and including `date_to` (a datetime.date) --
+    the building block for the backtesting project's monthly
+    checkpoints (see ~/.claude/plans/backtest-engine-plan.md, Phase B1/B2
+    and engine/backtest_point_in_time.py's _checkpoint_date_for()).
+
+    Distinct from get_league_advanced_team_stats_since above: that one
+    bounds FROM a start date forward, CURRENT_SEASON only (built for the
+    live app's post-trade feature). This bounds UP TO a date, for any
+    season -- what point-in-time backtesting needs, since it must never
+    see games that happened after the date being predicted."""
+    date_to_str = date_to.strftime("%m/%d/%Y")  # nba_api's expected format
+
+    def _fetch():
+        stats = leaguedashteamstats.LeagueDashTeamStats(
+            season=season, measure_type_detailed_defense="Advanced",
+            date_to_nullable=date_to_str,
+            timeout=5,
+        )
+        df = stats.get_data_frames()[0]
+        cols = ["TEAM_ID", "TEAM_NAME", "DEF_RATING", "PACE", "GP"]
+        return df[[c for c in cols if c in df.columns]].copy()
+
+    cache_key = f"team_stats_advanced_{season}_through_{date_to.isoformat()}"
+    df, _source = cached_or_live(cache_key, _fetch)
+    return df
+
+
 def get_opponent_defense_post_change(team_id, change_date):
     """Defensive rating computed only from games since a flagged
     roster-change date. Returns (def_rating, league_avg, note,
