@@ -23,19 +23,9 @@ from typing import Optional
 
 from engine.tracker import load_prediction_log
 from engine.adjustments.base import AdjustmentResult
-from engine.adjustments.defender import CONTEXT_ONLY_BY_DESIGN as DEFENDER_CONTEXT_ONLY
-from engine.adjustments.registry import LAYER_DISPLAY
+from engine.adjustments.registry import LAYER_DISPLAY, NEVER_APPLIED_BY_DESIGN
 
 MIN_SAMPLE = 5
-
-# Maps layer_name -> whether that layer's applied is ALWAYS False by
-# design (AdjustmentResult rule 3). Sourced directly from each layer
-# module's own flag, not re-declared here or inferred from log data --
-# see the Phase 4 discussion for why inference from data is unreliable
-# for this specific distinction.
-NEVER_APPLIED_BY_DESIGN = {
-    "defender_matchup": DEFENDER_CONTEXT_ONLY,
-}
 
 
 @dataclass
