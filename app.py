@@ -468,28 +468,6 @@ def get_full_game_log(player_id, season):
     return df
 
 
-def get_hit_rate_table(game_log_df, line, stat_col="PTS"):
-    """Mimics props.cash's L5/L10/L20/season hit-rate columns: what
-    percent of games did the player clear a given line. Since we
-    don't have real sportsbook lines, this uses whatever number the
-    user enters (or the season average as a transparent default)."""
-    windows = {"L5": 5, "L10": 10, "L20": 20}
-    results = {}
-    for label, n in windows.items():
-        subset = game_log_df.head(n)
-        if len(subset) == 0:
-            results[label] = (None, 0)
-        else:
-            hits = (subset[stat_col] > line).sum()
-            results[label] = (hits / len(subset) * 100, len(subset))
-    season_hits = (game_log_df[stat_col] > line).sum()
-    results["Season"] = (
-        season_hits / len(game_log_df) * 100 if len(game_log_df) > 0 else None,
-        len(game_log_df),
-    )
-    return results
-
-
 # ---------------------------- Streamlit UI ----------------------------
 
 st.set_page_config(page_title="Boxscore Whisperer", page_icon="🏀", layout="centered")
@@ -715,49 +693,12 @@ div[data-testid="stExpander"] div[data-testid="stMarkdownContainer"] p {
     color: #d1d5db !important;
 }
 
-/* Hit-rate badges, props.cash style, tuned for dark background */
-.hit-rate-row {
-    display: flex;
-    gap: 10px;
-    justify-content: center;
-    margin: 8px 0 24px 0;
-}
-.hit-rate-badge {
-    flex: 1;
-    text-align: center;
-    border-radius: 12px;
-    padding: 12px 8px;
-}
-.hit-rate-badge .label {
-    font-size: 13px;
-    font-weight: 800;
-    opacity: 1;
-    letter-spacing: 0.3px;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.4);
-}
-.hit-rate-badge .pct {
-    font-size: 20px;
-    font-weight: 800;
-}
-.hit-rate-green {
-    background-color: #0d2818;
-    color: #34d399;
-}
-.hit-rate-red {
-    background-color: #2d1215;
-    color: #f87171;
-}
-.hit-rate-gray {
-    background-color: #1a1d24;
-    color: #9ca3af;
-}
-
 /* Per-prediction confidence badge -- ONE per prediction (not per stat
    card, since score_prediction() scores the whole prediction), shown
    prominently between the header and the stat cards, not buried in
    the "how this was built" expander. Reuses the same dark-tinted-bg +
-   bright-text pairing as .hit-rate-green/red above (same "status
-   pill" visual language), plus one new amber pair for Medium. */
+   bright-text pairing used for other status pills in this app (same
+   visual language), plus one new amber pair for Medium. */
 .confidence-badge-wrap {
     display: flex;
     justify-content: center;
@@ -963,39 +904,6 @@ with tab1:
             "source on its own instead -- only applies when a head-to-head option "
             "is selected above."
         )
-
-        line1, line2, line3 = st.columns(3)
-        with line1:
-            pts_line_input = st.number_input(
-                "Points line (0 = season average)", min_value=0.0, value=0.0, step=0.5
-            )
-        with line2:
-            ast_line_input = st.number_input(
-                "Assists line (0 = season average)", min_value=0.0, value=0.0, step=0.5
-            )
-        with line3:
-            reb_line_input = st.number_input(
-                "Rebounds line (0 = season average)", min_value=0.0, value=0.0, step=0.5
-            )
-
-        with st.expander("Track more stats (steals, blocks, 3-pointers, turnovers -- optional)"):
-            line4, line5, line6, line7 = st.columns(4)
-            with line4:
-                stl_line_input = st.number_input(
-                    "Steals line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
-                )
-            with line5:
-                blk_line_input = st.number_input(
-                    "Blocks line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
-                )
-            with line6:
-                fg3m_line_input = st.number_input(
-                    "3PM line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
-                )
-            with line7:
-                tov_line_input = st.number_input(
-                    "Turnovers line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
-                )
 
         with st.expander("Advanced options (injuries, defender, scheme -- optional)"):
             adv1, adv2 = st.columns(2)
@@ -1285,15 +1193,6 @@ with tab1:
             # per-stat below via multiplier_for() -- opp_missing/scheme/
             # defense are uniform across stats today, teammate/new_teammate
             # genuinely vary by stat.
-            line_inputs = {
-                "PTS": pts_line_input,
-                "AST": ast_line_input,
-                "REB": reb_line_input,
-                "STL": stl_line_input,
-                "BLK": blk_line_input,
-                "FG3M": fg3m_line_input,
-                "TOV": tov_line_input,
-            }
 
             # A thin post-roster-change sample (a team's new-look defense
             # with only a handful of games played) is a genuinely less
@@ -1355,7 +1254,6 @@ with tab1:
             "opponent_abbr": opponent_abbr,
             "source": source,
             "predictions": predictions,
-            "line_inputs": line_inputs,
             # Additive, for layers_json (engine/tracker.py) -- duplicates the
             # *_note strings below by design, not by oversight (those stay
             # for the existing "how this was built" display panel, which
@@ -1397,7 +1295,6 @@ with tab1:
         opponent_abbr = r["opponent_abbr"]
         source = r["source"]
         predictions = r["predictions"]
-        line_inputs = r["line_inputs"]
         layer_results = r["layer_results"]
         baseline_sample_n = r["baseline_sample_n"]
         def_note = r["def_note"]
@@ -1515,7 +1412,7 @@ with tab1:
             columns={trend_stat_col: "value"}
         )
 
-        line_layers = [
+        trend_chart = (
             alt.Chart(chart_df)
             .mark_line(point=alt.OverlayMarkDef(color="#00c853", size=60), color="#00c853")
             .encode(
@@ -1523,16 +1420,6 @@ with tab1:
                 y=alt.Y("value:Q", title=trend_stat_label),
                 tooltip=["GAME_DATE:T", "MATCHUP:N", "value:Q"],
             )
-        ]
-        entered_line = line_inputs.get(trend_stat_col, 0)
-        if entered_line and entered_line > 0:
-            rule_df = pd.DataFrame({"y": [entered_line]})
-            line_layers.append(
-                alt.Chart(rule_df).mark_rule(color="#f87171", strokeDash=[6, 4]).encode(y="y:Q")
-            )
-
-        trend_chart = (
-            alt.layer(*line_layers)
             .properties(height=280)
             .configure(background="#171a21")
             .configure_axis(labelColor="#9ca3af", titleColor="#9ca3af",
@@ -1541,10 +1428,7 @@ with tab1:
         )
         st.altair_chart(trend_chart, use_container_width=True)
         trend_context = f"vs. {opponent_full_name} only" if using_h2h else "overall"
-        st.caption(
-            f"Last {len(recent_games)} games ({trend_context}). Dashed red line marks the "
-            f"line you entered for {trend_stat_label}, if any."
-        )
+        st.caption(f"Last {len(recent_games)} games ({trend_context}).")
 
         # Head-to-head history vs this specific opponent, across the last
         # few seasons -- including seasons on a different team, since that
@@ -1651,68 +1535,6 @@ with tab1:
                         f"{len(combo_df)} game(s) found with {combo_label} on the same team "
                         f"together, across {', '.join(HEAD_TO_HEAD_SEASONS)}."
                     )
-
-        # Hit-rate tables, props.cash style, for all three stats. Each
-        # defaults to that stat's season average if the user left the
-        # line at 0, clearly labeled which source is being used.
-        hit_rate_configs = [
-            (label, line_inputs[col], predictions[col]["base"], col)
-            for col, label in STAT_COLUMNS
-        ]
-
-        if using_h2h:
-            st.markdown(
-                f'<div style="text-align:center; color:#9ca3af; font-size:13px; '
-                f'margin-top:8px;">Hit rates below are also team-specific -- based on '
-                f'{len(game_log_for_hitrate)} game(s) vs. {opponent_full_name} only, '
-                f'not the full season.</div>',
-                unsafe_allow_html=True,
-            )
-
-        for stat_label, line_val, base_val, col in hit_rate_configs:
-            effective_line = line_val if line_val > 0 else round(base_val, 1)
-            if line_val > 0:
-                line_source_note = "your line"
-            elif using_h2h:
-                line_source_note = f"head-to-head avg vs. {opponent_full_name}"
-            else:
-                line_source_note = "season average"
-
-            hit_rates = get_hit_rate_table(game_log_for_hitrate, effective_line, col)
-            if using_h2h:
-                # "Season" doesn't mean much for a head-to-head-only log --
-                # relabel it to reflect what it actually represents here.
-                hit_rates = {("All H2H" if k == "Season" else k): v for k, v in hit_rates.items()}
-
-            st.markdown(
-                f'<div style="text-align:center; color:#ffffff; font-weight:700; '
-                f'font-size:16px; margin-top:20px;">{stat_label} '
-                f'<span style="color:#9ca3af; font-weight:500; font-size:13px;">'
-                f'-- hit rate vs. {effective_line} ({line_source_note})</span></div>',
-                unsafe_allow_html=True,
-            )
-            badges_html = '<div class="hit-rate-row">'
-            for label, (pct, n) in hit_rates.items():
-                if pct is None or n == 0:
-                    css_class = "hit-rate-gray"
-                    display = "N/A"
-                else:
-                    css_class = "hit-rate-green" if pct >= 50 else "hit-rate-red"
-                    display = f"{pct:.0f}%"
-                badges_html += (
-                    f'<div class="hit-rate-badge {css_class}">'
-                    f'<div class="label">{label}</div>'
-                    f'<div class="pct">{display}</div>'
-                    f'</div>'
-                )
-            badges_html += '</div>'
-            st.markdown(badges_html, unsafe_allow_html=True)
-
-        st.caption(
-            "Note on Turnovers: green here just means the player exceeded the line more "
-            "often than not -- for turnovers, going OVER is bad for the player, so green "
-            "doesn't mean \"good\" the way it does for the other stats."
-        )
 
         with st.expander("See how this estimate was built (every adjustment step)"):
             baseline_summary = ", ".join(
