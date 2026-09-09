@@ -932,7 +932,7 @@ with tab1:
             with adv1:
                 missing_teammates = st.multiselect(
                     "Missing teammates", options=player_names, default=[],
-                    placeholder="Search and select players...",
+                    placeholder="Search and select players...", max_selections=5,
                 )
                 new_teammate_input = st.selectbox(
                     "New teammate arriving (optional)", options=player_names, index=None,
@@ -951,7 +951,7 @@ with tab1:
             with adv2:
                 missing_opponents = st.multiselect(
                     "Missing opponent players", options=player_names, default=[],
-                    placeholder="Search and select players...",
+                    placeholder="Search and select players...", max_selections=5,
                 )
                 scheme_input = st.selectbox("Defensive scheme", list(SCHEME_ADJUSTMENTS.keys()))
                 scheme_executor_input = st.selectbox(
@@ -986,7 +986,7 @@ with tab1:
             key_players_input = st.multiselect(
                 "Also check history vs. specific opposing player(s) (optional)",
                 options=player_names, default=[],
-                placeholder="e.g. a star who just changed teams...",
+                placeholder="e.g. a star who just changed teams...", max_selections=4,
             )
             st.caption(
                 "Finds every real game this player has faced them, on whatever team "
