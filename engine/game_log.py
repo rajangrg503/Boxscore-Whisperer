@@ -13,6 +13,7 @@ import pandas as pd
 from nba_api.stats.endpoints import playergamelog
 
 from engine.cache import _load_df_cache, _save_df_cache
+from engine.season import CURRENT_SEASON, PREVIOUS_SEASON
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -72,3 +73,39 @@ def fetch_combined_game_log(player_id, season):
     if not combined.empty:
         _save_df_cache(cache_key, combined)
     return combined
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def resolve_season_gamelog(player_id):
+    """Tries CURRENT_SEASON first; falls through to PREVIOUS_SEASON both
+    when there aren't enough current-season games yet (early in a new
+    season) AND when fetch_combined_game_log raises outright (e.g. a
+    live nba_api failure with no cached copy for the current season
+    specifically -- previous seasons are far more likely to already be
+    cached, since a whole season's worth of games existed to fetch).
+
+    Returns (df, season, source_label). Extracted from app.py's
+    get_season_baseline() (moved verbatim, not reimplemented) so that
+    other callers needing this exact "which single season represents
+    this player right now" decision -- currently
+    engine/adjustments/teammates.py's get_out_redistribution_adjustment(),
+    which needs to know precisely which season's games to check the
+    marked-out player's presence within -- share this one source of
+    truth instead of re-deriving (and risking silently drifting from)
+    the same <5-game fallback rule independently. get_season_baseline()
+    itself now just calls this and reduces the df to stats; its own
+    return shape and behavior are unchanged.
+
+    Always exactly one season's games -- never a blend of two, never
+    open-ended career history. That's a direct consequence of this
+    being a pure extraction of logic that already worked this way."""
+    try:
+        df = fetch_combined_game_log(player_id, CURRENT_SEASON)
+    except Exception:
+        df = pd.DataFrame()
+
+    if len(df) >= 5:
+        return df, CURRENT_SEASON, f"{CURRENT_SEASON} season so far, incl. playoffs ({len(df)} games)"
+
+    df = fetch_combined_game_log(player_id, PREVIOUS_SEASON)  # let this one raise if it fails -- nothing left to fall back to
+    return df, PREVIOUS_SEASON, f"{PREVIOUS_SEASON} full season, incl. playoffs ({len(df)} games)"

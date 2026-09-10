@@ -44,7 +44,7 @@ from engine.tracker import (
     append_prediction_to_log,
     refresh_pending_predictions,
 )
-from engine.game_log import fetch_combined_game_log
+from engine.game_log import fetch_combined_game_log, resolve_season_gamelog
 
 # ---------- Local-to-cloud data cache ----------
 # Moved to engine/cache.py (CACHE_DIR, cached_or_live, etc.) -- see that
@@ -56,7 +56,11 @@ from engine.cache import cached_or_live
 from engine.adjustments.missing_players import get_opponent_missing_adjustment
 from engine.adjustments.defender import get_defender_matchup_adjustment
 from engine.adjustments.scheme import get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS
-from engine.adjustments.teammates import get_teammate_availability_adjustment, get_new_teammate_impact_adjustment
+from engine.adjustments.teammates import (
+    get_teammate_availability_adjustment,
+    get_new_teammate_impact_adjustment,
+    get_out_redistribution_adjustment,
+)
 from engine.adjustments.defense import (
     get_league_advanced_team_stats,
     get_opponent_defense_with_fallback,
@@ -313,23 +317,14 @@ def get_season_baseline(player_id, player_name):
     callers (e.g. engine/confidence.py's baseline_sample_n) don't have
     to parse it back out of a display string.
 
-    Tries CURRENT_SEASON first; falls through to PREVIOUS_SEASON both
-    when there aren't enough current-season games yet (early in a new
-    season) AND when fetch_combined_game_log raises outright (e.g. a
-    live nba_api failure with no cached copy for the current season
-    specifically -- previous seasons are far more likely to already be
-    cached, since a whole season's worth of games existed to fetch)."""
-    try:
-        df = fetch_combined_game_log(player_id, CURRENT_SEASON)
-    except Exception:
-        df = pd.DataFrame()
-
-    if len(df) >= 5:
-        source = f"{CURRENT_SEASON} season so far, incl. playoffs ({len(df)} games)"
-    else:
-        df = fetch_combined_game_log(player_id, PREVIOUS_SEASON)  # let this one raise if it fails -- nothing left to fall back to
-        source = f"{PREVIOUS_SEASON} full season, incl. playoffs ({len(df)} games)"
-
+    Season selection (CURRENT_SEASON, falling back to PREVIOUS_SEASON
+    when there aren't enough current-season games yet or the live fetch
+    fails outright) is resolve_season_gamelog()'s job now -- moved
+    there verbatim so engine/adjustments/teammates.py's redistribution
+    adjustment can share the exact same season-resolution rule instead
+    of re-deriving it. This function's own return shape and behavior
+    are unchanged by that move."""
+    df, _season, source = resolve_season_gamelog(player_id)
     stats_dict, n_games = stats_from_gamelog(df)
 
     return stats_dict, source, n_games
@@ -1747,11 +1742,23 @@ with tab2:
         "defender, scheme) stays in the single-player tool for now."
     )
 
-def predict_player_vs_opponent(player_id, player_name, opponent_id):
+def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_id=None):
     """MVP matchup-predictor engine: season baseline + opponent-defense
-    adjustment only. Deliberately excludes missing/new-teammate, primary
-    defender, and scheme adjustments -- that nuance stays in the
-    single-player tool, per the approved v1 scope.
+    adjustment, plus an optional out-redistribution adjustment when
+    out_player_id is given (Full Matchup's "mark a player as out"
+    feature -- see engine/adjustments/teammates.py's
+    get_out_redistribution_adjustment for the real "games with vs.
+    without" comparison and why it's a distinct, narrowly-scoped
+    mechanic rather than a reuse of the single-player tool's general
+    missing_teammates layer). Still deliberately excludes missing/new-
+    teammate, primary defender, and scheme adjustments -- that nuance
+    stays in the single-player tool, per the approved v1 scope.
+
+    out_player_id=None (the default, and every call site before this
+    parameter existed): the redistribution branch below never runs,
+    redistribution_result is always None, and the returned predictions
+    are exactly what this function always computed -- season baseline
+    times defense_result only.
 
     Returns None if there isn't enough real data for this player (e.g. a
     true rookie with no NBA history) so the caller can flag it rather
@@ -1770,12 +1777,26 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id):
     # x0.5 strength exactly. See engine/adjustments/defense.py.
     defense_result = get_defense_adjustment(team_def_rating, league_avg_def, def_source_note)
 
+    redistribution_result = None
+    if out_player_id is not None:
+        try:
+            player_df, season, _source = resolve_season_gamelog(player_id)
+        except Exception:
+            player_df = pd.DataFrame()
+        if not player_df.empty:
+            redistribution_result = get_out_redistribution_adjustment(
+                player_id, out_player_id, season, player_df
+            )
+
     predictions = {}
     for col, _label in STAT_COLUMNS:
         base_mean, _base_std = season_stats[col]
-        predictions[col] = {"predicted": base_mean * defense_result.multiplier_for(col)}
+        multiplier = defense_result.multiplier_for(col)
+        if redistribution_result is not None:
+            multiplier *= redistribution_result.multiplier_for(col)
+        predictions[col] = {"predicted": base_mean * multiplier}
 
-    return predictions, season_source, def_source_note
+    return predictions, season_source, def_source_note, redistribution_result
 
 
 
@@ -1804,41 +1825,96 @@ with tab2:
             st.error("Please select two different teams.")
             st.stop()
 
-        with st.spinner("Pulling rosters and calculating..."):
-            team_a_id, team_a_full, team_a_abbr = get_team_id(team_a_input)
-            team_b_id, team_b_full, team_b_abbr = get_team_id(team_b_input)
+        team_a_id, team_a_full, team_a_abbr = get_team_id(team_a_input)
+        team_b_id, team_b_full, team_b_abbr = get_team_id(team_b_input)
+        st.session_state["matchup_context"] = {
+            "team_a_id": team_a_id, "team_a_full": team_a_full,
+            "team_b_id": team_b_id, "team_b_full": team_b_full,
+        }
+        # A freshly-submitted matchup starts with nobody marked out --
+        # also avoids a stale selection from a PREVIOUS matchup (a
+        # different team's roster) surviving into this one, which
+        # would otherwise point at a player id that isn't even on the
+        # newly selected team.
+        st.session_state.pop("team_a_out_input", None)
+        st.session_state.pop("team_b_out_input", None)
 
-            def build_team_projection(team_id, opponent_id):
-                roster = get_team_roster(team_id)
-                rows = []
-                skipped = []
-                for pid, pname in roster:
-                    result = predict_player_vs_opponent(pid, pname, opponent_id)
-                    if result is None:
-                        skipped.append(pname)
-                        continue
-                    predictions, _season_source, _def_source_note = result
-                    row = {"Player": pname}
-                    for col, label in STAT_COLUMNS:
-                        row[label] = round(predictions[col]["predicted"], 1)
-                    rows.append(row)
-                return rows, skipped
+    if "matchup_context" in st.session_state:
+        ctx = st.session_state["matchup_context"]
+        team_a_id, team_a_full = ctx["team_a_id"], ctx["team_a_full"]
+        team_b_id, team_b_full = ctx["team_b_id"], ctx["team_b_full"]
 
-            team_a_rows, team_a_skipped = build_team_projection(team_a_id, team_b_id)
-            team_b_rows, team_b_skipped = build_team_projection(team_b_id, team_a_id)
+        def build_team_projection(team_id, opponent_id, out_player_id=None):
+            """out_player_id: excluded entirely from the projected rows
+            (not called through predict_player_vs_opponent at all --
+            there's nothing to project for a player marked out), and
+            passed through to every remaining player's prediction so
+            engine/adjustments/teammates.py's
+            get_out_redistribution_adjustment can apply. Returns
+            (rows, skipped, unadjusted, out_name): `skipped` is the
+            existing "not enough data to project at all" case;
+            `unadjusted` is a distinct, narrower case -- the player WAS
+            projected, but there wasn't enough real "games with vs.
+            without the out player" history to trust a redistribution
+            adjustment for them specifically, so their row shows their
+            normal, unadjusted number instead of a fabricated one."""
+            roster = get_team_roster(team_id)
+            rows = []
+            skipped = []
+            unadjusted = []
+            out_name = None
+            for pid, pname in roster:
+                if pid == out_player_id:
+                    out_name = pname
+                    continue
+                result = predict_player_vs_opponent(pid, pname, opponent_id, out_player_id=out_player_id)
+                if result is None:
+                    skipped.append(pname)
+                    continue
+                predictions, _season_source, _def_source_note, redistribution_result = result
+                if redistribution_result is not None and not redistribution_result.applied:
+                    unadjusted.append(pname)
+                row = {"Player": pname}
+                for col, label in STAT_COLUMNS:
+                    row[label] = round(predictions[col]["predicted"], 1)
+                rows.append(row)
+            return rows, skipped, unadjusted, out_name
 
-        st.markdown(f"**{team_a_full}** projected box score")
-        if team_a_rows:
-            st.dataframe(pd.DataFrame(team_a_rows), width="stretch", hide_index=True)
-        else:
-            st.info("No players with enough data to project.")
-        if team_a_skipped:
-            st.caption(f"Not enough data to project: {', '.join(team_a_skipped)}")
+        def render_team_projection(team_id, team_full, opponent_id, out_key):
+            st.markdown(f"**{team_full}** projected box score")
+            roster = get_team_roster(team_id)
+            out_choice = st.selectbox(
+                f"Mark a {team_full} player as out (optional)",
+                options=["None"] + [pname for _pid, pname in roster],
+                key=out_key,
+            )
+            out_id = None
+            if out_choice != "None":
+                out_id = next((pid for pid, pname in roster if pname == out_choice), None)
 
-        st.markdown(f"**{team_b_full}** projected box score")
-        if team_b_rows:
-            st.dataframe(pd.DataFrame(team_b_rows), width="stretch", hide_index=True)
-        else:
-            st.info("No players with enough data to project.")
-        if team_b_skipped:
-            st.caption(f"Not enough data to project: {', '.join(team_b_skipped)}")
+            with st.spinner("Calculating..."):
+                rows, skipped, unadjusted, out_name = build_team_projection(
+                    team_id, opponent_id, out_player_id=out_id
+                )
+
+            if rows:
+                st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+            else:
+                st.info("No players with enough data to project.")
+            if out_name:
+                st.caption(
+                    f"Marked out: {out_name}. Remaining players' numbers above are "
+                    f"adjusted using their real historical games with vs. without "
+                    f"{out_name} this season, where enough real data exists."
+                )
+            if unadjusted:
+                st.caption(
+                    f"Not enough real head-to-head history with {out_name} to trust "
+                    f"an adjustment -- shown at their normal projection instead: "
+                    f"{', '.join(unadjusted)}"
+                )
+            if skipped:
+                st.caption(f"Not enough data to project: {', '.join(skipped)}")
+
+        render_team_projection(team_a_id, team_a_full, team_b_id, "team_a_out_input")
+        render_team_projection(team_b_id, team_b_full, team_a_id, "team_b_out_input")

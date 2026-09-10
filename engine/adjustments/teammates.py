@@ -1,7 +1,8 @@
-"""Missing-teammate and new-teammate-impact adjustments -- moved from
-app.py. Both compare a player's REAL historical stats in games with
-vs. without a specific teammate -- a genuine natural experiment, not a
-guess -- and both vary by stat column (a center's rebounds and a
+"""Missing-teammate, new-teammate-impact, and out-redistribution
+adjustments -- moved from app.py (the first two) or new (the third).
+All three compare a player's REAL historical stats in games with vs.
+without a specific teammate -- a genuine natural experiment, not a
+guess -- and all three vary by stat column (a center's rebounds and a
 guard's assists can move differently), so their `value` dict uses real
 STAT_COLUMNS keys rather than the ALL_STATS sentinel.
 
@@ -12,7 +13,20 @@ per-game boxscore fetch onto cached_or_live() keyed by
 boxscore_{game_id}). That fixed behavior is preserved verbatim here --
 this move changes the return shape (AdjustmentResult instead of a raw
 tuple), not the fetch/caching logic itself.
-"""
+
+get_out_redistribution_adjustment (added for the Full Matchup
+"mark a player as out" feature) answers the same "with vs. without"
+question as get_teammate_availability_adjustment, but is deliberately
+NOT built on top of it. That function determines presence/absence via
+a live box-score fetch per game (capped at 20, with a mandatory
+time.sleep(0.5) after every fetch, cache hit or not) -- a cost model
+built to support matching a LIST of possibly-several teammates by
+free-text name against a box score's roster. This feature only ever
+has exactly one, already-ID-resolved "out" player (picked from a known
+team roster, not typed as free text), so presence/absence per game is
+just set membership: does that specific game's Game_ID appear in the
+out player's own game log. No box score, no per-game sleep -- looping
+this over an entire projected roster (10-15+ players) stays cheap."""
 
 import time
 
@@ -27,6 +41,7 @@ from engine.adjustments.base import AdjustmentResult
 
 MISSING_TEAMMATES_LAYER = "missing_teammates"
 NEW_TEAMMATE_LAYER = "new_teammate"
+OUT_REDISTRIBUTION_LAYER = "out_redistribution"
 
 
 def get_teammate_availability_adjustment(player_id, missing_names, season, df=None) -> AdjustmentResult:
@@ -246,5 +261,72 @@ def get_new_teammate_impact_adjustment(player_id, new_teammate_name, season) -> 
     )
     return AdjustmentResult(
         layer=NEW_TEAMMATE_LAYER, value=adjustments, note=note,
+        data_quality="real_current", sample_n=sample_n, applied=True,
+    )
+
+
+def get_out_redistribution_adjustment(player_id, out_player_id, season, player_df) -> AdjustmentResult:
+    """Measures how this player's production differs in real games this
+    season where out_player_id did NOT play vs. their season overall --
+    same "with vs. without" natural-experiment principle as
+    get_teammate_availability_adjustment, computed via Game_ID set
+    membership against out_player_id's own game log instead of a
+    per-game box-score fetch (see module docstring for why).
+
+    season and player_df are the CALLER's responsibility, not resolved
+    independently here: `season` must be whatever
+    engine.game_log.resolve_season_gamelog() already decided represents
+    `player_id` right now (CURRENT_SEASON, or PREVIOUS_SEASON if they
+    have fewer than 5 games so far this season), and `player_df` is
+    that same call's returned game log. This matters because
+    out_player_id's OWN preferred season might differ from player_id's
+    (e.g. the out player individually has a thin current-season sample
+    but player_id doesn't) -- what's actually needed is whether
+    out_player_id played in each of player_id's specific games, which
+    only makes sense evaluated within player_id's own season, not
+    out_player_id's independently-resolved one.
+
+    Requires a real sample of games both missing and with out_player_id
+    present, same >=3-and->=3 threshold as
+    get_teammate_availability_adjustment -- returns a neutral,
+    applied=False result with the real counts in `note` otherwise,
+    never a fabricated adjustment."""
+    neutral = {col: 1.0 for col, _ in STAT_COLUMNS}
+
+    out_df = fetch_combined_game_log(out_player_id, season)
+    out_game_ids = set(out_df["Game_ID"]) if not out_df.empty else set()
+
+    with_out = player_df[player_df["Game_ID"].isin(out_game_ids)]
+    without_out = player_df[~player_df["Game_ID"].isin(out_game_ids)]
+
+    if len(without_out) < 3 or len(with_out) < 3:
+        return AdjustmentResult(
+            layer=OUT_REDISTRIBUTION_LAYER, value=neutral,
+            note=(f"Found {len(without_out)} game(s) without the marked-out player "
+                  f"out of {len(player_df)} in {season} (and {len(with_out)} with them "
+                  f"present) -- not enough real contrast in both directions to trust a "
+                  f"comparison, skipping this adjustment."),
+            data_quality="unavailable", sample_n=len(without_out), applied=False,
+        )
+
+    adjustments = {}
+    per_stat_notes = []
+    for col, _label in STAT_COLUMNS:
+        avg_without = without_out[col].mean()
+        avg_overall = player_df[col].mean()
+        ratio = avg_without / avg_overall if avg_overall else 1.0
+        adjustments[col] = ratio
+        per_stat_notes.append(
+            f"{col} {avg_without:.1f} vs {avg_overall:.1f} overall ({(ratio - 1) * 100:+.1f}%)"
+        )
+
+    summary = ", ".join(per_stat_notes)
+    sample_n = len(without_out)
+    note = (
+        f"Found {sample_n} games without the marked-out player this {season} season "
+        f"(vs. {len(with_out)} with them present), stat-by-stat: {summary}."
+    )
+    return AdjustmentResult(
+        layer=OUT_REDISTRIBUTION_LAYER, value=adjustments, note=note,
         data_quality="real_current", sample_n=sample_n, applied=True,
     )
