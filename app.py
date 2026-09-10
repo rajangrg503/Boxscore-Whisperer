@@ -876,6 +876,7 @@ with st.expander("📊 See methodology"):
         '<tr><td>BLK</td><td>50.4%</td><td>29,339</td></tr>'
         '<tr><td>FG3M</td><td>50.4%</td><td>28,138</td></tr>'
         '<tr><td>TOV</td><td>49.2%</td><td>29,523</td></tr>'
+        '<tr><td>FG3A</td><td>50.6%</td><td>28,849</td></tr>'
         '</table>',
         unsafe_allow_html=True,
     )
@@ -1515,8 +1516,8 @@ with tab1:
             html += '</div>'
             st.markdown(html, unsafe_allow_html=True)
 
-        render_stat_card_row(["PTS", "AST", "REB"])
-        render_stat_card_row(["STL", "BLK", "FG3M", "TOV"])
+        render_stat_card_row(["PTS", "AST", "REB", "STL"])
+        render_stat_card_row(["BLK", "FG3M", "FG3A", "TOV"])
         st.caption(
             "This isn't a raw season average -- it's that average adjusted for opponent "
             "defense, missing teammates, and scheme, using the math shown in \"See how this "
@@ -1611,14 +1612,14 @@ with tab1:
             else:
                 st.caption(f"No games found against {opponent_full_name} in the last few seasons.")
         else:
-            display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV"]
+            display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "FG3A", "TOV"]
             display_cols = [c for c in display_cols if c in h2h_df.columns]
             h2h_display = h2h_df[display_cols].copy()
             h2h_display["GAME_DATE"] = h2h_display["GAME_DATE"].dt.strftime("%-m/%-d/%Y")
             h2h_display = h2h_display.rename(columns={
                 "GAME_DATE": "Date", "MATCHUP": "Matchup", "MIN": "Min", "PTS": "Pts",
                 "REB": "Reb", "AST": "Ast", "STL": "Stl", "BLK": "Blk",
-                "FG3M": "3PM", "TOV": "TOV",
+                "FG3M": "3PM", "FG3A": "3PA", "TOV": "TOV",
             })
             st.dataframe(h2h_display, use_container_width=True, hide_index=True)
             if roster_change_active:
@@ -1648,14 +1649,14 @@ with tab1:
                 if vs_player_df.empty:
                     st.caption(f"No shared games found against {name} in this window.")
                     continue
-                vp_display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV"]
+                vp_display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "FG3A", "TOV"]
                 vp_display_cols = [c for c in vp_display_cols if c in vs_player_df.columns]
                 vp_display = vs_player_df[vp_display_cols].copy()
                 vp_display["GAME_DATE"] = vp_display["GAME_DATE"].dt.strftime("%-m/%-d/%Y")
                 vp_display = vp_display.rename(columns={
                     "GAME_DATE": "Date", "MATCHUP": "Matchup", "MIN": "Min", "PTS": "Pts",
                     "REB": "Reb", "AST": "Ast", "STL": "Stl", "BLK": "Blk",
-                    "FG3M": "3PM", "TOV": "TOV",
+                    "FG3M": "3PM", "FG3A": "3PA", "TOV": "TOV",
                 })
                 st.dataframe(vp_display, use_container_width=True, hide_index=True)
                 st.caption(
@@ -1683,14 +1684,14 @@ with tab1:
                     )
                 else:
                     combo_df, _ = get_head_to_head_vs_player_combo(player_id, valid_ids)
-                    combo_display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV"]
+                    combo_display_cols = ["GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG3M", "FG3A", "TOV"]
                     combo_display_cols = [c for c in combo_display_cols if c in combo_df.columns]
                     combo_display = combo_df[combo_display_cols].copy()
                     combo_display["GAME_DATE"] = combo_display["GAME_DATE"].dt.strftime("%-m/%-d/%Y")
                     combo_display = combo_display.rename(columns={
                         "GAME_DATE": "Date", "MATCHUP": "Matchup", "MIN": "Min", "PTS": "Pts",
                         "REB": "Reb", "AST": "Ast", "STL": "Stl", "BLK": "Blk",
-                        "FG3M": "3PM", "TOV": "TOV",
+                        "FG3M": "3PM", "FG3A": "3PA", "TOV": "TOV",
                     })
                     st.dataframe(combo_display, use_container_width=True, hide_index=True)
                     st.caption(

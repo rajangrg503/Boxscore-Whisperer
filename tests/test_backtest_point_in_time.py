@@ -67,11 +67,11 @@ def _write_gamelog_cache(tmp_path, player_id, season, rows):
 
 
 def _row(game_date, pts):
-    # All 7 real STAT_COLUMNS -- stats_from_gamelog() (called via the
+    # All 8 real STAT_COLUMNS -- stats_from_gamelog() (called via the
     # real, unmocked STAT_COLUMNS default) needs every one present,
     # same shape a real cached gamelog row actually has.
     return {"GAME_DATE": game_date, "PTS": pts, "AST": 0, "REB": 0,
-            "STL": 0, "BLK": 0, "FG3M": 0, "TOV": 0}
+            "STL": 0, "BLK": 0, "FG3M": 0, "TOV": 0, "FG3A": 0}
 
 
 def test_point_in_time_baseline_excludes_games_on_or_after_target_date(isolated_cache):

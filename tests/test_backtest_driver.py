@@ -21,7 +21,7 @@ def isolated_cache(tmp_path, monkeypatch):
 
 
 def _stat_row(**overrides):
-    base = {"PTS": 20, "AST": 5, "REB": 6, "STL": 1, "BLK": 0, "FG3M": 2, "TOV": 3}
+    base = {"PTS": 20, "AST": 5, "REB": 6, "STL": 1, "BLK": 0, "FG3M": 2, "TOV": 3, "FG3A": 5}
     base.update(overrides)
     return base
 
