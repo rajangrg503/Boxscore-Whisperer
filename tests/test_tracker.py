@@ -2,6 +2,7 @@
 temp file (monkeypatched) so they never touch the real prediction_log.csv.
 """
 
+import contextlib
 import datetime
 
 import pandas as pd
@@ -48,6 +49,10 @@ def test_append_then_load_roundtrip(temp_log):
     # class of quirk as the documented id-as-int64 flake. app.py's
     # filter already accounts for this via .fillna("") before comparing.
     assert pd.isna(df.iloc[0]["saved_by_email"]) or df.iloc[0]["saved_by_email"] == ""
+    # source defaults to "single_player" when not passed -- every call
+    # site before Full Matchup tracking existed still gets labeled
+    # correctly, not left blank.
+    assert df.iloc[0]["source"] == "single_player"
 
 
 def test_id_column_survives_pandas_numeric_misparse(temp_log):
@@ -186,6 +191,10 @@ def test_backward_compatible_with_old_schema_rows(temp_log):
     # missing values with .fillna("") before comparing to the entered email.
     assert pd.isna(old["saved_by_email"]) or old["saved_by_email"] == ""
     assert final["saved_by_email"].fillna("").iloc[0] != "somebody@example.com"
+    # Same additive treatment for source -- a pre-existing row has no
+    # source value (NaN), not a fabricated guess at which tool saved it.
+    assert pd.isna(old["source"])
+    assert new["source"] == "single_player"
 
 
 def test_load_reindexes_missing_columns_without_keyerror(temp_log):
@@ -225,3 +234,79 @@ def test_atomic_write_leaves_no_temp_file_behind(temp_log):
     )
     leftover_tmp_files = list(temp_log.parent.glob(f"{temp_log.name}.tmp.*"))
     assert leftover_tmp_files == []
+
+
+def _batch_row(player_id, player_full_name, **overrides):
+    row = {
+        "player_id": player_id, "player_full_name": player_full_name,
+        "opponent_full_name": "Boston Celtics", "opponent_abbr": "BOS",
+        "game_date": datetime.date(2026, 10, 20), "predictions": _sample_predictions(),
+    }
+    row.update(overrides)
+    return row
+
+
+def test_append_predictions_batch_saves_all_rows_with_shared_email_and_source(temp_log):
+    rows_input = [
+        _batch_row(1, "Player One"),
+        _batch_row(2, "Player Two"),
+        _batch_row(3, "Player Three"),
+    ]
+    ids = tracker.append_predictions_batch(rows_input, saved_by_email="alice@example.com")
+
+    assert len(ids) == 3
+    assert len(set(ids)) == 3  # distinct ids, not the same id reused
+
+    df = tracker.load_prediction_log()
+    assert len(df) == 3
+    assert (df["saved_by_email"] == "alice@example.com").all()
+    assert (df["source"] == "full_matchup").all()  # the default for this function
+    assert set(df["player_full_name"]) == {"Player One", "Player Two", "Player Three"}
+    assert (df["game_date"] == "2026-10-20").all()
+
+
+def test_append_predictions_batch_uses_one_lock_for_the_whole_batch(temp_log, monkeypatch):
+    # The actual property being sold here: NOT append_prediction_to_log()
+    # called once per player. A loop would still be correct (each call
+    # is independently lock-protected) but would acquire the lock N
+    # times, leaving N-1 windows where a concurrent reader could see a
+    # partial roster. Counting real _locked() invocations is the only
+    # way to prove "one atomic batch" rather than just "produces the
+    # right rows" -- a loop-based implementation would pass a
+    # rows-are-correct-only test just as easily.
+    lock_acquisitions = []
+    real_locked = tracker._locked
+
+    @contextlib.contextmanager
+    def _counting_locked():
+        lock_acquisitions.append(1)
+        with real_locked():
+            yield
+
+    monkeypatch.setattr(tracker, "_locked", _counting_locked)
+
+    rows_input = [_batch_row(1, "Player One"), _batch_row(2, "Player Two"), _batch_row(3, "Player Three")]
+    tracker.append_predictions_batch(rows_input, saved_by_email="alice@example.com")
+
+    assert len(lock_acquisitions) == 1
+
+
+def test_append_predictions_batch_empty_list_is_a_no_op(temp_log):
+    ids = tracker.append_predictions_batch([], saved_by_email="alice@example.com")
+    assert ids == []
+    # Confirms the file was never touched at all, not written as an
+    # empty-but-valid CSV -- load_prediction_log() falls back to the
+    # same empty-columns DataFrame whether the file never existed or
+    # genuinely has zero rows, so checking the file's existence is the
+    # only way to prove "no-op", not just "looks empty afterward".
+    import os
+    assert not os.path.exists(temp_log)
+
+
+def test_append_predictions_batch_respects_explicit_source_override(temp_log):
+    # "full_matchup" is the default (see the shared-fields test above);
+    # this proves the parameter is actually used, not hardcoded, by
+    # passing something else.
+    tracker.append_predictions_batch([_batch_row(1, "Player One")], source="some_other_source")
+    df = tracker.load_prediction_log()
+    assert df.iloc[0]["source"] == "some_other_source"

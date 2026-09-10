@@ -42,6 +42,7 @@ from engine.tracker import (
     LOG_PATH,
     load_prediction_log,
     append_prediction_to_log,
+    append_predictions_batch,
     refresh_pending_predictions,
 )
 from engine.game_log import fetch_combined_game_log, resolve_season_gamelog
@@ -793,17 +794,27 @@ with st.sidebar:
 
             with st.expander("View all saved predictions"):
                 display_log = my_log_df[[
-                    "saved_at", "player_full_name", "opponent_full_name", "game_date",
+                    "saved_at", "source", "player_full_name", "opponent_full_name", "game_date",
                     "status", "PTS_low", "PTS_mid", "PTS_high", "PTS_actual", "PTS_hit",
-                ]].rename(columns={
-                    "saved_at": "Saved", "player_full_name": "Player",
+                ]].copy()
+                # Every row saved before Full Matchup tracking existed
+                # predates the source column entirely (NaN, not "" --
+                # this column never had an empty-string default the way
+                # saved_by_email does) -- but every one of those rows
+                # WAS a single-player save, since Full Matchup had no
+                # save feature until now. Filling the display value is
+                # an accurate inference from when the column was added,
+                # not a fabricated guess.
+                display_log["source"] = display_log["source"].fillna("single_player")
+                display_log = display_log.rename(columns={
+                    "saved_at": "Saved", "source": "Source", "player_full_name": "Player",
                     "opponent_full_name": "Opponent", "game_date": "Game Date",
                     "status": "Status", "PTS_low": "Pts Low", "PTS_mid": "Pts Mid",
                     "PTS_high": "Pts High", "PTS_actual": "Pts Actual", "PTS_hit": "Pts Hit?",
                 })
                 st.dataframe(display_log, use_container_width=True, hide_index=True)
                 st.caption(
-                    "Showing Points only here for space -- all 7 tracked stats are saved "
+                    "Showing Points only here for space -- all 8 tracked stats are saved "
                     f"in the underlying file at {os.path.basename(LOG_PATH)}."
                 )
 
@@ -1764,6 +1775,22 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
     Returns None if there isn't enough real data for this player (e.g. a
     true rookie with no NBA history) so the caller can flag it rather
     than silently guessing.
+
+    Returns (predictions, season_source, def_source_note, layer_results).
+    predictions now includes "low"/"high"/"base" alongside "predicted"
+    -- the exact same spread formula tab1 already uses (base_std when
+    available, else predicted*0.2 as a fallback spread; +/-0.6*spread
+    for the range), added so a saved Full Matchup prediction can be
+    checked against a real result the same way a single-player one can
+    (engine/tracker.py's {col}_hit needs a real low/high to check
+    against, not just a point estimate). No post_change_thin_sample
+    widening here -- that's a tab1-only roster-change concept tab2
+    doesn't have. layer_results is {"opponent_defense": defense_result}
+    plus "out_redistribution" only when it was actually computed (never
+    a None value in the dict -- a caller iterating layer_results and
+    calling .applied on every value would break on that) -- this is
+    what a caller needs to build a real layers_json when saving, not
+    just the note strings tab2's table already showed.
     """
     try:
         season_stats, season_source, _season_n = get_season_baseline(player_id, player_name)
@@ -1791,13 +1818,21 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
 
     predictions = {}
     for col, _label in STAT_COLUMNS:
-        base_mean, _base_std = season_stats[col]
+        base_mean, base_std = season_stats[col]
         multiplier = defense_result.multiplier_for(col)
         if redistribution_result is not None:
             multiplier *= redistribution_result.multiplier_for(col)
-        predictions[col] = {"predicted": base_mean * multiplier}
+        predicted = base_mean * multiplier
+        spread = base_std if pd.notna(base_std) else predicted * 0.2
+        low = max(0, predicted - spread * 0.6)
+        high = predicted + spread * 0.6
+        predictions[col] = {"base": base_mean, "predicted": predicted, "low": low, "high": high}
 
-    return predictions, season_source, def_source_note, redistribution_result
+    layer_results = {"opponent_defense": defense_result}
+    if redistribution_result is not None:
+        layer_results["out_redistribution"] = redistribution_result
+
+    return predictions, season_source, def_source_note, layer_results
 
 
 
@@ -1829,8 +1864,8 @@ with tab2:
         team_a_id, team_a_full, team_a_abbr = get_team_id(team_a_input)
         team_b_id, team_b_full, team_b_abbr = get_team_id(team_b_input)
         st.session_state["matchup_context"] = {
-            "team_a_id": team_a_id, "team_a_full": team_a_full,
-            "team_b_id": team_b_id, "team_b_full": team_b_full,
+            "team_a_id": team_a_id, "team_a_full": team_a_full, "team_a_abbr": team_a_abbr,
+            "team_b_id": team_b_id, "team_b_full": team_b_full, "team_b_abbr": team_b_abbr,
         }
         # A freshly-submitted matchup starts with nobody marked out --
         # also avoids a stale selection from a PREVIOUS matchup (a
@@ -1842,8 +1877,8 @@ with tab2:
 
     if "matchup_context" in st.session_state:
         ctx = st.session_state["matchup_context"]
-        team_a_id, team_a_full = ctx["team_a_id"], ctx["team_a_full"]
-        team_b_id, team_b_full = ctx["team_b_id"], ctx["team_b_full"]
+        team_a_id, team_a_full, team_a_abbr = ctx["team_a_id"], ctx["team_a_full"], ctx["team_a_abbr"]
+        team_b_id, team_b_full, team_b_abbr = ctx["team_b_id"], ctx["team_b_full"], ctx["team_b_abbr"]
 
         def build_team_projection(team_id, opponent_id, out_player_id=None):
             """out_player_id: excluded entirely from the projected rows
@@ -1852,18 +1887,25 @@ with tab2:
             passed through to every remaining player's prediction so
             engine/adjustments/teammates.py's
             get_out_redistribution_adjustment can apply. Returns
-            (rows, skipped, unadjusted, out_name): `skipped` is the
-            existing "not enough data to project at all" case;
-            `unadjusted` is a distinct, narrower case -- the player WAS
-            projected, but there wasn't enough real "games with vs.
-            without the out player" history to trust a redistribution
-            adjustment for them specifically, so their row shows their
-            normal, unadjusted number instead of a fabricated one."""
+            (rows, skipped, unadjusted, out_name, trackable):
+            `skipped` is the existing "not enough data to project at
+            all" case; `unadjusted` is a distinct, narrower case -- the
+            player WAS projected, but there wasn't enough real "games
+            with vs. without the out player" history to trust a
+            redistribution adjustment for them specifically, so their
+            row shows their normal, unadjusted number instead of a
+            fabricated one. `trackable` is one dict per successfully-
+            projected player (player_id, player_full_name, predictions,
+            layer_results) -- everything needed to later save this
+            player's prediction, without threading opponent/game-date
+            context through here (the caller adds that; this function
+            doesn't know the game being tracked, only the matchup)."""
             roster = get_team_roster(team_id)
             rows = []
             skipped = []
             unadjusted = []
             out_name = None
+            trackable = []
             for pid, pname in roster:
                 if pid == out_player_id:
                     out_name = pname
@@ -1872,16 +1914,21 @@ with tab2:
                 if result is None:
                     skipped.append(pname)
                     continue
-                predictions, _season_source, _def_source_note, redistribution_result = result
+                predictions, _season_source, _def_source_note, layer_results = result
+                redistribution_result = layer_results.get("out_redistribution")
                 if redistribution_result is not None and not redistribution_result.applied:
                     unadjusted.append(pname)
                 row = {"Player": pname}
                 for col, label in STAT_COLUMNS:
                     row[label] = round(predictions[col]["predicted"], 1)
                 rows.append(row)
-            return rows, skipped, unadjusted, out_name
+                trackable.append({
+                    "player_id": pid, "player_full_name": pname,
+                    "predictions": predictions, "layer_results": layer_results,
+                })
+            return rows, skipped, unadjusted, out_name, trackable
 
-        def render_team_projection(team_id, team_full, opponent_id, out_key):
+        def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr, out_key):
             st.markdown(f"**{team_full}** projected box score")
             roster = get_team_roster(team_id)
             out_choice = st.selectbox(
@@ -1894,7 +1941,7 @@ with tab2:
                 out_id = next((pid for pid, pname in roster if pname == out_choice), None)
 
             with st.spinner("Calculating..."):
-                rows, skipped, unadjusted, out_name = build_team_projection(
+                rows, skipped, unadjusted, out_name, trackable = build_team_projection(
                     team_id, opponent_id, out_player_id=out_id
                 )
 
@@ -1917,5 +1964,50 @@ with tab2:
             if skipped:
                 st.caption(f"Not enough data to project: {', '.join(skipped)}")
 
-        render_team_projection(team_a_id, team_a_full, team_b_id, "team_a_out_input")
-        render_team_projection(team_b_id, team_b_full, team_a_id, "team_b_out_input")
+            return [
+                {**t, "opponent_full_name": opponent_full, "opponent_abbr": opponent_abbr}
+                for t in trackable
+            ]
+
+        team_a_trackable = render_team_projection(
+            team_a_id, team_a_full, team_b_id, team_b_full, team_b_abbr, "team_a_out_input"
+        )
+        team_b_trackable = render_team_projection(
+            team_b_id, team_b_full, team_a_id, team_a_full, team_a_abbr, "team_b_out_input"
+        )
+
+        st.markdown("---")
+        matchup_game_date = st.date_input(
+            "Game date (required to save this matchup for tracking)",
+            value=None, key="matchup_game_date_input",
+        )
+        if st.button("💾 Save this matchup's predictions", key="save_matchup_btn"):
+            save_email = st.session_state.get("tracker_email_input", "").strip().lower()
+            all_trackable = team_a_trackable + team_b_trackable
+            if not save_email:
+                st.warning(
+                    "Enter your email in the Prediction Tracker (sidebar) first, "
+                    "so you can find these predictions again."
+                )
+            elif not matchup_game_date:
+                st.warning(
+                    "Enter the game date first -- required to track this matchup "
+                    "against its real result later."
+                )
+            elif not all_trackable:
+                st.warning("No players with enough data to save for this matchup.")
+            else:
+                rows_input = [
+                    {
+                        "player_id": t["player_id"], "player_full_name": t["player_full_name"],
+                        "opponent_full_name": t["opponent_full_name"], "opponent_abbr": t["opponent_abbr"],
+                        "game_date": matchup_game_date, "predictions": t["predictions"],
+                        "layer_results": t["layer_results"],
+                    }
+                    for t in all_trackable
+                ]
+                new_ids = append_predictions_batch(rows_input, saved_by_email=save_email, source="full_matchup")
+                st.success(
+                    f"Saved {len(new_ids)} player predictions for this matchup. "
+                    f"Check the Prediction Tracker in the sidebar later."
+                )

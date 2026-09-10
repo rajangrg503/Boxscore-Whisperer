@@ -57,6 +57,25 @@ principle as the columns above: rows saved before this existed have
 no email, normalize to "", and are therefore not visible to anyone
 through the filtered UI -- an accepted, honest consequence of not
 being able to retroactively invent an owner, not a bug.
+
+Full Matchup tracking (source, append_predictions_batch): Full Matchup
+projects a whole roster at once (10-15+ players), not one player, so
+saving its predictions means writing many rows in one action, not one.
+_build_row() factors the per-row construction out of
+append_prediction_to_log() so append_predictions_batch() can reuse it
+without duplicating the stat-column/layers_json logic. The batch
+function holds ONE _locked() acquisition across building AND writing
+ALL rows -- deliberately not append_prediction_to_log() called in a
+loop. A loop would still be safe (each call is independently lock-
+protected, so no corruption or lost update) but NOT atomic as a whole
+batch: a concurrent reader could observe a partial roster (e.g. 6 of
+15 players) mid-save. One lock for the whole batch closes that window
+instead of just tolerating it. `source` ("single_player" |
+"full_matchup") is additive, defaulted for every existing call site,
+so downstream analysis can eventually ask whether the two tools'
+different adjustment stacks (six layers vs. two) predict differently
+-- a question this column exists to make answerable later, not to
+answer itself now.
 """
 
 import contextlib
@@ -76,7 +95,7 @@ LOG_PATH = os.path.join(
 LOCK_PATH = LOG_PATH + ".lock"
 
 LOG_COLUMNS = ["id", "saved_at", "player_id", "player_full_name", "opponent_full_name",
-               "opponent_abbr", "game_date", "status", "saved_by_email"]
+               "opponent_abbr", "game_date", "status", "saved_by_email", "source"]
 for _col, _ in STAT_COLUMNS:
     LOG_COLUMNS += [f"{_col}_low", f"{_col}_mid", f"{_col}_high", f"{_col}_actual", f"{_col}_hit", f"{_col}_base"]
 LOG_COLUMNS += ["layers_json"]
@@ -172,17 +191,17 @@ def _build_layers_json(layer_results):
     })
 
 
-def append_prediction_to_log(player_id, player_full_name, opponent_full_name,
-                              opponent_abbr, game_date, predictions, layer_results=None,
-                              saved_by_email=None):
-    """predictions is the same dict built in main(): {col: {"low", "predicted",
-    "high", "base"}}. layer_results is {layer_name: AdjustmentResult} for every
-    layer that fired on this prediction -- optional, so old call shapes without
-    it still work (layers_json is just "{}" in that case). saved_by_email is the
-    plain string typed into the sidebar's tracker email input -- optional and
-    normalized here (stripped, lowercased) so app.py's filter comparison doesn't
-    have to repeat that; see this module's docstring for what this does and
-    doesn't protect against."""
+def _build_row(player_id, player_full_name, opponent_full_name, opponent_abbr,
+                game_date, predictions, layer_results=None, saved_by_email=None,
+                source="single_player"):
+    """One fully-formed row dict, ready to append -- factored out of
+    append_prediction_to_log() so append_predictions_batch() can reuse
+    the exact same per-row construction (stat columns, layers_json)
+    without duplicating it. predictions is {col: {"low", "predicted",
+    "high", "base"}}. layer_results is {layer_name: AdjustmentResult}
+    for every layer that fired -- optional. source distinguishes which
+    tool produced this row ("single_player" | "full_matchup"); see
+    module docstring."""
     row = {
         "id": uuid.uuid4().hex[:8],
         "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -193,6 +212,7 @@ def append_prediction_to_log(player_id, player_full_name, opponent_full_name,
         "game_date": game_date.isoformat() if game_date else "",
         "status": "pending",
         "saved_by_email": (saved_by_email or "").strip().lower(),
+        "source": source,
     }
     for col, _ in STAT_COLUMNS:
         p = predictions[col]
@@ -203,12 +223,60 @@ def append_prediction_to_log(player_id, player_full_name, opponent_full_name,
         row[f"{col}_hit"] = None
         row[f"{col}_base"] = round(p["base"], 1) if "base" in p else None
     row["layers_json"] = _build_layers_json(layer_results)
+    return row
 
+
+def append_prediction_to_log(player_id, player_full_name, opponent_full_name,
+                              opponent_abbr, game_date, predictions, layer_results=None,
+                              saved_by_email=None, source="single_player"):
+    """saved_by_email is the plain string typed into the sidebar's tracker
+    email input -- optional; see this module's docstring for what this
+    does and doesn't protect against. See _build_row() for the shared
+    per-row construction."""
+    row = _build_row(
+        player_id, player_full_name, opponent_full_name, opponent_abbr,
+        game_date, predictions, layer_results=layer_results,
+        saved_by_email=saved_by_email, source=source,
+    )
     with _locked():
         df = load_prediction_log()
         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
         save_prediction_log(df)
     return row["id"]
+
+
+def append_predictions_batch(rows_input, saved_by_email=None, source="full_matchup"):
+    """Saves many predictions (a whole Full Matchup roster) as ONE
+    atomic unit -- one _locked() acquisition across building AND
+    writing every row, not append_prediction_to_log() called once per
+    player. See module docstring for why that distinction matters (a
+    loop is safe but not atomic as a whole batch).
+
+    rows_input: list of dicts, each with the same fields
+    append_prediction_to_log() takes per call (player_id,
+    player_full_name, opponent_full_name, opponent_abbr, game_date,
+    predictions, and optionally layer_results). saved_by_email and
+    source apply uniformly to the whole batch -- a Full Matchup save is
+    one action by one visitor for one matchup, not a mix.
+
+    Returns the list of new row ids, in the same order as rows_input.
+    Returns [] without touching the file if rows_input is empty."""
+    if not rows_input:
+        return []
+    built_rows = [
+        _build_row(
+            r["player_id"], r["player_full_name"], r["opponent_full_name"],
+            r["opponent_abbr"], r["game_date"], r["predictions"],
+            layer_results=r.get("layer_results"), saved_by_email=saved_by_email,
+            source=source,
+        )
+        for r in rows_input
+    ]
+    with _locked():
+        df = load_prediction_log()
+        df = pd.concat([df, pd.DataFrame(built_rows)], ignore_index=True)
+        save_prediction_log(df)
+    return [r["id"] for r in built_rows]
 
 
 def try_resolve_prediction(row, get_head_to_head_log):
