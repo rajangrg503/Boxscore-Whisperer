@@ -12,4 +12,5 @@ STAT_COLUMNS = [
     ("FG3M", "3-Pointers Made"),
     ("TOV", "Turnovers"),
     ("FG3A", "3-Point Attempts"),
+    ("OREB", "Offensive Rebounds"),
 ]

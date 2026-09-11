@@ -16,7 +16,7 @@ from engine.adjustments.teammates import get_out_redistribution_adjustment
 
 
 def _row(game_id, **stats):
-    row = {"Game_ID": game_id, "PTS": 20, "AST": 5, "REB": 6, "STL": 1, "BLK": 0, "FG3M": 2, "TOV": 3, "FG3A": 5}
+    row = {"Game_ID": game_id, "PTS": 20, "AST": 5, "REB": 6, "STL": 1, "BLK": 0, "FG3M": 2, "TOV": 3, "FG3A": 5, "OREB": 2}
     row.update(stats)
     return row
 
