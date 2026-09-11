@@ -76,6 +76,36 @@ so downstream analysis can eventually ask whether the two tools'
 different adjustment stacks (six layers vs. two) predict differently
 -- a question this column exists to make answerable later, not to
 answer itself now.
+
+Post-game context capture (_capture_post_game_context and its
+helpers): pure descriptive instrumentation, captured on a successful
+resolve, never read by anything yet -- consistent with the plan
+file's "self-evolving, not ever-changing" post-game feedback
+guardrails (quiet observation first, no acting on this data). A
+capture failure never blocks the hit/miss resolution it rides
+alongside; every new field defaults to None and stays None if its own
+data source isn't available, same "leave it blank, don't guess"
+principle as every other insufficient-data path in this app.
+
+Four things worth knowing before touching this block:
+1. Season here means "the season the resolved GAME belongs to", via
+   engine.season.season_for_date() -- NOT CURRENT_SEASON/PREVIOUS_SEASON,
+   which answer "what season represents right now" and would be wrong
+   for a game resolved months after it was played.
+2. Shooting percentages are computed as sum(makes)/sum(attempts) across
+   real season games, never an average of per-game percentages (wrong
+   when attempt counts differ game to game).
+3. Teammate-out detection matches by personId, never by name -- this
+   codebase already hit real same-team, same-last-name collisions
+   (the Brandon Williams bug, and two Williamses on one real OKC
+   roster this session), so name-string matching is never trusted here.
+4. _key_teammates_for() uses the CURRENT roster cache, not the
+   historical roster as of the resolved game -- a deliberate, accepted
+   simplification for near-term resolution of recent/current-season
+   games (the actual use case), not built for accurately resolving a
+   years-old game where a trade happened in between. The backtest
+   project's dedicated point-in-time roster handling exists for that
+   different problem and isn't reused here.
 """
 
 import contextlib
@@ -86,8 +116,15 @@ import os
 import uuid
 
 import pandas as pd
+import streamlit as st
+from nba_api.stats.endpoints import boxscoreadvancedv3
 
 from engine.stat_columns import STAT_COLUMNS
+from engine.season import season_for_date
+from engine.team_ids import TEAM_ID_BY_ABBR
+from engine.cache import _load_df_cache, _save_df_cache
+from engine.game_log import fetch_combined_game_log
+from engine.adjustments.defense import get_league_advanced_team_stats
 
 LOG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prediction_log.csv"
@@ -99,6 +136,23 @@ LOG_COLUMNS = ["id", "saved_at", "player_id", "player_full_name", "opponent_full
 for _col, _ in STAT_COLUMNS:
     LOG_COLUMNS += [f"{_col}_low", f"{_col}_mid", f"{_col}_high", f"{_col}_actual", f"{_col}_hit", f"{_col}_base"]
 LOG_COLUMNS += ["layers_json"]
+# Post-game context -- populated only on a successful resolve (see
+# _capture_post_game_context), NaN otherwise. Additive, same pattern
+# as every column above.
+LOG_COLUMNS += [
+    "game_id",
+    "min_actual", "min_season_avg",
+    "fg_pct_actual", "fg_pct_season_avg",
+    "fg3_pct_actual", "fg3_pct_season_avg",
+    "opp_def_rating_actual", "opp_def_rating_season_avg",
+    "key_teammate_out", "key_teammate_out_names",
+]
+
+KEY_TEAMMATE_GAMES_PLAYED_PCT = 0.70  # a "key" teammate is one who played in
+# at least this fraction of their team's real games that season -- a casual
+# "this person's clearly a regular" bar, not a precise statistical cutoff.
+# Reconsider this threshold, not the mechanism, if it turns out too strict
+# or too loose in practice (same spirit as MIN_BASELINE_GAMES elsewhere).
 
 
 @contextlib.contextmanager
@@ -159,10 +213,19 @@ def load_prediction_log():
     than trying to constrain id generation against every string shape
     pandas' inference might misfire on -- see
     test_id_column_survives_pandas_numeric_misparse for both cases
-    pinned as a permanent regression test."""
+    pinned as a permanent regression test.
+
+    dtype={..., "game_id": str} guards against the exact same failure
+    mode for a second column: real NBA Game_IDs are zero-padded strings
+    (e.g. "0022400604", from nba_api's own Game_ID column, itself
+    already dtype str at the source -- confirmed directly against a
+    real cached gamelog). Without this, an all-digit Game_ID read back
+    via plain pd.read_csv() silently loses its leading zeros as int64
+    ("22400604") -- caught live during this column's own verification,
+    not theoretically."""
     if os.path.exists(LOG_PATH):
         try:
-            df = pd.read_csv(LOG_PATH, dtype={"id": str})
+            df = pd.read_csv(LOG_PATH, dtype={"id": str, "game_id": str})
             return df.reindex(columns=LOG_COLUMNS)
         except Exception:
             return pd.DataFrame(columns=LOG_COLUMNS)
@@ -279,6 +342,187 @@ def append_predictions_batch(rows_input, saved_by_email=None, source="full_match
     return [r["id"] for r in built_rows]
 
 
+def _load_or_fetch_advanced_box_score(game_id):
+    """Real single-game advanced box score -- player-level and
+    team-level frames from ONE BoxScoreAdvancedV3 call, each cached
+    under its own key. Deliberately not cached_or_live() (which caches
+    one dataframe per call): this is one real API response split into
+    two frames, not two separate fetches, so it mirrors
+    cached_or_live()'s live-then-cached-fallback behavior by hand via
+    _load_df_cache/_save_df_cache directly rather than issuing the
+    live call twice.
+
+    Returns (player_df, team_df) -- either may be None if that half
+    was never successfully cached (see this module's docstring for why
+    a partial-write mismatch can only ever surface as one side being
+    None here, never as silently-wrong paired data)."""
+    player_key = f"boxscore_advanced_player_{game_id}"
+    team_key = f"boxscore_advanced_team_{game_id}"
+
+    if not st.session_state.get("_live_nba_api_blocked"):
+        try:
+            box = boxscoreadvancedv3.BoxScoreAdvancedV3(game_id=game_id, timeout=5)
+            frames = box.get_data_frames()
+            player_df, team_df = frames[0], frames[1]
+            _save_df_cache(player_key, player_df)
+            _save_df_cache(team_key, team_df)
+            return player_df, team_df
+        except Exception:
+            st.session_state["_live_nba_api_blocked"] = True
+
+    player_df, _ = _load_df_cache(player_key)
+    team_df, _ = _load_df_cache(team_key)
+    return player_df, team_df
+
+
+def _season_shooting_and_minutes(player_id, season):
+    """Real season-long minutes average and shooting percentages for
+    player_id in `season`, from their cached/fetched full-season
+    gamelog (fetch_combined_game_log -- the same shared source used
+    everywhere else, not a new fetch mechanism). Percentages are
+    sum(makes)/sum(attempts) across real games, never an average of
+    per-game percentages (wrong when attempt counts differ game to
+    game). Returns None if the season's gamelog can't be obtained
+    (blocked live + not cached) -- degrades by leaving its columns
+    blank, never by guessing."""
+    try:
+        df = fetch_combined_game_log(player_id, season)
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+
+    fga_sum, fgm_sum = df["FGA"].sum(), df["FGM"].sum()
+    fg3a_sum, fg3m_sum = df["FG3A"].sum(), df["FG3M"].sum()
+    return {
+        "min_avg": df["MIN"].mean(),
+        "fg_pct": (fgm_sum / fga_sum) if fga_sum else None,
+        "fg3_pct": (fg3m_sum / fg3a_sum) if fg3a_sum else None,
+    }
+
+
+def _key_teammates_for(team_id, season):
+    """Real players on team_id's CURRENT cached roster who played in at
+    least KEY_TEAMMATE_GAMES_PLAYED_PCT of the team's real games that
+    season -- the same "count real games played from a cached gamelog"
+    technique engine/adjustments/teammates.py's
+    get_out_redistribution_adjustment already uses, pointed at defining
+    "regular" instead of "out".
+
+    Uses the roster CACHE as-is, not the historical roster as of that
+    season -- see this module's docstring for why that's a deliberate,
+    accepted simplification for this feature's actual use case (near-
+    term resolution of recent games), not a point-in-time-correct
+    historical reconstruction.
+
+    Returns [(player_id, player_name), ...], possibly empty."""
+    roster_df, _ = _load_df_cache(f"roster_{team_id}")
+    if roster_df is None or roster_df.empty:
+        return []
+
+    try:
+        league_df = get_league_advanced_team_stats(season)
+        team_row = league_df[league_df["TEAM_ID"] == team_id]
+        if team_row.empty:
+            return []
+        team_games = int(team_row.iloc[0]["GP"])
+    except Exception:
+        return []
+    if team_games <= 0:
+        return []
+
+    key_teammates = []
+    for _, r in roster_df.iterrows():
+        pid, name = r["PLAYER_ID"], r["PLAYER"]
+        try:
+            gamelog = fetch_combined_game_log(pid, season)
+        except Exception:
+            continue
+        if gamelog is None or gamelog.empty:
+            continue
+        if len(gamelog) / team_games >= KEY_TEAMMATE_GAMES_PLAYED_PCT:
+            key_teammates.append((pid, name))
+    return key_teammates
+
+
+def _capture_post_game_context(row, actual, game_id):
+    """Pure descriptive instrumentation for a prediction that just
+    resolved -- see module docstring for the full design and the
+    guardrails this stays inside (capture only, nothing reads these
+    yet). Never raises: every field defaults to None and a failure
+    anywhere inside just leaves the remaining fields None too, so a
+    capture problem can never take down the hit/miss resolution it
+    rides alongside.
+
+    row: the row being resolved (already has player_id, opponent_abbr,
+    game_date). actual: the resolved game's own box-score row, already
+    fetched by try_resolve_prediction to compute {col}_actual -- reused
+    here for MIN/FG_PCT/FG3_PCT/MATCHUP instead of re-fetching. game_id:
+    this specific game's real Game_ID, from `actual`."""
+    context = {
+        "game_id": game_id,
+        "min_actual": None, "min_season_avg": None,
+        "fg_pct_actual": None, "fg_pct_season_avg": None,
+        "fg3_pct_actual": None, "fg3_pct_season_avg": None,
+        "opp_def_rating_actual": None, "opp_def_rating_season_avg": None,
+        "key_teammate_out": None, "key_teammate_out_names": None,
+    }
+
+    try:
+        if pd.notna(actual.get("MIN")):
+            context["min_actual"] = float(actual["MIN"])
+        if pd.notna(actual.get("FG_PCT")):
+            context["fg_pct_actual"] = float(actual["FG_PCT"])
+        if pd.notna(actual.get("FG3_PCT")):
+            context["fg3_pct_actual"] = float(actual["FG3_PCT"])
+    except Exception:
+        pass
+
+    try:
+        game_date = pd.to_datetime(row["game_date"]).date()
+        season = season_for_date(game_date)
+    except Exception:
+        return context  # can't determine season -- nothing below is derivable
+
+    season_stats = _season_shooting_and_minutes(int(row["player_id"]), season)
+    if season_stats:
+        context["min_season_avg"] = season_stats["min_avg"]
+        context["fg_pct_season_avg"] = season_stats["fg_pct"]
+        context["fg3_pct_season_avg"] = season_stats["fg3_pct"]
+
+    opponent_abbr = row.get("opponent_abbr")
+    matchup = actual.get("MATCHUP")
+    player_team_abbr = str(matchup).split()[0] if matchup else None
+
+    player_box, team_box = _load_or_fetch_advanced_box_score(game_id)
+
+    if team_box is not None and opponent_abbr:
+        opp_row = team_box[team_box["teamTricode"] == opponent_abbr]
+        if not opp_row.empty:
+            context["opp_def_rating_actual"] = float(opp_row.iloc[0]["defensiveRating"])
+
+    opp_team_id = TEAM_ID_BY_ABBR.get(opponent_abbr)
+    if opp_team_id is not None:
+        try:
+            league_df = get_league_advanced_team_stats(season)
+            opp_season_row = league_df[league_df["TEAM_ID"] == opp_team_id]
+            if not opp_season_row.empty:
+                context["opp_def_rating_season_avg"] = float(opp_season_row.iloc[0]["DEF_RATING"])
+        except Exception:
+            pass
+
+    player_team_id = TEAM_ID_BY_ABBR.get(player_team_abbr)
+    if player_box is not None and player_team_abbr and player_team_id is not None:
+        played_ids = set(player_box[player_box["teamTricode"] == player_team_abbr]["personId"])
+        key_teammates = _key_teammates_for(player_team_id, season)
+        missing = [name for pid, name in key_teammates
+                   if pid != int(row["player_id"]) and pid not in played_ids]
+        context["key_teammate_out"] = bool(missing)
+        context["key_teammate_out_names"] = ", ".join(missing) if missing else None
+
+    return context
+
+
 def try_resolve_prediction(row, get_head_to_head_log):
     """Look up the player's actual game log for the saved game_date and
     opponent. If a matching game is found, fill in actual values and
@@ -324,6 +568,14 @@ def try_resolve_prediction(row, get_head_to_head_log):
         low, high = row.get(f"{col}_low"), row.get(f"{col}_high")
         if pd.notna(low) and pd.notna(high):
             row[f"{col}_hit"] = bool(low <= actual_val <= high)
+
+    game_id = actual.get("Game_ID")
+    try:
+        context = _capture_post_game_context(row, actual, game_id)
+        row.update(context)
+    except Exception:
+        pass  # capture failure never blocks the resolution above
+
     row["status"] = "resolved"
     return row
 

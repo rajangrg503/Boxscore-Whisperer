@@ -15,15 +15,13 @@ from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
-from nba_api.stats.static import teams
 
 from engine.cache import _load_df_cache
 from engine.baseline_stats import stats_from_gamelog
 from engine.stat_columns import STAT_COLUMNS
 from engine.adjustments.defense import get_defense_adjustment
 from engine.tracker import _build_layers_json
-
-TEAM_ID_BY_ABBR = {t["abbreviation"]: t["id"] for t in teams.get_teams()}
+from engine.team_ids import TEAM_ID_BY_ABBR
 
 
 def point_in_time_baseline(player_id, season, target_date: date):

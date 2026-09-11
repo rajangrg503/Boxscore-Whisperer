@@ -94,6 +94,24 @@ def test_id_column_survives_pandas_numeric_misparse(temp_log):
         assert not df[df["id"] == pid].empty, f"{pid!r} did not survive as a comparable string"
 
 
+def test_game_id_column_survives_pandas_numeric_misparse(temp_log):
+    """Same failure mode as test_id_column_survives_pandas_numeric_misparse,
+    a second real column: real NBA Game_IDs are zero-padded strings
+    (e.g. "0022400604") -- an all-digit Game_ID read back without an
+    explicit dtype silently loses its leading zeros as int64. Caught
+    live while verifying the post-game context capture columns, not
+    theoretically."""
+    row = {c: None for c in tracker.LOG_COLUMNS}
+    row.update({"id": "abc12345", "player_id": 1, "player_full_name": "X",
+                "status": "resolved", "game_id": "0022400604"})
+    pd.DataFrame([row]).to_csv(temp_log, index=False)
+
+    df = tracker.load_prediction_log()
+
+    assert not pd.api.types.is_numeric_dtype(df["game_id"])
+    assert df.iloc[0]["game_id"] == "0022400604"
+
+
 def test_saved_by_email_is_normalized(temp_log):
     tracker.append_prediction_to_log(
         2544, "LeBron James", "Boston Celtics", "BOS",
@@ -310,3 +328,175 @@ def test_append_predictions_batch_respects_explicit_source_override(temp_log):
     tracker.append_predictions_batch([_batch_row(1, "Player One")], source="some_other_source")
     df = tracker.load_prediction_log()
     assert df.iloc[0]["source"] == "some_other_source"
+
+
+# --- Post-game context capture (_capture_post_game_context and helpers) ---
+
+
+def test_season_shooting_and_minutes_sums_before_dividing(monkeypatch):
+    # The whole point of sum(makes)/sum(attempts): a naive mean() of
+    # per-game percentages would be wrong here. Game 1 is 10/10 (100%),
+    # game 2 is 0/10 (0%) -- mean-of-percentages gives 50%, but the real
+    # combined percentage is 10/20 = 50% too by coincidence, so use
+    # unequal attempt counts to actually distinguish the two approaches:
+    # game 1 is 1/1 (100%), game 2 is 1/19 (~5.3%) -- mean-of-percentages
+    # gives ~52.6%, but sum/sum gives 2/20 = 10%.
+    fake_log = pd.DataFrame([
+        {"MIN": 30, "FGA": 1, "FGM": 1, "FG3A": 1, "FG3M": 1},
+        {"MIN": 20, "FGA": 19, "FGM": 1, "FG3A": 9, "FG3M": 0},
+    ])
+    monkeypatch.setattr(tracker, "fetch_combined_game_log", lambda pid, season: fake_log)
+
+    result = tracker._season_shooting_and_minutes(201939, "2024-25")
+
+    assert result["min_avg"] == 25.0
+    assert result["fg_pct"] == pytest.approx(2 / 20)
+    assert result["fg3_pct"] == pytest.approx(1 / 10)
+
+
+def test_season_shooting_and_minutes_returns_none_on_empty_or_error(monkeypatch):
+    monkeypatch.setattr(tracker, "fetch_combined_game_log", lambda pid, season: pd.DataFrame())
+    assert tracker._season_shooting_and_minutes(201939, "2024-25") is None
+
+    def _raise(pid, season):
+        raise RuntimeError("blocked")
+    monkeypatch.setattr(tracker, "fetch_combined_game_log", _raise)
+    assert tracker._season_shooting_and_minutes(201939, "2024-25") is None
+
+
+def test_key_teammates_for_applies_70_percent_threshold(monkeypatch):
+    roster_df = pd.DataFrame([
+        {"PLAYER_ID": 1, "PLAYER": "Regular Starter"},
+        {"PLAYER_ID": 2, "PLAYER": "Occasional Bench Player"},
+    ])
+    monkeypatch.setattr(tracker, "_load_df_cache", lambda key: (roster_df, None) if key == "roster_100" else (None, None))
+    league_df = pd.DataFrame([{"TEAM_ID": 100, "GP": 82}])
+    monkeypatch.setattr(tracker, "get_league_advanced_team_stats", lambda season: league_df)
+
+    def _fake_gamelog(pid, season):
+        # Player 1 played 60/82 (~73%, clears 70%); player 2 played 20/82 (~24%, doesn't).
+        n_games = 60 if pid == 1 else 20
+        return pd.DataFrame([{"GAME_DATE": "2025-01-01"}] * n_games)
+    monkeypatch.setattr(tracker, "fetch_combined_game_log", _fake_gamelog)
+
+    key_teammates = tracker._key_teammates_for(100, "2024-25")
+
+    assert key_teammates == [(1, "Regular Starter")]
+
+
+def test_key_teammates_for_empty_when_roster_or_team_stats_missing(monkeypatch):
+    monkeypatch.setattr(tracker, "_load_df_cache", lambda key: (None, None))
+    assert tracker._key_teammates_for(100, "2024-25") == []
+
+    roster_df = pd.DataFrame([{"PLAYER_ID": 1, "PLAYER": "X"}])
+    monkeypatch.setattr(tracker, "_load_df_cache", lambda key: (roster_df, None))
+    monkeypatch.setattr(tracker, "get_league_advanced_team_stats", lambda season: pd.DataFrame([{"TEAM_ID": 999, "GP": 82}]))
+    assert tracker._key_teammates_for(100, "2024-25") == []
+
+
+def test_capture_post_game_context_populates_all_fields_with_real_shaped_data(monkeypatch):
+    row = {"player_id": 201939, "opponent_abbr": "BOS", "game_date": "2025-01-20"}
+    actual = pd.Series({
+        "MIN": 27, "FG_PCT": 0.375, "FG3_PCT": 0.333,
+        "MATCHUP": "GSW vs. BOS", "Game_ID": "0022400604",
+    })
+
+    monkeypatch.setattr(tracker, "_season_shooting_and_minutes",
+                         lambda pid, season: {"min_avg": 32.5, "fg_pct": 0.47, "fg3_pct": 0.41})
+
+    team_box = pd.DataFrame([
+        {"teamTricode": "BOS", "defensiveRating": 89.5},
+        {"teamTricode": "GSW", "defensiveRating": 130.2},
+    ])
+    player_box = pd.DataFrame([
+        {"teamTricode": "GSW", "personId": 201939},
+        {"teamTricode": "GSW", "personId": 1234},  # a played teammate, not out
+    ])
+    monkeypatch.setattr(tracker, "_load_or_fetch_advanced_box_score", lambda game_id: (player_box, team_box))
+
+    monkeypatch.setattr(tracker, "TEAM_ID_BY_ABBR", {"BOS": 1610612738, "GSW": 1610612744})
+    league_df = pd.DataFrame([{"TEAM_ID": 1610612738, "DEF_RATING": 112.0}])
+    monkeypatch.setattr(tracker, "get_league_advanced_team_stats", lambda season: league_df)
+
+    monkeypatch.setattr(tracker, "_key_teammates_for",
+                         lambda team_id, season: [(1234, "Played Teammate"), (5678, "Out Teammate")])
+
+    context = tracker._capture_post_game_context(row, actual, "0022400604")
+
+    assert context["game_id"] == "0022400604"
+    assert context["min_actual"] == 27.0
+    assert context["fg_pct_actual"] == 0.375
+    assert context["fg3_pct_actual"] == 0.333
+    assert context["min_season_avg"] == 32.5
+    assert context["fg_pct_season_avg"] == 0.47
+    assert context["fg3_pct_season_avg"] == 0.41
+    assert context["opp_def_rating_actual"] == 89.5
+    assert context["opp_def_rating_season_avg"] == 112.0
+    assert context["key_teammate_out"] is True
+    assert context["key_teammate_out_names"] == "Out Teammate"
+
+
+def test_capture_post_game_context_never_raises_and_defaults_to_none(monkeypatch):
+    # game_date can't be parsed -> season can't be derived -> every
+    # field past the free MIN/FG_PCT/FG3_PCT extraction stays None,
+    # and the function returns cleanly rather than raising.
+    row = {"player_id": 201939, "opponent_abbr": "BOS", "game_date": "not-a-date"}
+    actual = pd.Series({"MIN": 27, "FG_PCT": 0.375, "FG3_PCT": 0.333,
+                         "MATCHUP": "GSW vs. BOS", "Game_ID": "0022400604"})
+
+    context = tracker._capture_post_game_context(row, actual, "0022400604")
+
+    assert context["min_actual"] == 27.0
+    assert context["min_season_avg"] is None
+    assert context["opp_def_rating_actual"] is None
+    assert context["key_teammate_out"] is None
+
+
+def test_capture_post_game_context_no_key_teammate_out_when_all_played(monkeypatch):
+    row = {"player_id": 201939, "opponent_abbr": "BOS", "game_date": "2025-01-20"}
+    actual = pd.Series({"MIN": 27, "FG_PCT": 0.375, "FG3_PCT": 0.333,
+                         "MATCHUP": "GSW vs. BOS", "Game_ID": "0022400604"})
+
+    monkeypatch.setattr(tracker, "_season_shooting_and_minutes", lambda pid, season: None)
+    team_box = pd.DataFrame([{"teamTricode": "BOS", "defensiveRating": 89.5}])
+    player_box = pd.DataFrame([
+        {"teamTricode": "GSW", "personId": 201939},
+        {"teamTricode": "GSW", "personId": 1234},
+    ])
+    monkeypatch.setattr(tracker, "_load_or_fetch_advanced_box_score", lambda game_id: (player_box, team_box))
+    monkeypatch.setattr(tracker, "TEAM_ID_BY_ABBR", {"BOS": 1610612738, "GSW": 1610612744})
+    monkeypatch.setattr(tracker, "get_league_advanced_team_stats", lambda season: pd.DataFrame())
+    monkeypatch.setattr(tracker, "_key_teammates_for", lambda team_id, season: [(1234, "Played Teammate")])
+
+    context = tracker._capture_post_game_context(row, actual, "0022400604")
+
+    assert context["key_teammate_out"] is False
+    assert context["key_teammate_out_names"] is None
+
+
+def test_try_resolve_prediction_capture_failure_never_blocks_resolution(monkeypatch, temp_log):
+    # A capture-time exception must not prevent the core hit/miss
+    # resolution it rides alongside -- the try/except around the call
+    # inside try_resolve_prediction() is the thing under test here.
+    monkeypatch.setattr(tracker, "_capture_post_game_context",
+                         lambda row, actual, game_id: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    row = {"player_id": 201939, "opponent_abbr": "BOS",
+           "game_date": "2025-01-20", "status": "pending",
+           "PTS_low": 10.0, "PTS_high": 25.0}
+
+    match_df = pd.DataFrame([{
+        "GAME_DATE": pd.Timestamp("2025-01-20"), "PTS": 18, "Game_ID": "0022400604",
+        "MATCHUP": "GSW vs. BOS",
+    }])
+
+    def _fake_h2h(player_id, opponent_abbr):
+        return match_df
+
+    resolved = tracker.try_resolve_prediction(row, _fake_h2h)
+
+    assert resolved["status"] == "resolved"
+    assert resolved["PTS_actual"] == 18
+    assert resolved["PTS_hit"] is True
+    # capture columns stay absent/unset since the capture itself blew up
+    assert "game_id" not in resolved or resolved.get("game_id") is None
