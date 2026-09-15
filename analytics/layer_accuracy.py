@@ -119,7 +119,12 @@ def format_layer_accuracy(result: LayerAccuracy) -> str:
     """One honest sentence for the "how this was built" panel -- never
     claims a track record that isn't there."""
     if result.reason == "context_only_by_design":
-        return "shown as context only -- never adjusts the prediction, so there's no accuracy to track."
+        return (
+            "this matchup-tracking signal never becomes a multiplier on its own, so "
+            "there's no accuracy to track for it -- though the same defender's name "
+            "can separately reshape the baseline above via the \"vs. specific player\" "
+            "blend; check the note above for whether that happened and its weight."
+        )
     if result.reason == "insufficient_data":
         return "not enough resolved predictions yet to show a reliability track record for this layer."
     return (f"this type of adjustment has been directionally correct "

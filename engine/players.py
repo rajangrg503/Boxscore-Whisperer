@@ -13,9 +13,48 @@ tests/test_player_resolution.py for the regression test.
 get_player_id() is the one place this resolution should happen. Every
 caller that used to do its own `players.find_players_by_full_name(name)`
 + `match[0]` should call this instead.
+
+fold_diacritics()/player_search_label() below are NOT for get_player_id()
+-- confirmed by reading nba_api's own source (players._find_players,
+players._strip_accents) that find_players_by_full_name() already does
+NFD-normalize + strip combining-mark matching internally, so
+get_player_id("Jokic") already resolves to "Nikola Jokić" correctly with
+zero changes needed here. The real diacritics bug is one layer up, in
+app.py's st.selectbox/st.multiselect widgets: Streamlit's client-side
+dropdown search does a plain substring match against each option's
+rendered label, with no accent-folding of its own, so typing "Jokic"
+never surfaces "Nikola Jokić" as a candidate to click -- get_player_id()
+is never even reached. player_search_label() is a format_func for those
+widgets that appends an ASCII-folded alias so the plain-substring client
+search can find it, while the real (accented) name stays what's shown
+first and what st.selectbox actually returns as the selected value.
 """
 
+import unicodedata
+
 from nba_api.stats.static import players, teams
+
+
+def fold_diacritics(name):
+    """ASCII-folded form of a name (e.g. "Jokić" -> "Jokic",
+    "Dončić" -> "Doncic") -- NFKD decomposes each accented character
+    into its base letter plus a combining mark, then the ascii
+    encode/decode with errors="ignore" drops marks that have no plain-
+    ASCII equivalent."""
+    return unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+
+
+def player_search_label(name):
+    """format_func for a player-name selectbox/multiselect: appends an
+    ASCII-folded alias in parens when it differs from the real name, so
+    Streamlit's own client-side dropdown search (plain substring match
+    against this rendered label) can find e.g. "Nikola Jokić" when
+    someone types the unaccented "Jokic". Returns the name unchanged
+    when there's nothing to fold (the common case), so this is safe to
+    apply uniformly to every player-name widget in the app, including
+    ones like "None" sentinels mixed into an options list."""
+    folded = fold_diacritics(name)
+    return name if folded == name else f"{name} ({folded})"
 
 
 def get_player_id(name):

@@ -150,4 +150,5 @@ def test_build_layer_lines_matches_old_hardcoded_output(temp_log):
     assert "60%" in actual[0]
     assert "80%" in actual[5]
     assert "not enough resolved predictions" in actual[1]
-    assert "context only" in actual[4]
+    assert "never becomes a multiplier on its own" in actual[4]
+    assert "vs. specific player" in actual[4]  # the corrected copy points at the real mechanism

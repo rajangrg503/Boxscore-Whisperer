@@ -34,7 +34,7 @@ from nba_api.stats.endpoints import (
     leagueseasonmatchups,
 )
 
-from engine.players import get_player_id, get_team_id
+from engine.players import get_player_id, get_team_id, player_search_label
 from engine.career_stats import resolve_season_mpg
 from engine.season import CURRENT_SEASON, PREVIOUS_SEASON
 from engine.stat_columns import STAT_COLUMNS
@@ -156,9 +156,18 @@ def blend_baseline_stats(season_stats, shrinkage_k=4, team_h2h=None, team_h2h_n=
     player, or vs. a specific combination of opponent players on the
     floor together -- weighted by how many real games back each one.
     The season average always contributes as if it had shrinkage_k
-    games, so a handful of head-to-head games can't swing the estimate
-    on their own; any source earns more real influence as more actual
-    games accumulate.
+    games, so a source needs roughly that many real games of its own
+    to weigh as heavily as the season average; below that it still
+    earns real influence, just proportionally less.
+
+    At the current default (shrinkage_k=4) this is a weak safeguard,
+    not a strong one: weight is n / (n + shrinkage_k), so a 2-game
+    head-to-head sample already gets 33% (2/6), and a 4-game sample
+    reaches 50% -- full parity with the season average -- off a sample
+    most people would still call small. shrinkage_k was lowered from 8
+    to 4 by patch_shrinkage_k.py on intuition, not backtested data; see
+    ~/.claude/plans/hazy-jumping-glade.md for the k-sweep this docstring
+    should eventually cite instead of hand-derived weight examples.
 
     extra_sources: list of (label, stats_dict, n) tuples. stats_dict
     may be None (no data found) -- such entries are skipped in the
@@ -899,17 +908,32 @@ with st.expander("📊 See methodology"):
 # Pull the current name lists once per session for the searchable
 # dropdowns -- typing inside these boxes filters the list live, no
 # typos possible since selections come from a real, known list.
+#
+# Player widgets use IDS as their options (not names) -- see
+# player_search_label's module docstring in engine/players.py for why:
+# Streamlit's client-side dropdown search does a plain substring match
+# against each option's rendered label (format_func output), so
+# player_search_label can make "Jokic" findable there regardless of
+# what the underlying option actually is. Using ids means the widget
+# hands back a real id directly -- no name string round-trip, and
+# nothing downstream breaks if the rendered label gets noisier (e.g.
+# gains a folded-alias suffix). Every widget converts its returned
+# id(s) back to the canonical name via player_id_to_name immediately
+# after the widget call, so every existing consumer below (which
+# expects a name string, e.g. get_player_id(name)) is unchanged.
 @st.cache_data(ttl=86400, show_spinner=False)
-def get_player_name_list():
+def get_player_id_name_list():
     active = players.get_active_players()
-    return sorted(p["full_name"] for p in active)
+    return sorted(((p["id"], p["full_name"]) for p in active), key=lambda t: t[1])
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_team_name_list():
     all_teams = teams.get_teams()
     return sorted(t["full_name"] for t in all_teams)
 
-player_names = get_player_name_list()
+player_id_name_list = get_player_id_name_list()
+player_ids = [pid for pid, _ in player_id_name_list]
+player_id_to_name = {pid: name for pid, name in player_id_name_list}
 team_names = get_team_name_list()
 
 # Real official team primary colors, for the player-avatar circle
@@ -1031,9 +1055,11 @@ with tab1:
         st.markdown('<div class="search-row">', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         with col1:
-            player_input = st.selectbox(
-                "Player", options=player_names, index=None, placeholder="Search a player..."
+            player_input_id = st.selectbox(
+                "Player", options=player_ids, index=None, placeholder="Search a player...",
+                format_func=lambda pid: player_search_label(player_id_to_name[pid]),
             )
+            player_input = player_id_to_name.get(player_input_id) if player_input_id is not None else None
         with col2:
             opponent_options, opponent_label_to_name = get_opponent_dropdown_options()
             opponent_label_input = st.selectbox(
@@ -1049,7 +1075,7 @@ with tab1:
 
         baseline_source_input = st.selectbox(
             "Baseline source",
-            ["Season average (default)", "Last 5 games vs. this opponent", "Last 10 games vs. this opponent"],
+            ["Season average (default)", "Last 5 meetings", "Last 10 meetings"],
             index=0,
         )
         st.caption(
@@ -1072,34 +1098,44 @@ with tab1:
         with st.expander("Advanced options (injuries, defender, scheme -- optional)"):
             adv1, adv2 = st.columns(2)
             with adv1:
-                missing_teammates = st.multiselect(
-                    "Missing teammates", options=player_names, default=[],
+                missing_teammates_ids = st.multiselect(
+                    "Missing teammates", options=player_ids, default=[],
                     placeholder="Search and select players...", max_selections=5,
+                    format_func=lambda pid: player_search_label(player_id_to_name[pid]),
                 )
-                new_teammate_input = st.selectbox(
-                    "New teammate arriving (optional)", options=player_names, index=None,
+                missing_teammates = [player_id_to_name[pid] for pid in missing_teammates_ids]
+                new_teammate_input_id = st.selectbox(
+                    "New teammate arriving (optional)", options=player_ids, index=None,
                     placeholder="Search a player who just joined...",
+                    format_func=lambda pid: player_search_label(player_id_to_name[pid]),
                 )
+                new_teammate_input = player_id_to_name.get(new_teammate_input_id) if new_teammate_input_id is not None else None
                 st.caption(
                     "Uses real shared games to compare this player's stats when this "
                     "teammate played heavy minutes vs. light minutes. Needs actual "
                     "shared game history to work -- a pairing that hasn't shared the "
                     "floor yet will be flagged, not guessed at."
                 )
-                defender_input = st.selectbox(
-                    "Primary defender assigned", options=player_names, index=None,
+                defender_input_id = st.selectbox(
+                    "Primary defender assigned", options=player_ids, index=None,
                     placeholder="Search a defender...",
+                    format_func=lambda pid: player_search_label(player_id_to_name[pid]),
                 )
+                defender_input = player_id_to_name.get(defender_input_id) if defender_input_id is not None else None
             with adv2:
-                missing_opponents = st.multiselect(
-                    "Missing opponent players", options=player_names, default=[],
+                missing_opponents_ids = st.multiselect(
+                    "Missing opponent players", options=player_ids, default=[],
                     placeholder="Search and select players...", max_selections=5,
+                    format_func=lambda pid: player_search_label(player_id_to_name[pid]),
                 )
+                missing_opponents = [player_id_to_name[pid] for pid in missing_opponents_ids]
                 scheme_input = st.selectbox("Defensive scheme", list(SCHEME_ADJUSTMENTS.keys()))
-                scheme_executor_input = st.selectbox(
+                scheme_executor_input_id = st.selectbox(
                     "Scheme executed primarily by (reference only -- optional)",
-                    options=player_names, index=None, placeholder="Search a player...",
+                    options=player_ids, index=None, placeholder="Search a player...",
+                    format_func=lambda pid: player_search_label(player_id_to_name[pid]),
                 )
+                scheme_executor_input = player_id_to_name.get(scheme_executor_input_id) if scheme_executor_input_id is not None else None
                 st.caption(
                     "No public data tracks which player runs a specific scheme, "
                     "so this name is stored for your own reference only -- it "
@@ -1125,11 +1161,13 @@ with tab1:
                 )
 
             st.markdown("---")  # patch_expander_spacing
-            key_players_input = st.multiselect(
+            key_players_input_ids = st.multiselect(
                 "Also check history vs. specific opposing player(s) (optional)",
-                options=player_names, default=[],
+                options=player_ids, default=[],
                 placeholder="e.g. a star who just changed teams...", max_selections=4,
+                format_func=lambda pid: player_search_label(player_id_to_name[pid]),
             )
+            key_players_input = [player_id_to_name[pid] for pid in key_players_input_ids]
             st.caption(
                 "Finds every real game this player has faced them, on whatever team "
                 "they were on at the time -- not just games against their current "
@@ -1343,6 +1381,28 @@ with tab1:
                 player_id, player_full_name, defender_input, CURRENT_SEASON
             )
             defender_note = defender_result.note
+            # The matchup-tracking signal above (defender_result) never
+            # becomes a multiplier -- see engine/adjustments/defender.py's
+            # module docstring, that part is genuinely unchanged. But the
+            # SAME defender_input name is separately folded into
+            # effective_key_players_input above and can end up as a real
+            # "vs. {name}" extra_source in the baseline blend -- so it CAN
+            # reshape the prediction, just via that different mechanism.
+            # Surface the real weight here rather than let defender_note's
+            # "never folded in" framing read as a blanket claim it isn't.
+            if defender_input:
+                defender_blend_weight = sum(
+                    blend_weights.get(label, 0.0)
+                    for label, stats, n in extra_sources
+                    if stats is not None and n > 0 and defender_input in label
+                )
+                if defender_blend_weight > 0:
+                    defender_note += (
+                        f' Separately, {defender_input}\'s own head-to-head history IS '
+                        f'folded into the baseline above via the "vs. specific player" '
+                        f'blend (a different mechanism from the matchup-tracking signal '
+                        f'above) -- {defender_blend_weight:.0%} of the blended baseline weight.'
+                    )
 
             scheme_result = get_synergy_scheme_adjustment(
                 opponent_id, scheme_input, PREVIOUS_SEASON
@@ -1935,14 +1995,13 @@ with tab2:
         def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr, out_key):
             st.markdown(f"**{team_full}** projected box score")
             roster = get_team_roster(team_id)
-            out_choice = st.selectbox(
+            roster_id_to_name = dict(roster)
+            out_id = st.selectbox(
                 f"Mark a {team_full} player as out (optional)",
-                options=["None"] + [pname for _pid, pname in roster],
+                options=[None] + [pid for pid, _pname in roster],
+                format_func=lambda pid: "None" if pid is None else player_search_label(roster_id_to_name[pid]),
                 key=out_key,
             )
-            out_id = None
-            if out_choice != "None":
-                out_id = next((pid for pid, pname in roster if pname == out_choice), None)
 
             with st.spinner("Calculating..."):
                 rows, skipped, unadjusted, out_name, trackable = build_team_projection(

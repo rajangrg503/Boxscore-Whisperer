@@ -127,9 +127,10 @@ def get_defender_matchup_adjustment(player_id, player_full_name, defender_name, 
         note = (
             f"{ambiguity_prefix}"
             f"REAL matchup data ({try_season}): {defender_name} has guarded "
-            f"{player_full_name} for {', '.join(details)}.{sample_flag} Shown as "
-            f"context -- not folded into the number above since sample sizes here "
-            f"are usually too small to trust as a hard multiplier."
+            f"{player_full_name} for {', '.join(details)}.{sample_flag} This "
+            f"matchup-tracking signal (minutes/possessions/FG%) is never folded "
+            f"into the prediction as a hard multiplier -- sample sizes here are "
+            f"usually too small to trust that way."
         )
         # sample_n uses matchup MINUTES, not a game count, since that's the
         # real underlying sample-size metric this layer actually has --
