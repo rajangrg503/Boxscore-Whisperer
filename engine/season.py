@@ -8,8 +8,8 @@ change doesn't fix (out of scope for this move), not something
 introduced here.
 """
 
-CURRENT_SEASON = "2026-27"   # update each year
-PREVIOUS_SEASON = "2025-26"
+import datetime
+
 
 
 def season_for_date(game_date):
@@ -27,3 +27,27 @@ def season_for_date(game_date):
     calendar year."""
     start_year = game_date.year if game_date.month >= 7 else game_date.year - 1
     return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+
+def season_offset(season, years_back):
+    """"2026-27", 1 -> "2025-26"."""
+    start_year = int(season[:4]) - years_back
+    return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+
+def recent_seasons(n, current=None):
+    """The n most recent season strings, newest first."""
+    current = current or CURRENT_SEASON
+    return [season_offset(current, i) for i in range(n)]
+
+
+# Derived from today's date instead of hand-edited every year: from
+# July 1 the "current" season is the one about to start, exactly as
+# season_for_date() defines it. Before a new season has real games,
+# every consumer already falls back to PREVIOUS_SEASON (see
+# resolve_season_gamelog and engine.adjustments.defense), which is the
+# state the app is designed to run in over the off-season. Set on
+# import, so a long-running app process picks up the new season on its
+# next restart.
+CURRENT_SEASON = season_for_date(datetime.date.today())
+PREVIOUS_SEASON = season_offset(CURRENT_SEASON, 1)

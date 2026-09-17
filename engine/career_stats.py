@@ -9,7 +9,7 @@ without hitting the live API or mocking cached_or_live.
 import pandas as pd
 
 
-def resolve_season_mpg(career_df, season):
+def resolve_season_mpg(career_df, season, min_games=1):
     """Return (mpg, note) for a player's minutes-per-game in `season`,
     given their PlayerCareerStats regular-season-totals DataFrame.
 
@@ -17,6 +17,10 @@ def resolve_season_mpg(career_df, season):
     injured/suspended/two-way all year is a real, common case, not a
     hypothetical). Callers must check for None rather than using the
     value blindly.
+
+    min_games (default 1, i.e. any games at all) lets a caller asking
+    about a season that has only just started treat a tiny sample as
+    "no usable signal" and fall back to an earlier season.
 
     Confirmed bugs this fixes:
     - 0 GP caused a silent 0/0 -> NaN (numpy doesn't raise on this), which
@@ -38,6 +42,10 @@ def resolve_season_mpg(career_df, season):
     gp = season_rows["GP"].values[0]
     if pd.isna(gp) or gp == 0:
         return None, f"0 games played in {season} (injured/inactive all season)"
+    if gp < min_games:
+        # min_games > 1 is for a season still in progress: a couple of
+        # games is too thin a read on someone's role.
+        return None, f"only {int(gp)} game(s) played in {season} so far"
 
     mpg = season_rows["MIN"].values[0] / gp
     return mpg, None

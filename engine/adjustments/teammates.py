@@ -18,8 +18,8 @@ get_out_redistribution_adjustment (added for the Full Matchup
 "mark a player as out" feature) answers the same "with vs. without"
 question as get_teammate_availability_adjustment, but is deliberately
 NOT built on top of it. That function determines presence/absence via
-a live box-score fetch per game (capped at 20, with a mandatory
-time.sleep(0.5) after every fetch, cache hit or not) -- a cost model
+a box-score fetch per game (capped at 20, with a time.sleep(0.5) after
+every live fetch) -- a cost model
 built to support matching a LIST of possibly-several teammates by
 free-text name against a box score's roster. This feature only ever
 has exactly one, already-ID-resolved "out" player (picked from a known
@@ -165,13 +165,18 @@ def get_teammate_availability_adjustment(player_id, missing_names, season, df=No
                 box = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id, timeout=5)
                 return box.get_data_frames()[0]
 
-            box_df, _source = cached_or_live(f"boxscore_{game_id}", _fetch_box)
+            box_df, box_source = cached_or_live(f"boxscore_{game_id}", _fetch_box)
             players_in_game = set(box_df["firstName"] + " " + box_df["familyName"])
         except Exception:
             consecutive_failures += 1
             continue
         consecutive_failures = 0  # reset streak on any success
-        time.sleep(0.5)
+        if box_source == "live":
+            # Pace real nba_api requests only. This used to sleep after
+            # cached reads too, adding ~10s to every Single Player
+            # prediction with missing teammates on the deployed app,
+            # where every box score comes from the cache.
+            time.sleep(0.5)
         if all(name not in players_in_game for name in missing_names):
             matching_games.append(row)
 
