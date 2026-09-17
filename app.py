@@ -1909,7 +1909,18 @@ def combine_out_redistributions(results):
     )
 
 
-def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_ids=None):
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_opponent_missing_adjustment_cached(missing_names, season):
+    """Full Matchup calls this once per team on every rerun, and every
+    widget change reruns the script. On a cache miss the underlying
+    layer does a career-stats lookup and a 0.5s pause per player, so
+    it's memoised here. missing_names must be a tuple (hashable, and
+    order-stable so the same selection hits the same cache entry)."""
+    return get_opponent_missing_adjustment(list(missing_names), season)
+
+
+def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_ids=None,
+                               opponent_missing_result=None):
     """MVP matchup-predictor engine: season baseline + opponent-defense
     adjustment, plus an optional out-redistribution adjustment when
     out_player_ids is given (Full Matchup's "mark players as out"
@@ -1917,9 +1928,20 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
     get_out_redistribution_adjustment for the real "games with vs.
     without" comparison and why it's a distinct, narrowly-scoped
     mechanic rather than a reuse of the single-player tool's general
-    missing_teammates layer). Still deliberately excludes missing/new-
-    teammate, primary defender, and scheme adjustments -- that nuance
-    stays in the single-player tool, per the approved v1 scope.
+    missing_teammates layer). Also applies the opponent's absences via
+    opponent_missing_result (see below). Still deliberately excludes
+    missing/new-teammate, primary defender, and scheme adjustments --
+    that nuance stays in the single-player tool, per the approved v1
+    scope.
+
+    opponent_missing_result: an AdjustmentResult from
+    get_opponent_missing_adjustment_cached() for the players marked out
+    on the OTHER team, or None when nobody is. The caller computes it
+    once per team, not per player -- its value doesn't depend on which
+    player is being projected. Its multiplier is folded in only when
+    .applied is True; it's recorded in layer_results either way, so a
+    saved row shows "opponent absences were given but couldn't be
+    weighted" rather than silently nothing.
 
     out_player_ids accepts None, a single id, or a list. Several out
     players each get their own redistribution against the same resolved
@@ -1948,6 +1970,7 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
     against, not just a point estimate). No post_change_thin_sample
     widening here -- that's a tab1-only roster-change concept tab2
     doesn't have. layer_results is {"opponent_defense": defense_result}
+    plus "missing_opponents" when opponent_missing_result was given,
     plus "out_redistribution" only when it was actually computed (never
     a None value in the dict -- a caller iterating layer_results and
     calling .applied on every value would break on that) -- this is
@@ -1999,6 +2022,8 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
         multiplier = defense_result.multiplier_for(col)
         if redistribution_result is not None:
             multiplier *= redistribution_result.multiplier_for(col)
+        if opponent_missing_result is not None and opponent_missing_result.applied:
+            multiplier *= opponent_missing_result.multiplier_for(col)
         predicted = base_mean * multiplier
         spread = base_std if pd.notna(base_std) else predicted * 0.2
         low = max(0, predicted - spread * 0.6)
@@ -2006,6 +2031,8 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
         predictions[col] = {"base": base_mean, "predicted": predicted, "low": low, "high": high}
 
     layer_results = {"opponent_defense": defense_result}
+    if opponent_missing_result is not None:
+        layer_results["missing_opponents"] = opponent_missing_result
     if redistribution_result is not None:
         layer_results["out_redistribution"] = redistribution_result
 
@@ -2057,7 +2084,8 @@ with tab2:
         team_a_id, team_a_full, team_a_abbr = ctx["team_a_id"], ctx["team_a_full"], ctx["team_a_abbr"]
         team_b_id, team_b_full, team_b_abbr = ctx["team_b_id"], ctx["team_b_full"], ctx["team_b_abbr"]
 
-        def build_team_projection(team_id, opponent_id, out_player_ids=None):
+        def build_team_projection(team_id, opponent_id, out_player_ids=None,
+                                  opponent_missing_result=None):
             """out_player_ids: a list -- each is excluded entirely from
             the projected rows (not called through
             predict_player_vs_opponent at all -- there's nothing to
@@ -2065,6 +2093,8 @@ with tab2:
             passed through to every remaining player's prediction so
             engine/adjustments/teammates.py's
             get_out_redistribution_adjustment can apply per out player.
+            opponent_missing_result: computed once by the caller for the
+            OTHER team's out list, passed unchanged to every player.
             Returns (rows, skipped, unadjusted, out_names, trackable):
             `skipped` is the existing "not enough data to project at
             all" case; `unadjusted` is a distinct, narrower case -- the
@@ -2089,7 +2119,10 @@ with tab2:
                 if pid in out_ids:
                     out_names.append(pname)
                     continue
-                result = predict_player_vs_opponent(pid, pname, opponent_id, out_player_ids=out_ids)
+                result = predict_player_vs_opponent(
+                    pid, pname, opponent_id, out_player_ids=out_ids,
+                    opponent_missing_result=opponent_missing_result,
+                )
                 if result is None:
                     skipped.append(pname)
                     continue
@@ -2107,8 +2140,11 @@ with tab2:
                 })
             return rows, skipped, unadjusted, out_names, trackable
 
-        def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr, out_key):
-            st.markdown(f"**{team_full}** projected box score")
+        def pick_out_players(team_id, team_full, out_key):
+            """One team's "who's out" picker. Rendered for BOTH teams
+            before either table is built, because each table depends on
+            both out lists. Returns (out_ids, out_names), both in
+            roster order."""
             roster = get_team_roster(team_id)
             roster_id_to_name = dict(roster)
             out_ids = st.multiselect(
@@ -2124,9 +2160,24 @@ with tab2:
                 ),
             )
 
+            chosen = set(out_ids)
+            out_pairs = [(pid, pname) for pid, pname in roster if pid in chosen]
+            return [pid for pid, _ in out_pairs], [pname for _, pname in out_pairs]
+
+        def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr,
+                                   out_ids, opponent_out_names):
+            st.markdown(f"**{team_full}** projected box score")
+            # Same season as the Single Player tool's call -- see this
+            # patch's docstring; change both together.
+            opponent_missing_result = (
+                get_opponent_missing_adjustment_cached(tuple(opponent_out_names), PREVIOUS_SEASON)
+                if opponent_out_names else None
+            )
+
             with st.spinner("Calculating..."):
                 rows, skipped, unadjusted, out_names, trackable = build_team_projection(
-                    team_id, opponent_id, out_player_ids=out_ids
+                    team_id, opponent_id, out_player_ids=out_ids,
+                    opponent_missing_result=opponent_missing_result,
                 )
 
             if rows:
@@ -2146,6 +2197,22 @@ with tab2:
                     f"an adjustment -- shown at their normal projection instead: "
                     f"{', '.join(unadjusted)}"
                 )
+            if opponent_missing_result is not None:
+                opp_label = ", ".join(opponent_out_names)
+                if opponent_missing_result.applied:
+                    opp_mult = opponent_missing_result.multiplier_for(STAT_COLUMNS[0][0])
+                    st.caption(
+                        f"{opponent_full} without {opp_label}: every stat above is "
+                        f"scaled x{opp_mult:.3f}, weighted by their real minutes and "
+                        f"estimated net rating -- the same missing-opponent adjustment "
+                        f"the Single Player tool uses. It's one multiplier for every "
+                        f"stat, not a per-stat estimate."
+                    )
+                else:
+                    st.caption(
+                        f"{opponent_full} without {opp_label}: no adjustment applied "
+                        f"-- {opponent_missing_result.note}"
+                    )
             if skipped:
                 st.caption(f"Not enough data to project: {', '.join(skipped)}")
 
@@ -2154,11 +2221,28 @@ with tab2:
                 for t in trackable
             ]
 
+        pick_a, pick_b = st.columns(2)
+        with pick_a:
+            team_a_out_ids, team_a_out_names = pick_out_players(
+                team_a_id, team_a_full, "team_a_out_input"
+            )
+        with pick_b:
+            team_b_out_ids, team_b_out_names = pick_out_players(
+                team_b_id, team_b_full, "team_b_out_input"
+            )
+        st.caption(
+            "A player marked out changes both tables: their teammates' lines "
+            "are adjusted from real games without them, and the other team's "
+            "lines get the missing-opponent adjustment."
+        )
+
         team_a_trackable = render_team_projection(
-            team_a_id, team_a_full, team_b_id, team_b_full, team_b_abbr, "team_a_out_input"
+            team_a_id, team_a_full, team_b_id, team_b_full, team_b_abbr,
+            team_a_out_ids, team_b_out_names,
         )
         team_b_trackable = render_team_projection(
-            team_b_id, team_b_full, team_a_id, team_a_full, team_a_abbr, "team_b_out_input"
+            team_b_id, team_b_full, team_a_id, team_a_full, team_a_abbr,
+            team_b_out_ids, team_a_out_names,
         )
 
         st.markdown("---")
