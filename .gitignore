@@ -5,3 +5,8 @@ __pycache__/
 # not application data that should travel with the repo.
 data_cache/_watchdog_status.json
 logs/
+
+# Local prediction tracker file (production uses Postgres; see engine/log_store.py)
+prediction_log.csv
+prediction_log.csv.lock
+prediction_log.csv.tmp.*
