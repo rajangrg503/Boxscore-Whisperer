@@ -31,6 +31,11 @@ SCHEME_ADJUSTMENTS = {
     "None / unsure": 1.00,
 }
 
+# The "nothing selected" option. The Single Player form defaults to it:
+# before, the dropdown defaulted to the first key ("Drop coverage"), so
+# every prediction silently carried a scheme multiplier nobody chose.
+NO_SCHEME = "None / unsure"
+
 # Where a real Synergy play-type roughly overlaps with one of the
 # manual scheme labels above, we use REAL team defensive data instead
 # of the guessed multiplier. Not every scheme has a genuine Synergy
@@ -70,6 +75,16 @@ def get_synergy_scheme_adjustment(team_id, scheme_label, season) -> AdjustmentRe
     the manual-estimate paths are just as "applied" as the real-data
     ones, they're distinguished by data_quality instead. See
     AdjustmentResult's docstring, rule 3."""
+    if scheme_label == NO_SCHEME:
+        # Nobody picked a scheme: a neutral no-op, not an "applied" manual
+        # estimate of 1.0 -- otherwise it shows up as an applied layer in
+        # the summary copy and as a manual-estimate caveat in confidence.
+        return AdjustmentResult(
+            layer=LAYER, value={ALL_STATS: 1.0},
+            note="No defensive scheme selected -- no adjustment.",
+            data_quality="unavailable", sample_n=0, applied=False,
+        )
+
     play_type = SCHEME_TO_SYNERGY_PLAYTYPE.get(scheme_label)
     manual_value = SCHEME_ADJUSTMENTS[scheme_label]
 

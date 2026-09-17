@@ -56,8 +56,10 @@ from engine.game_log import fetch_combined_game_log, resolve_season_gamelog
 from engine.cache import cached_or_live
 from engine.adjustments.missing_players import get_opponent_missing_adjustment
 from engine.adjustments.defender import get_defender_matchup_adjustment
-from engine.adjustments.scheme import get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS
+from engine.adjustments.scheme import get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS, NO_SCHEME
+from engine.adjustments.base import AdjustmentResult
 from engine.adjustments.teammates import (
+    OUT_REDISTRIBUTION_LAYER,
     get_teammate_availability_adjustment,
     get_new_teammate_impact_adjustment,
     get_out_redistribution_adjustment,
@@ -70,6 +72,7 @@ from engine.adjustments.defense import (
 )
 from analytics.layer_accuracy import build_layer_lines
 from engine.confidence import score_prediction
+from engine.adjustments.registry import LAYER_DISPLAY
 from engine.baseline_stats import stats_from_gamelog
 
 
@@ -108,7 +111,10 @@ def get_head_to_head_log(player_id, opponent_abbr, cutoff_date=None):
             continue  # this season unavailable (blocked live + not cached) -- skip, don't fail the whole lookup
         if df.empty:
             continue
-        matched = df[df["MATCHUP"].str.contains(opponent_abbr, na=False)]
+        # MATCHUP is "<player's team> vs. <opp>" or "<player's team> @ <opp>".
+        # Match only the last token: a substring test also matched games the
+        # player played FOR this team (before or after a trade).
+        matched = df[df["MATCHUP"].astype(str).str.split().str[-1] == opponent_abbr]
         if not matched.empty:
             frames.append(matched)
     if not frames:
@@ -149,7 +155,7 @@ def get_head_to_head_baseline(player_id, opponent_abbr, num_games, cutoff_date=N
     return stats_dict, source, actual_n
 
 
-def blend_baseline_stats(season_stats, shrinkage_k=4, team_h2h=None, team_h2h_n=0,
+def blend_baseline_stats(season_stats, shrinkage_k=32, team_h2h=None, team_h2h_n=0,
                           extra_sources=None):
     """Blend season average, team head-to-head, and any number of
     extra sources -- e.g. head-to-head vs. one specific opponent
@@ -160,14 +166,16 @@ def blend_baseline_stats(season_stats, shrinkage_k=4, team_h2h=None, team_h2h_n=
     to weigh as heavily as the season average; below that it still
     earns real influence, just proportionally less.
 
-    At the current default (shrinkage_k=4) this is a weak safeguard,
-    not a strong one: weight is n / (n + shrinkage_k), so a 2-game
-    head-to-head sample already gets 33% (2/6), and a 4-game sample
-    reaches 50% -- full parity with the season average -- off a sample
-    most people would still call small. shrinkage_k was lowered from 8
-    to 4 by patch_shrinkage_k.py on intuition, not backtested data; see
-    ~/.claude/plans/hazy-jumping-glade.md for the k-sweep this docstring
-    should eventually cite instead of hand-derived weight examples.
+    shrinkage_k=32 comes from shrinkage_k_sweep.py, not intuition.
+    Replayed point-in-time over run_backtest.py's case set, error
+    relative to season-only was k=2 1.042, k=4 1.018, k=8 1.005,
+    k=16 0.999, k=32 0.998 (best for every stat), and raw head-to-head
+    1.158. The old k=4 was reliably worse than ignoring head-to-head
+    entirely; k=32 is only marginally better than season-only. Weight
+    is n / (k + total n), so a 5-game sample now gets 13% and 10
+    meetings plus 10 defender games leave the season at 62%. The
+    vs.-specific-player sources share this k but can't be backtested
+    (no historical defender assignments).
 
     extra_sources: list of (label, stats_dict, n) tuples. stats_dict
     may be None (no data found) -- such entries are skipped in the
@@ -476,6 +484,28 @@ def get_full_game_log(player_id, season):
     return df
 
 
+def get_hit_rate_table(game_log_df, line, stat_col="PTS"):
+    """Mimics props.cash's L5/L10/L20/season hit-rate columns: what
+    percent of games did the player clear a given line. Since we
+    don't have real sportsbook lines, this uses whatever number the
+    user enters (or the season average as a transparent default)."""
+    windows = {"L5": 5, "L10": 10, "L20": 20}
+    results = {}
+    for label, n in windows.items():
+        subset = game_log_df.head(n)
+        if len(subset) == 0:
+            results[label] = (None, 0)
+        else:
+            hits = (subset[stat_col] > line).sum()
+            results[label] = (hits / len(subset) * 100, len(subset))
+    season_hits = (game_log_df[stat_col] > line).sum()
+    results["Season"] = (
+        season_hits / len(game_log_df) * 100 if len(game_log_df) > 0 else None,
+        len(game_log_df),
+    )
+    return results
+
+
 # ---------------------------- Streamlit UI ----------------------------
 
 st.set_page_config(page_title="Boxscore Whisperer", page_icon="🏀", layout="centered")
@@ -727,12 +757,49 @@ div[data-testid="stExpander"] div[data-testid="stMarkdownContainer"] p {
     color: #d1d5db !important;
 }
 
+/* Hit-rate badges, props.cash style, tuned for dark background */
+.hit-rate-row {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin: 8px 0 24px 0;
+}
+.hit-rate-badge {
+    flex: 1;
+    text-align: center;
+    border-radius: 12px;
+    padding: 12px 8px;
+}
+.hit-rate-badge .label {
+    font-size: 13px;
+    font-weight: 800;
+    opacity: 1;
+    letter-spacing: 0.3px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+.hit-rate-badge .pct {
+    font-size: 20px;
+    font-weight: 800;
+}
+.hit-rate-green {
+    background-color: #0d2818;
+    color: #34d399;
+}
+.hit-rate-red {
+    background-color: #2d1215;
+    color: #f87171;
+}
+.hit-rate-gray {
+    background-color: #1a1d24;
+    color: #9ca3af;
+}
+
 /* Per-prediction confidence badge -- ONE per prediction (not per stat
    card, since score_prediction() scores the whole prediction), shown
    prominently between the header and the stat cards, not buried in
    the "how this was built" expander. Reuses the same dark-tinted-bg +
-   bright-text pairing used for other status pills in this app (same
-   visual language), plus one new amber pair for Medium. */
+   bright-text pairing as .hit-rate-green/red above (same "status
+   pill" visual language), plus one new amber pair for Medium. */
 .confidence-badge-wrap {
     display: flex;
     justify-content: center;
@@ -1095,6 +1162,51 @@ with tab1:
             "is selected above."
         )
 
+        line1, line2, line3 = st.columns(3)
+        with line1:
+            pts_line_input = st.number_input(
+                "Points line (0 = season average)", min_value=0.0, value=0.0, step=0.5
+            )
+        with line2:
+            ast_line_input = st.number_input(
+                "Assists line (0 = season average)", min_value=0.0, value=0.0, step=0.5
+            )
+        with line3:
+            reb_line_input = st.number_input(
+                "Rebounds line (0 = season average)", min_value=0.0, value=0.0, step=0.5
+            )
+
+        with st.expander("Track more stats (steals, blocks, 3s, turnovers, offensive boards -- optional)"):
+            line4, line5, line6, line7 = st.columns(4)
+            with line4:
+                stl_line_input = st.number_input(
+                    "Steals line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                )
+            with line5:
+                blk_line_input = st.number_input(
+                    "Blocks line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                )
+            with line6:
+                fg3m_line_input = st.number_input(
+                    "3PM line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                )
+            with line7:
+                tov_line_input = st.number_input(
+                    "Turnovers line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                )
+            # FG3A and OREB were added as tracked stats after hit rates were
+            # first removed; every STAT_COLUMNS entry needs a line input,
+            # because the hit-rate loop below reads line_inputs[col] for each.
+            line8, line9 = st.columns(2)
+            with line8:
+                fg3a_line_input = st.number_input(
+                    "3PA line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                )
+            with line9:
+                oreb_line_input = st.number_input(
+                    "Off. rebounds line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                )
+
         with st.expander("Advanced options (injuries, defender, scheme -- optional)"):
             adv1, adv2 = st.columns(2)
             with adv1:
@@ -1129,7 +1241,11 @@ with tab1:
                     format_func=lambda pid: player_search_label(player_id_to_name[pid]),
                 )
                 missing_opponents = [player_id_to_name[pid] for pid in missing_opponents_ids]
-                scheme_input = st.selectbox("Defensive scheme", list(SCHEME_ADJUSTMENTS.keys()))
+                _scheme_options = list(SCHEME_ADJUSTMENTS.keys())
+                scheme_input = st.selectbox(
+                    "Defensive scheme", _scheme_options,
+                    index=_scheme_options.index(NO_SCHEME),
+                )
                 scheme_executor_input_id = st.selectbox(
                     "Scheme executed primarily by (reference only -- optional)",
                     options=player_ids, index=None, placeholder="Search a player...",
@@ -1146,19 +1262,21 @@ with tab1:
             roster_change_checked = st.checkbox(
                 "Opponent just made a major roster change (trade, etc.)",
             )
-            roster_change_date = None
-            if roster_change_checked:
-                roster_change_date = st.date_input(
-                    "Change effective date", value=None,
-                )
-                st.caption(
-                    "When set, opponent defense and head-to-head history use only "
-                    "games since this date. The season-long average otherwise blends "
-                    "pre- and post-change games together -- misleading right after a "
-                    "big trade (e.g. a star player switching teams). Predictions "
-                    "based on a very small post-change sample will show a wider "
-                    "likely range to reflect the extra uncertainty."
-                )
+            # Always rendered: this sits inside st.form, which doesn't rerun
+            # when the checkbox is ticked, so a conditional date input only
+            # appeared after a first submit. Ignored unless the box is ticked.
+            roster_change_date_input = st.date_input(
+                "Change effective date (used only when the box above is ticked)", value=None,
+            )
+            roster_change_date = roster_change_date_input if roster_change_checked else None
+            st.caption(
+                "When set, opponent defense and head-to-head history use only "
+                "games since this date. The season-long average otherwise blends "
+                "pre- and post-change games together -- misleading right after a "
+                "big trade (e.g. a star player switching teams). Predictions "
+                "based on a very small post-change sample will show a wider "
+                "likely range to reflect the extra uncertainty."
+            )
 
             st.markdown("---")  # patch_expander_spacing
             key_players_input_ids = st.multiselect(
@@ -1391,18 +1509,38 @@ with tab1:
             # Surface the real weight here rather than let defender_note's
             # "never folded in" framing read as a blanket claim it isn't.
             if defender_input:
-                defender_blend_weight = sum(
-                    blend_weights.get(label, 0.0)
-                    for label, stats, n in extra_sources
-                    if stats is not None and n > 0 and defender_input in label
-                )
-                if defender_blend_weight > 0:
+                # Match the source label exactly: "vs. {name}" is the
+                # defender's own history; "vs. A + B together" is a combined
+                # source the defender is only part of. A substring test
+                # attributed the whole combined weight to the defender.
+                solo_label = f"vs. {defender_input}"
+                solo_weight = 0.0
+                combo_parts = []
+                for label, stats, n in extra_sources:
+                    if stats is None or n <= 0:
+                        continue
+                    weight = blend_weights.get(label, 0.0)
+                    if label == solo_label:
+                        solo_weight += weight
+                    elif label.endswith(" together"):
+                        members = label[len("vs. "):-len(" together")].split(" + ")
+                        if defender_input in members:
+                            combo_parts.append((label, weight))
+                if solo_weight > 0:
                     defender_note += (
                         f' Separately, {defender_input}\'s own head-to-head history IS '
                         f'folded into the baseline above via the "vs. specific player" '
                         f'blend (a different mechanism from the matchup-tracking signal '
-                        f'above) -- {defender_blend_weight:.0%} of the blended baseline weight.'
+                        f'above) -- {solo_weight:.0%} of the blended baseline weight.'
                     )
+                for label, weight in combo_parts:
+                    if weight > 0:
+                        defender_note += (
+                            f' Separately, {defender_input} is part of the combined '
+                            f'"{label}" source in the baseline above ({weight:.0%} of the '
+                            f'blended weight) -- that weight covers the whole combination, '
+                            f'not {defender_input} alone.'
+                        )
 
             scheme_result = get_synergy_scheme_adjustment(
                 opponent_id, scheme_input, PREVIOUS_SEASON
@@ -1417,6 +1555,17 @@ with tab1:
             # per-stat below via multiplier_for() -- opp_missing/scheme/
             # defense are uniform across stats today, teammate/new_teammate
             # genuinely vary by stat.
+            line_inputs = {
+                "PTS": pts_line_input,
+                "AST": ast_line_input,
+                "REB": reb_line_input,
+                "STL": stl_line_input,
+                "BLK": blk_line_input,
+                "FG3M": fg3m_line_input,
+                "TOV": tov_line_input,
+                "FG3A": fg3a_line_input,
+                "OREB": oreb_line_input,
+            }
 
             # A thin post-roster-change sample (a team's new-look defense
             # with only a handful of games played) is a genuinely less
@@ -1478,6 +1627,7 @@ with tab1:
             "opponent_abbr": opponent_abbr,
             "source": source,
             "predictions": predictions,
+            "line_inputs": line_inputs,
             # Additive, for layers_json (engine/tracker.py) -- duplicates the
             # *_note strings below by design, not by oversight (those stay
             # for the existing "how this was built" display panel, which
@@ -1519,6 +1669,7 @@ with tab1:
         opponent_abbr = r["opponent_abbr"]
         source = r["source"]
         predictions = r["predictions"]
+        line_inputs = r["line_inputs"]
         layer_results = r["layer_results"]
         baseline_sample_n = r["baseline_sample_n"]
         def_note = r["def_note"]
@@ -1593,12 +1744,23 @@ with tab1:
 
         render_stat_card_row(["PTS", "AST", "REB", "OREB"])
         render_stat_card_row(["STL", "BLK", "FG3M", "FG3A", "TOV"])
+        _applied_labels = [
+            label.lower() for key, label in LAYER_DISPLAY
+            if key in layer_results and layer_results[key].applied
+        ]
+        if not _applied_labels:
+            _applied_phrase = "no adjustments applied this time, so the number shown is the baseline itself"
+        elif len(_applied_labels) == 1:
+            _applied_phrase = f"adjusted for {_applied_labels[0]}"
+        else:
+            _applied_phrase = (
+                "adjusted for " + ", ".join(_applied_labels[:-1]) + " and " + _applied_labels[-1]
+            )
         st.caption(
-            "This isn't a raw season average -- it's that average adjusted for opponent "
-            "defense, missing teammates, and scheme, using the math shown in \"See how this "
-            "estimate was built\" below. The unadjusted season average is shown separately "
-            "there in step [1] for comparison. \"Likely range\" reflects this player's "
-            "real game-to-game variability."
+            f"This isn't a raw season average -- it's the baseline {_applied_phrase}, using "
+            "the math shown in \"See how this estimate was built\" below. The unadjusted "
+            "baseline is shown separately there in step [1] for comparison. \"Likely range\" "
+            "reflects this player's real game-to-game variability."
         )
 
         # Save this prediction to the tracker, so you can come back after
@@ -1650,7 +1812,7 @@ with tab1:
             columns={trend_stat_col: "value"}
         )
 
-        trend_chart = (
+        line_layers = [
             alt.Chart(chart_df)
             .mark_line(point=alt.OverlayMarkDef(color="#00c853", size=60), color="#00c853")
             .encode(
@@ -1658,6 +1820,16 @@ with tab1:
                 y=alt.Y("value:Q", title=trend_stat_label),
                 tooltip=["GAME_DATE:T", "MATCHUP:N", "value:Q"],
             )
+        ]
+        entered_line = line_inputs.get(trend_stat_col, 0)
+        if entered_line and entered_line > 0:
+            rule_df = pd.DataFrame({"y": [entered_line]})
+            line_layers.append(
+                alt.Chart(rule_df).mark_rule(color="#f87171", strokeDash=[6, 4]).encode(y="y:Q")
+            )
+
+        trend_chart = (
+            alt.layer(*line_layers)
             .properties(height=280)
             .configure(background="#171a21")
             .configure_axis(labelColor="#9ca3af", titleColor="#9ca3af",
@@ -1666,7 +1838,10 @@ with tab1:
         )
         st.altair_chart(trend_chart, use_container_width=True)
         trend_context = f"vs. {opponent_full_name} only" if using_h2h else "overall"
-        st.caption(f"Last {len(recent_games)} games ({trend_context}).")
+        st.caption(
+            f"Last {len(recent_games)} games ({trend_context}). Dashed red line marks the "
+            f"line you entered for {trend_stat_label}, if any."
+        )
 
         # Head-to-head history vs this specific opponent, across the last
         # few seasons -- including seasons on a different team, since that
@@ -1774,6 +1949,68 @@ with tab1:
                         f"together, across {', '.join(HEAD_TO_HEAD_SEASONS)}."
                     )
 
+        # Hit-rate tables, props.cash style, for all three stats. Each
+        # defaults to that stat's season average if the user left the
+        # line at 0, clearly labeled which source is being used.
+        hit_rate_configs = [
+            (label, line_inputs[col], predictions[col]["base"], col)
+            for col, label in STAT_COLUMNS
+        ]
+
+        if using_h2h:
+            st.markdown(
+                f'<div style="text-align:center; color:#9ca3af; font-size:13px; '
+                f'margin-top:8px;">Hit rates below are also team-specific -- based on '
+                f'{len(game_log_for_hitrate)} game(s) vs. {opponent_full_name} only, '
+                f'not the full season.</div>',
+                unsafe_allow_html=True,
+            )
+
+        for stat_label, line_val, base_val, col in hit_rate_configs:
+            effective_line = line_val if line_val > 0 else round(base_val, 1)
+            if line_val > 0:
+                line_source_note = "your line"
+            elif using_h2h:
+                line_source_note = f"head-to-head avg vs. {opponent_full_name}"
+            else:
+                line_source_note = "season average"
+
+            hit_rates = get_hit_rate_table(game_log_for_hitrate, effective_line, col)
+            if using_h2h:
+                # "Season" doesn't mean much for a head-to-head-only log --
+                # relabel it to reflect what it actually represents here.
+                hit_rates = {("All H2H" if k == "Season" else k): v for k, v in hit_rates.items()}
+
+            st.markdown(
+                f'<div style="text-align:center; color:#ffffff; font-weight:700; '
+                f'font-size:16px; margin-top:20px;">{stat_label} '
+                f'<span style="color:#9ca3af; font-weight:500; font-size:13px;">'
+                f'-- hit rate vs. {effective_line} ({line_source_note})</span></div>',
+                unsafe_allow_html=True,
+            )
+            badges_html = '<div class="hit-rate-row">'
+            for label, (pct, n) in hit_rates.items():
+                if pct is None or n == 0:
+                    css_class = "hit-rate-gray"
+                    display = "N/A"
+                else:
+                    css_class = "hit-rate-green" if pct >= 50 else "hit-rate-red"
+                    display = f"{pct:.0f}%"
+                badges_html += (
+                    f'<div class="hit-rate-badge {css_class}">'
+                    f'<div class="label">{label}</div>'
+                    f'<div class="pct">{display}</div>'
+                    f'</div>'
+                )
+            badges_html += '</div>'
+            st.markdown(badges_html, unsafe_allow_html=True)
+
+        st.caption(
+            "Note on Turnovers: green here just means the player exceeded the line more "
+            "often than not -- for turnovers, going OVER is bad for the player, so green "
+            "doesn't mean \"good\" the way it does for the other stats."
+        )
+
         with st.expander("See how this estimate was built (every adjustment step)"):
             baseline_summary = ", ".join(
                 f"{predictions[col]['base']:.1f} {col}" for col, _ in STAT_COLUMNS
@@ -1814,23 +2051,141 @@ with tab2:
         "opponent-defense engine as the single-player tool above. This does "
         "not model rotations or minutes -- every player is projected at "
         "their own adjusted season-average rate, not a coach's actual "
-        "rotation plan. Per-player nuance (missing/new teammates, primary "
-        "defender, scheme) stays in the single-player tool for now."
+        "rotation plan. Players marked out are handled here; new teammates, "
+        "primary defender and scheme stay in the single-player tool."
     )
 
-def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_id=None):
+# Bounds the COMBINED out-redistribution multiplier per stat, and only
+# when two or more out players actually stack. One player's result is
+# passed through untouched (see combine_out_redistributions), because
+# single ratios on low-count stats often fall outside this band by
+# themselves. The clamp exists so several small-sample ratios can't
+# compound into a number no evidence supports. See this patch's module
+# docstring for the worked example.
+OUT_STACK_CLAMP = (0.75, 1.35)
+
+_DATA_QUALITY_RANK = {
+    "unavailable": 0,
+    "real_thin_sample": 1,
+    "manual_estimate": 2,
+    "real_fallback_season": 3,
+    "real_current": 4,
+}
+
+
+def combine_out_redistributions(results):
+    """Fold several out-redistribution AdjustmentResults into one, so
+    downstream consumers still see a single "out_redistribution" layer
+    with the shape engine/adjustments/base.py documents.
+
+    Returns None when nothing was computed at all, so the caller can
+    keep its existing "no redistribution" branch unchanged.
+
+    Only results with .applied True contribute to the product -- a
+    layer that found no usable sample returns a neutral value AND
+    applied=False, and multiplying by its neutral 1.0 would be
+    harmless but would wrongly drag sample_n and data_quality down."""
+    if not results:
+        return None
+
+    contributing = [r for r in results if r.applied]
+    if not contributing:
+        # Nothing usable: hand back the first neutral result so the
+        # caller's "computed but not applied" messaging still works.
+        return results[0]
+
+    if len(contributing) == 1:
+        # Nothing to stack, so nothing to clamp: hand back that layer's
+        # own result untouched (its per-stat note included). Without
+        # this, the band would bind on a SINGLE player's low-count
+        # stats -- a 0.4 -> 0.6 BLK swing is already a 1.5x ratio --
+        # and one-out-player behaviour would silently change.
+        return contributing[0]
+
+    lo, hi = OUT_STACK_CLAMP
+    value = {}
+    clamped_stats = []
+    for col, _label in STAT_COLUMNS:
+        product = 1.0
+        for r in contributing:
+            product *= r.multiplier_for(col)
+        bounded = max(lo, min(hi, product))
+        if bounded != product:
+            clamped_stats.append(col)
+        value[col] = bounded
+
+    # The weakest evidence in the stack is what the combined number is
+    # really worth -- and `note` below is built from this same variable,
+    # never a second count expression (base.py contract, rule 2).
+    sample_n = min(r.sample_n for r in contributing)
+    data_quality = min(
+        (r.data_quality for r in contributing),
+        key=lambda q: _DATA_QUALITY_RANK.get(q, 0),
+    )
+
+    note = (
+        f"Combined redistribution from {len(contributing)} player(s) marked out, "
+        f"backed by at least {sample_n} real game(s) for the thinnest of them."
+    )
+    if clamped_stats:
+        note += (
+            f" Combined effect capped to the {lo:g}-{hi:g} band for "
+            f"{', '.join(clamped_stats)} -- stacked small-sample ratios "
+            f"compounded past what the evidence supports."
+        )
+
+    return AdjustmentResult(
+        layer=OUT_REDISTRIBUTION_LAYER,
+        value=value,
+        note=note,
+        data_quality=data_quality,
+        sample_n=sample_n,
+        applied=True,
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_opponent_missing_adjustment_cached(missing_names, season):
+    """Full Matchup calls this once per team on every rerun, and every
+    widget change reruns the script. On a cache miss the underlying
+    layer does a career-stats lookup and a 0.5s pause per player, so
+    it's memoised here. missing_names must be a tuple (hashable, and
+    order-stable so the same selection hits the same cache entry)."""
+    return get_opponent_missing_adjustment(list(missing_names), season)
+
+
+def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_ids=None,
+                               opponent_missing_result=None):
     """MVP matchup-predictor engine: season baseline + opponent-defense
     adjustment, plus an optional out-redistribution adjustment when
-    out_player_id is given (Full Matchup's "mark a player as out"
+    out_player_ids is given (Full Matchup's "mark players as out"
     feature -- see engine/adjustments/teammates.py's
     get_out_redistribution_adjustment for the real "games with vs.
     without" comparison and why it's a distinct, narrowly-scoped
     mechanic rather than a reuse of the single-player tool's general
-    missing_teammates layer). Still deliberately excludes missing/new-
-    teammate, primary defender, and scheme adjustments -- that nuance
-    stays in the single-player tool, per the approved v1 scope.
+    missing_teammates layer). Also applies the opponent's absences via
+    opponent_missing_result (see below). Still deliberately excludes
+    missing/new-teammate, primary defender, and scheme adjustments --
+    that nuance stays in the single-player tool, per the approved v1
+    scope.
 
-    out_player_id=None (the default, and every call site before this
+    opponent_missing_result: an AdjustmentResult from
+    get_opponent_missing_adjustment_cached() for the players marked out
+    on the OTHER team, or None when nobody is. The caller computes it
+    once per team, not per player -- its value doesn't depend on which
+    player is being projected. Its multiplier is folded in only when
+    .applied is True; it's recorded in layer_results either way, so a
+    saved row shows "opponent absences were given but couldn't be
+    weighted" rather than silently nothing.
+
+    out_player_ids accepts None, a single id, or a list. Several out
+    players each get their own redistribution against the same resolved
+    gamelog; combine_out_redistributions() folds them into ONE
+    AdjustmentResult under the existing "out_redistribution" layer key,
+    with the combined per-stat multiplier bounded by OUT_STACK_CLAMP so
+    stacked small-sample ratios can't compound past their evidence.
+
+    out_player_ids=None (the default, and every call site before this
     parameter existed): the redistribution branch below never runs,
     redistribution_result is always None, and the returned predictions
     are exactly what this function always computed -- season baseline
@@ -1850,6 +2205,7 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
     against, not just a point estimate). No post_change_thin_sample
     widening here -- that's a tab1-only roster-change concept tab2
     doesn't have. layer_results is {"opponent_defense": defense_result}
+    plus "missing_opponents" when opponent_missing_result was given,
     plus "out_redistribution" only when it was actually computed (never
     a None value in the dict -- a caller iterating layer_results and
     calling .applied on every value would break on that) -- this is
@@ -1869,16 +2225,31 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
     # x0.5 strength exactly. See engine/adjustments/defense.py.
     defense_result = get_defense_adjustment(team_def_rating, league_avg_def, def_source_note)
 
+    # Accepts None, a single id (every pre-multi-out call site), or a
+    # list -- normalised here so there is one code path below.
+    if out_player_ids is None:
+        out_ids = []
+    elif isinstance(out_player_ids, (list, tuple, set)):
+        out_ids = [pid for pid in out_player_ids if pid is not None]
+    else:
+        out_ids = [out_player_ids]
+
     redistribution_result = None
-    if out_player_id is not None:
+    if out_ids:
         try:
             player_df, season, _source = resolve_season_gamelog(player_id)
         except Exception:
             player_df = pd.DataFrame()
         if not player_df.empty:
-            redistribution_result = get_out_redistribution_adjustment(
-                player_id, out_player_id, season, player_df
-            )
+            # One resolve_season_gamelog call for all of them -- each
+            # out player is a Game_ID set-membership test against the
+            # same log, so this adds no extra live fetches per extra
+            # player marked out.
+            per_out = [
+                get_out_redistribution_adjustment(player_id, out_id, season, player_df)
+                for out_id in out_ids
+            ]
+            redistribution_result = combine_out_redistributions(per_out)
 
     predictions = {}
     for col, _label in STAT_COLUMNS:
@@ -1886,6 +2257,8 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
         multiplier = defense_result.multiplier_for(col)
         if redistribution_result is not None:
             multiplier *= redistribution_result.multiplier_for(col)
+        if opponent_missing_result is not None and opponent_missing_result.applied:
+            multiplier *= opponent_missing_result.multiplier_for(col)
         predicted = base_mean * multiplier
         spread = base_std if pd.notna(base_std) else predicted * 0.2
         low = max(0, predicted - spread * 0.6)
@@ -1893,6 +2266,8 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
         predictions[col] = {"base": base_mean, "predicted": predicted, "low": low, "high": high}
 
     layer_results = {"opponent_defense": defense_result}
+    if opponent_missing_result is not None:
+        layer_results["missing_opponents"] = opponent_missing_result
     if redistribution_result is not None:
         layer_results["out_redistribution"] = redistribution_result
 
@@ -1944,14 +2319,18 @@ with tab2:
         team_a_id, team_a_full, team_a_abbr = ctx["team_a_id"], ctx["team_a_full"], ctx["team_a_abbr"]
         team_b_id, team_b_full, team_b_abbr = ctx["team_b_id"], ctx["team_b_full"], ctx["team_b_abbr"]
 
-        def build_team_projection(team_id, opponent_id, out_player_id=None):
-            """out_player_id: excluded entirely from the projected rows
-            (not called through predict_player_vs_opponent at all --
-            there's nothing to project for a player marked out), and
+        def build_team_projection(team_id, opponent_id, out_player_ids=None,
+                                  opponent_missing_result=None):
+            """out_player_ids: a list -- each is excluded entirely from
+            the projected rows (not called through
+            predict_player_vs_opponent at all -- there's nothing to
+            project for a player marked out), and the whole list is
             passed through to every remaining player's prediction so
             engine/adjustments/teammates.py's
-            get_out_redistribution_adjustment can apply. Returns
-            (rows, skipped, unadjusted, out_name, trackable):
+            get_out_redistribution_adjustment can apply per out player.
+            opponent_missing_result: computed once by the caller for the
+            OTHER team's out list, passed unchanged to every player.
+            Returns (rows, skipped, unadjusted, out_names, trackable):
             `skipped` is the existing "not enough data to project at
             all" case; `unadjusted` is a distinct, narrower case -- the
             player WAS projected, but there wasn't enough real "games
@@ -1965,16 +2344,20 @@ with tab2:
             context through here (the caller adds that; this function
             doesn't know the game being tracked, only the matchup)."""
             roster = get_team_roster(team_id)
+            out_ids = list(out_player_ids or [])
             rows = []
             skipped = []
             unadjusted = []
-            out_name = None
+            out_names = []
             trackable = []
             for pid, pname in roster:
-                if pid == out_player_id:
-                    out_name = pname
+                if pid in out_ids:
+                    out_names.append(pname)
                     continue
-                result = predict_player_vs_opponent(pid, pname, opponent_id, out_player_id=out_player_id)
+                result = predict_player_vs_opponent(
+                    pid, pname, opponent_id, out_player_ids=out_ids,
+                    opponent_missing_result=opponent_missing_result,
+                )
                 if result is None:
                     skipped.append(pname)
                     continue
@@ -1990,40 +2373,116 @@ with tab2:
                     "player_id": pid, "player_full_name": pname,
                     "predictions": predictions, "layer_results": layer_results,
                 })
-            return rows, skipped, unadjusted, out_name, trackable
+            return rows, skipped, unadjusted, out_names, trackable
 
-        def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr, out_key):
-            st.markdown(f"**{team_full}** projected box score")
+        def pick_out_players(team_id, team_full, out_key):
+            """One team's "who's out" picker. Rendered for BOTH teams
+            before either table is built, because each table depends on
+            both out lists. Returns (out_ids, out_names), both in
+            roster order."""
             roster = get_team_roster(team_id)
             roster_id_to_name = dict(roster)
-            out_id = st.selectbox(
-                f"Mark a {team_full} player as out (optional)",
-                options=[None] + [pid for pid, _pname in roster],
-                format_func=lambda pid: "None" if pid is None else player_search_label(roster_id_to_name[pid]),
+            out_ids = st.multiselect(
+                f"Mark {team_full} players as out (optional)",
+                options=[pid for pid, _pname in roster],
+                format_func=lambda pid: player_search_label(roster_id_to_name[pid]),
                 key=out_key,
+                help=(
+                    "Each player marked out is compared against this team's real "
+                    "games with vs. without them. Stacked effects are capped, so "
+                    "marking several players out won't compound into a projection "
+                    "the sample can't support."
+                ),
+            )
+
+            chosen = set(out_ids)
+            out_pairs = [(pid, pname) for pid, pname in roster if pid in chosen]
+            return [pid for pid, _ in out_pairs], [pname for _, pname in out_pairs]
+
+        def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr,
+                                   out_ids, opponent_out_names):
+            st.markdown(f"**{team_full}** projected box score")
+            # Same season as the Single Player tool's call -- see this
+            # patch's docstring; change both together.
+            opponent_missing_result = (
+                get_opponent_missing_adjustment_cached(tuple(opponent_out_names), PREVIOUS_SEASON)
+                if opponent_out_names else None
             )
 
             with st.spinner("Calculating..."):
-                rows, skipped, unadjusted, out_name, trackable = build_team_projection(
-                    team_id, opponent_id, out_player_id=out_id
+                rows, skipped, unadjusted, out_names, trackable = build_team_projection(
+                    team_id, opponent_id, out_player_ids=out_ids,
+                    opponent_missing_result=opponent_missing_result,
                 )
 
             if rows:
-                st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                table_df = pd.DataFrame(rows)
+                stat_labels = [label for _col, label in STAT_COLUMNS]
+                team_total = table_df[stat_labels].sum().round(1)
+                total_row = {"Player": "Team total", **team_total.to_dict()}
+                st.dataframe(
+                    pd.concat([table_df, pd.DataFrame([total_row])], ignore_index=True),
+                    width="stretch", hide_index=True,
+                )
+                pts_label = STAT_COLUMNS[0][1]
+                if out_ids:
+                    # Same projection with nobody out, for comparison. Each
+                    # player's baseline/defense lookups are cached, so this
+                    # costs little. Nothing forces the two totals to match:
+                    # the backtest showed per-player accuracy is best when
+                    # teammates only pick up part of an absent player's load.
+                    full_rows = build_team_projection(team_id, opponent_id)[0]
+                    full_pts = round(sum(r[pts_label] for r in full_rows), 1)
+                    st.caption(
+                        f"Projected team total: {team_total[pts_label]:.1f} points with "
+                        f"these players out, vs {full_pts:.1f} at full strength. "
+                        f"Teammates pick up only part of an absent player's load here -- "
+                        f"that's what tested most accurately player by player -- so "
+                        f"the team total drops."
+                    )
+                if skipped:
+                    st.caption(
+                        "Team totals only include players projected above, so they run "
+                        "low when players without enough NBA data would also play."
+                    )
             else:
                 st.info("No players with enough data to project.")
-            if out_name:
+            out_label = ", ".join(out_names)
+            if out_names:
                 st.caption(
-                    f"Marked out: {out_name}. Remaining players' numbers above are "
+                    f"Marked out: {out_label}. Remaining players' numbers above are "
                     f"adjusted using their real historical games with vs. without "
-                    f"{out_name} this season, where enough real data exists."
+                    f"those players this season, where enough real data exists."
                 )
             if unadjusted:
                 st.caption(
-                    f"Not enough real head-to-head history with {out_name} to trust "
+                    f"Not enough real history without {out_label} to trust "
                     f"an adjustment -- shown at their normal projection instead: "
                     f"{', '.join(unadjusted)}"
                 )
+            if opponent_missing_result is not None:
+                opp_label = ", ".join(opponent_out_names)
+                if opponent_missing_result.applied:
+                    opp_mult = opponent_missing_result.multiplier_for(STAT_COLUMNS[0][0])
+                    st.caption(
+                        f"{opponent_full} without {opp_label}: every stat above is "
+                        f"scaled x{opp_mult:.3f}, weighted by their real minutes and "
+                        f"estimated net rating -- the same missing-opponent adjustment "
+                        f"the Single Player tool uses. It's one multiplier for every "
+                        f"stat, not a per-stat estimate."
+                    )
+                elif opponent_missing_result.sample_n > 0:
+                    st.caption(
+                        f"{opponent_full} without {opp_label}: shown for context, not "
+                        f"applied. Backtested over 16,101 real games, an opponent's "
+                        f"missing players didn't make individual stat lines more "
+                        f"accurate, so these numbers don't change."
+                    )
+                else:
+                    st.caption(
+                        f"{opponent_full} without {opp_label}: no adjustment applied "
+                        f"-- {opponent_missing_result.note}"
+                    )
             if skipped:
                 st.caption(f"Not enough data to project: {', '.join(skipped)}")
 
@@ -2032,11 +2491,29 @@ with tab2:
                 for t in trackable
             ]
 
+        pick_a, pick_b = st.columns(2)
+        with pick_a:
+            team_a_out_ids, team_a_out_names = pick_out_players(
+                team_a_id, team_a_full, "team_a_out_input"
+            )
+        with pick_b:
+            team_b_out_ids, team_b_out_names = pick_out_players(
+                team_b_id, team_b_full, "team_b_out_input"
+            )
+        st.caption(
+            "A player marked out is removed from his team's table, and his "
+            "teammates' lines are adjusted from real games without him. The "
+            "other team's lines are noted but not changed -- see the note under "
+            "each table."
+        )
+
         team_a_trackable = render_team_projection(
-            team_a_id, team_a_full, team_b_id, team_b_full, team_b_abbr, "team_a_out_input"
+            team_a_id, team_a_full, team_b_id, team_b_full, team_b_abbr,
+            team_a_out_ids, team_b_out_names,
         )
         team_b_trackable = render_team_projection(
-            team_b_id, team_b_full, team_a_id, team_a_full, team_a_abbr, "team_b_out_input"
+            team_b_id, team_b_full, team_a_id, team_a_full, team_a_abbr,
+            team_b_out_ids, team_a_out_names,
         )
 
         st.markdown("---")

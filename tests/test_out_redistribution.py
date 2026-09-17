@@ -47,8 +47,20 @@ def test_normal_redistribution_computes_real_ratio(monkeypatch):
     assert result.sample_n == 4  # 4 real games without the out player
     avg_without = 28.0
     avg_overall = player_df["PTS"].mean()
-    assert result.value["PTS"] == avg_without / avg_overall
-    assert result.value["PTS"] > 1.0  # production goes UP without this player, correctly signed
+    raw = avg_without / avg_overall
+    n = 4
+    expected = 1 + (raw - 1) * n / (n + teammates_module.OUT_RATIO_SHRINK_K)
+    assert result.value["PTS"] == expected
+    assert 1.0 < result.value["PTS"] < raw  # correctly signed, and shrunk toward 1
+
+
+def test_shrink_ratio_behaviour():
+    shrink = teammates_module.shrink_ratio
+    k = teammates_module.OUT_RATIO_SHRINK_K
+    assert shrink(1.5, 0) == 1.0              # no games -> no effect
+    assert shrink(1.0, 10) == 1.0             # no difference stays no difference
+    assert shrink(0.0, 5) == 1 - 5 / (5 + k)  # a zero ratio no longer zeroes the stat
+    assert abs(shrink(1.5, 10_000) - 1.5) < 0.01  # huge samples keep their ratio
 
 
 def test_insufficient_data_both_directions_excluded(monkeypatch):
@@ -108,3 +120,43 @@ def test_season_scoping_uses_the_passed_season_not_an_independent_lookup(monkeyp
     # Only the caller-supplied season was ever fetched for the out
     # player -- proves no independent season resolution happened here.
     assert seen_seasons == ["2024-25"]
+
+
+def test_pooled_prior_from_out_player_averages(monkeypatch):
+    # Out player averages 30 PTS / 6 AST / 9 FG3A: prior = 1 + beta * avg / league team avg.
+    out_rows = [{"Game_ID": f"g{i}", "PTS": 30, "AST": 6, "FG3A": 9, "REB": 5} for i in range(4)]
+
+    monkeypatch.setattr(teammates_module, "fetch_combined_game_log",
+                        lambda pid, season: pd.DataFrame(out_rows))
+
+    player_df = pd.DataFrame([
+        _row("g0", PTS=20), _row("g1", PTS=20), _row("g2", PTS=20), _row("g3", PTS=20),
+        _row("g4", PTS=28), _row("g5", PTS=28), _row("g6", PTS=28), _row("g7", PTS=28),
+    ])
+    result = get_out_redistribution_adjustment(1, 999, "2026-27", player_df)
+
+    beta, league, k = teammates_module.OUT_PRIOR_BETA, teammates_module.LEAGUE_TEAM_PER_GAME, teammates_module.OUT_RATIO_SHRINK_K
+    prior_pts = 1 + beta["PTS"] * 30 / league["PTS"]
+    raw = 28.0 / player_df["PTS"].mean()
+    assert result.value["PTS"] == prior_pts + (raw - prior_pts) * 4 / (4 + k)
+    prior_ast = 1 + beta["AST"] * 6 / league["AST"]
+    # AST identical with/without -> raw 1.0, pulled most of the way to the prior
+    assert abs(result.value["AST"] - (prior_ast + (1.0 - prior_ast) * 4 / (4 + k))) < 1e-12
+    assert 1.0 < result.value["AST"] < prior_ast
+    assert result.value["REB"] == 1.0                     # no beta for REB -> prior 1, raw 1
+
+
+def test_thin_sample_falls_back_to_pooled_prior(monkeypatch):
+    out_rows = [{"Game_ID": f"g{i}", "PTS": 30, "AST": 6, "FG3A": 9} for i in range(7)]
+    monkeypatch.setattr(teammates_module, "fetch_combined_game_log",
+                        lambda pid, season: pd.DataFrame(out_rows))
+    player_df = pd.DataFrame([_row(f"g{i}") for i in range(8)])  # only g7 is "without"
+
+    result = get_out_redistribution_adjustment(1, 999, "2026-27", player_df)
+
+    assert result.applied is True
+    assert result.data_quality == "real_thin_sample"
+    assert result.sample_n == 1
+    assert result.value["PTS"] == 1 + teammates_module.OUT_PRIOR_BETA["PTS"] * 30 / teammates_module.LEAGUE_TEAM_PER_GAME["PTS"]
+    assert result.value["BLK"] == 1.0
+    assert "league-wide pickup" in result.note
