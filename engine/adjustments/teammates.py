@@ -43,6 +43,31 @@ MISSING_TEAMMATES_LAYER = "missing_teammates"
 NEW_TEAMMATE_LAYER = "new_teammate"
 OUT_REDISTRIBUTION_LAYER = "out_redistribution"
 
+# Shrinks every with/without ratio toward 1.0 by its real sample size:
+#     applied = 1 + (raw - 1) * n_without / (n_without + OUT_RATIO_SHRINK_K)
+# Set from out_redistribution_sweep.py, not intuition. Replayed
+# point-in-time over the backtest case set (14,709 games with a key
+# teammate absent), the raw ratios made predictions 3.2% WORSE than no
+# adjustment at all (95% CI +2.9..+3.5%), on every stat and every
+# season: from 3-5 games, BLK/STL/OREB ratios swing wildly and 12.8%
+# of raw ratios had a stat at exactly 0. Error was lowest at k=80
+# (k=20 1.0009, 40 0.9994, 80 0.9992, 160 0.9994 relative to no
+# adjustment); caps and higher minimum samples didn't beat shrinkage.
+# At k=80 the layer is nearly neutral for one out player and slightly
+# helpful for two or more -- an honest reflection of how little a few
+# games can say. Measured on get_out_redistribution_adjustment; the
+# Single Player missing-teammates layer uses the same ratio math, so it
+# gets the same shrinkage (inherited, not separately backtested).
+OUT_RATIO_SHRINK_K = 80
+
+
+def shrink_ratio(raw_ratio, n_without, k=OUT_RATIO_SHRINK_K):
+    """Pull a with/without ratio toward 1.0 in proportion to how few
+    real games back it. See OUT_RATIO_SHRINK_K."""
+    if n_without <= 0:
+        return 1.0
+    return 1.0 + (raw_ratio - 1.0) * n_without / (n_without + k)
+
 
 def get_teammate_availability_adjustment(player_id, missing_names, season, df=None) -> AdjustmentResult:
     """Measures how this player's production differs in real games
@@ -128,22 +153,26 @@ def get_teammate_availability_adjustment(player_id, missing_names, season, df=No
         )
 
     matched_df = pd.DataFrame(matching_games)
+    sample_n = len(matching_games)
     adjustments = {}
     per_stat_notes = []
     for col, _label in STAT_COLUMNS:
         avg_with_missing = matched_df[col].mean()
         avg_overall = df[col].mean()
-        ratio = avg_with_missing / avg_overall if avg_overall else 1.0
+        raw_ratio = avg_with_missing / avg_overall if avg_overall else 1.0
+        ratio = shrink_ratio(raw_ratio, sample_n)
         adjustments[col] = ratio
         per_stat_notes.append(
-            f"{col} {avg_with_missing:.1f} vs {avg_overall:.1f} overall ({(ratio - 1) * 100:+.1f}%)"
+            f"{col} {avg_with_missing:.1f} vs {avg_overall:.1f} overall "
+            f"(raw {(raw_ratio - 1) * 100:+.1f}%, applied {(ratio - 1) * 100:+.1f}%)"
         )
 
     summary = ", ".join(per_stat_notes)
-    sample_n = len(matching_games)
     note = (
         f"Found {sample_n} games missing {', '.join(missing_names)} (vs. {present_count} "
-        f"with them present), stat-by-stat: {summary}."
+        f"with them present), stat-by-stat: {summary}. Each raw difference is "
+        f"shrunk toward zero by sample size ({sample_n} games vs. a "
+        f"{OUT_RATIO_SHRINK_K}-game prior) -- backtested, small samples overshoot."
     )
     return AdjustmentResult(
         layer=MISSING_TEAMMATES_LAYER, value=adjustments, note=note,
@@ -309,22 +338,26 @@ def get_out_redistribution_adjustment(player_id, out_player_id, season, player_d
             data_quality="unavailable", sample_n=len(without_out), applied=False,
         )
 
+    sample_n = len(without_out)
     adjustments = {}
     per_stat_notes = []
     for col, _label in STAT_COLUMNS:
         avg_without = without_out[col].mean()
         avg_overall = player_df[col].mean()
-        ratio = avg_without / avg_overall if avg_overall else 1.0
+        raw_ratio = avg_without / avg_overall if avg_overall else 1.0
+        ratio = shrink_ratio(raw_ratio, sample_n)
         adjustments[col] = ratio
         per_stat_notes.append(
-            f"{col} {avg_without:.1f} vs {avg_overall:.1f} overall ({(ratio - 1) * 100:+.1f}%)"
+            f"{col} {avg_without:.1f} vs {avg_overall:.1f} overall "
+            f"(raw {(raw_ratio - 1) * 100:+.1f}%, applied {(ratio - 1) * 100:+.1f}%)"
         )
 
     summary = ", ".join(per_stat_notes)
-    sample_n = len(without_out)
     note = (
         f"Found {sample_n} games without the marked-out player this {season} season "
-        f"(vs. {len(with_out)} with them present), stat-by-stat: {summary}."
+        f"(vs. {len(with_out)} with them present), stat-by-stat: {summary}. Raw "
+        f"differences are shrunk toward zero by sample size ({sample_n} games vs. a "
+        f"{OUT_RATIO_SHRINK_K}-game prior) -- backtested, small samples overshoot."
     )
     return AdjustmentResult(
         layer=OUT_REDISTRIBUTION_LAYER, value=adjustments, note=note,

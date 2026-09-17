@@ -47,8 +47,20 @@ def test_normal_redistribution_computes_real_ratio(monkeypatch):
     assert result.sample_n == 4  # 4 real games without the out player
     avg_without = 28.0
     avg_overall = player_df["PTS"].mean()
-    assert result.value["PTS"] == avg_without / avg_overall
-    assert result.value["PTS"] > 1.0  # production goes UP without this player, correctly signed
+    raw = avg_without / avg_overall
+    n = 4
+    expected = 1 + (raw - 1) * n / (n + teammates_module.OUT_RATIO_SHRINK_K)
+    assert result.value["PTS"] == expected
+    assert 1.0 < result.value["PTS"] < raw  # correctly signed, and shrunk toward 1
+
+
+def test_shrink_ratio_behaviour():
+    shrink = teammates_module.shrink_ratio
+    k = teammates_module.OUT_RATIO_SHRINK_K
+    assert shrink(1.5, 0) == 1.0              # no games -> no effect
+    assert shrink(1.0, 10) == 1.0             # no difference stays no difference
+    assert shrink(0.0, 5) == 1 - 5 / (5 + k)  # a zero ratio no longer zeroes the stat
+    assert abs(shrink(1.5, 10_000) - 1.5) < 0.01  # huge samples keep their ratio
 
 
 def test_insufficient_data_both_directions_excluded(monkeypatch):
