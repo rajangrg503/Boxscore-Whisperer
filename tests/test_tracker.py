@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from engine import tracker
+from tests.conftest import write_raw_log
 from engine.adjustments.base import AdjustmentResult, ALL_STATS
 
 
@@ -82,7 +83,7 @@ def test_id_column_survives_pandas_numeric_misparse(temp_log):
     rows = [{c: None for c in old_columns} for _ in problem_ids]
     for row, pid in zip(rows, problem_ids):
         row.update({"id": pid, "player_id": 1, "player_full_name": "X", "status": "pending"})
-    pd.DataFrame(rows).to_csv(temp_log, index=False)
+    write_raw_log(pd.DataFrame(rows), temp_log)
 
     df = tracker.load_prediction_log()
     # The exact dtype label pandas reports for dtype=str varies by
@@ -104,7 +105,7 @@ def test_game_id_column_survives_pandas_numeric_misparse(temp_log):
     row = {c: None for c in tracker.LOG_COLUMNS}
     row.update({"id": "abc12345", "player_id": 1, "player_full_name": "X",
                 "status": "resolved", "game_id": "0022400604"})
-    pd.DataFrame([row]).to_csv(temp_log, index=False)
+    write_raw_log(pd.DataFrame([row]), temp_log)
 
     df = tracker.load_prediction_log()
 
@@ -185,7 +186,7 @@ def test_backward_compatible_with_old_schema_rows(temp_log):
         "game_date": "2026-08-05", "status": "pending", "PTS_low": 10.0, "PTS_mid": 15.0,
         "PTS_high": 20.0,
     })
-    pd.DataFrame([old_row]).to_csv(temp_log, index=False)
+    write_raw_log(pd.DataFrame([old_row]), temp_log)
 
     loaded = tracker.load_prediction_log()
     assert len(loaded) == 1
@@ -232,7 +233,7 @@ def test_load_reindexes_missing_columns_without_keyerror(temp_log):
     old_row = {c: None for c in old_columns}
     old_row.update({"id": "oldrow1", "player_id": 1, "player_full_name": "Old Player",
                      "status": "pending"})
-    pd.DataFrame([old_row]).to_csv(temp_log, index=False)
+    write_raw_log(pd.DataFrame([old_row]), temp_log)
 
     df = tracker.load_prediction_log()
     assert list(df.columns) == tracker.LOG_COLUMNS

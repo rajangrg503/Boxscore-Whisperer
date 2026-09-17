@@ -22,6 +22,13 @@ import pandas as pd
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _file_backend_only(monkeypatch):
+    """These tests exercise the CSV file lock; the Postgres lock has its
+    own multi-process test in tests/test_log_store.py."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+
 def _sample_predictions():
     from engine.stat_columns import STAT_COLUMNS
     return {col: {"low": 1.0, "predicted": 2.0, "high": 3.0, "base": 2.0} for col, _ in STAT_COLUMNS}

@@ -111,6 +111,7 @@ Four things worth knowing before touching this block:
 import contextlib
 import datetime
 import fcntl
+import io
 import json
 import os
 import uuid
@@ -125,6 +126,8 @@ from engine.team_ids import TEAM_ID_BY_ABBR
 from engine.cache import _load_df_cache, _save_df_cache
 from engine.game_log import fetch_combined_game_log
 from engine.adjustments.defense import get_league_advanced_team_stats
+from engine import log_store
+from engine.log_store import TrackerStorageError  # noqa: F401  (re-exported for app.py)
 
 LOG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prediction_log.csv"
@@ -159,7 +162,14 @@ KEY_TEAMMATE_GAMES_PLAYED_PCT = 0.70  # a "key" teammate is one who played in
 def _locked():
     """Exclusive lock held for an entire read-modify-write cycle --
     NOT just around the write. A second caller blocks here until the
-    first caller's full cycle (read + modify + write) is done."""
+    first caller's full cycle (read + modify + write) is done.
+
+    With a DATABASE_URL configured this is a Postgres transaction plus
+    an advisory lock instead of a file lock -- see engine/log_store.py."""
+    if log_store.using_database():
+        with log_store.db_transaction(lock=True):
+            yield
+        return
     with open(LOCK_PATH, "w") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
         try:
@@ -222,7 +232,17 @@ def load_prediction_log():
     real cached gamelog). Without this, an all-digit Game_ID read back
     via plain pd.read_csv() silently loses its leading zeros as int64
     ("22400604") -- caught live during this column's own verification,
-    not theoretically."""
+    not theoretically.
+
+    With a DATABASE_URL configured, the rows come from Postgres as the
+    same CSV text and go through the same read_csv call below -- see
+    engine/log_store.py. A database failure raises TrackerStorageError
+    rather than returning an empty log, so a save can never overwrite
+    the real log with nothing."""
+    if log_store.using_database():
+        text = log_store.load_csv_text(LOG_COLUMNS)
+        df = pd.read_csv(io.StringIO(text), dtype={"id": str, "game_id": str})
+        return df.reindex(columns=LOG_COLUMNS)
     if os.path.exists(LOG_PATH):
         try:
             df = pd.read_csv(LOG_PATH, dtype={"id": str, "game_id": str})
@@ -233,6 +253,9 @@ def load_prediction_log():
 
 
 def save_prediction_log(df):
+    if log_store.using_database():
+        log_store.save_df(df)
+        return
     _atomic_write_csv(df, LOG_PATH)
 
 

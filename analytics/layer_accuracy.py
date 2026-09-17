@@ -17,15 +17,25 @@ folded into the tracker's existing hit/miss columns.
 """
 
 import json
+import time
+
 import pandas as pd
 from dataclasses import dataclass
 from typing import Optional
 
-from engine.tracker import load_prediction_log
+from engine import log_store
+from engine.tracker import TrackerStorageError, load_prediction_log
 from engine.adjustments.base import AdjustmentResult
 from engine.adjustments.registry import LAYER_DISPLAY, NEVER_APPLIED_BY_DESIGN
 
 MIN_SAMPLE = 5
+
+# With the Postgres log, every results page would otherwise query the
+# database on every rerun (each widget change), which keeps the free
+# Neon compute awake and eats its monthly allowance. The track record
+# is a slow-moving summary, so a few minutes of staleness is fine.
+RECENT_CACHE_SECONDS = 600
+_recent_cache = {}
 
 
 @dataclass
@@ -34,6 +44,26 @@ class LayerAccuracy:
     n: int                     # real number of scored (row, stat) pairs
     reason: Optional[str] = None  # set only when hit_rate is None:
                                    # "context_only_by_design" | "insufficient_data"
+
+
+def _recent_resolved(window):
+    """The live log's `window` most recently saved resolved rows.
+    Cached for RECENT_CACHE_SECONDS when the log is in Postgres; the
+    CSV backend is read fresh every time, as before."""
+    url = log_store.database_url()
+    key = (url, window)
+    if url is not None:
+        hit = _recent_cache.get(key)
+        if hit is not None and hit[0] > time.monotonic():
+            return hit[1].copy()
+    df = load_prediction_log()
+    resolved = df[df["status"] == "resolved"]
+    if "saved_at" in resolved.columns:
+        resolved = resolved.sort_values("saved_at", ascending=False)
+    resolved = resolved.head(window)
+    if url is not None:
+        _recent_cache[key] = (time.monotonic() + RECENT_CACHE_SECONDS, resolved.copy())
+    return resolved
 
 
 def layer_hit_rate(layer_name: str, stat_col: str, window: int = 50, df: pd.DataFrame = None) -> LayerAccuracy:
@@ -58,11 +88,7 @@ def layer_hit_rate(layer_name: str, stat_col: str, window: int = 50, df: pd.Data
         return LayerAccuracy(hit_rate=None, n=0, reason="context_only_by_design")
 
     if df is None:
-        df = load_prediction_log()
-        resolved = df[df["status"] == "resolved"]
-        if "saved_at" in resolved.columns:
-            resolved = resolved.sort_values("saved_at", ascending=False)
-        resolved = resolved.head(window)
+        resolved = _recent_resolved(window)
     else:
         resolved = df[df["status"] == "resolved"]
 
@@ -140,11 +166,19 @@ def build_layer_lines(notes_by_layer: dict) -> list:
     notes_by_layer: {layer_key: note_string}, one entry per key in
     LAYER_DISPLAY. Numbering starts at 2 since [1] (the unadjusted
     baseline) isn't a layer and is rendered separately by the caller."""
+    # Load the log once for every layer (it may be a database round
+    # trip), not once per layer. Passing the already-windowed rows as
+    # df gives the same result as layer_hit_rate's own df=None path.
+    try:
+        recent = _recent_resolved(50)
+    except TrackerStorageError:
+        recent = None
     lines = []
     for i, (layer_key, label) in enumerate(LAYER_DISPLAY, start=2):
         note = notes_by_layer[layer_key]
-        lines.append(
-            f"**[{i}] {label}:** {note} "
-            f"_{format_layer_accuracy(layer_hit_rate(layer_key, 'PTS'))}_"
-        )
+        if recent is None and not NEVER_APPLIED_BY_DESIGN.get(layer_key):
+            accuracy_text = "track record unavailable right now (the prediction tracker can't be reached)."
+        else:
+            accuracy_text = format_layer_accuracy(layer_hit_rate(layer_key, "PTS", df=recent))
+        lines.append(f"**[{i}] {label}:** {note} _{accuracy_text}_")
     return lines

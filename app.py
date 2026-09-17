@@ -40,7 +40,8 @@ from engine.career_stats import resolve_season_mpg
 from engine.season import CURRENT_SEASON, PREVIOUS_SEASON
 from engine.stat_columns import STAT_COLUMNS
 from engine.tracker import (
-    LOG_PATH,
+    LOG_COLUMNS,
+    TrackerStorageError,
     load_prediction_log,
     append_prediction_to_log,
     append_predictions_batch,
@@ -1099,6 +1100,11 @@ STAT_TABLE_LABELS = {
 }
 
 # ---------- Prediction Tracker (sidebar, always visible) ----------
+TRACKER_UNAVAILABLE_MSG = (
+    "The prediction tracker can't reach its database right now. "
+    "Your predictions still work; please try saving or checking again in a minute."
+)
+
 with st.sidebar:
     st.markdown(
         '<div class="bw-side-title">'
@@ -1119,16 +1125,26 @@ with st.sidebar:
     if st.button("Check for results", key="refresh_tracker_btn",
                  icon=":material/refresh:", width="stretch"):
         with st.spinner("Checking saved predictions against real results..."):
-            refresh_pending_predictions(get_head_to_head_log)
+            try:
+                refresh_pending_predictions(get_head_to_head_log)
+            except TrackerStorageError:
+                st.error(TRACKER_UNAVAILABLE_MSG)
 
     entered_email = tracker_email.strip().lower()
     if not entered_email:
         st.caption("Enter your email above to see your saved predictions.")
     else:
-        log_df = load_prediction_log()
+        tracker_down = False
+        try:
+            log_df = load_prediction_log()
+        except TrackerStorageError:
+            tracker_down = True
+            log_df = pd.DataFrame(columns=LOG_COLUMNS)
         my_log_df = log_df[log_df["saved_by_email"].fillna("") == entered_email]
 
-        if my_log_df.empty:
+        if tracker_down:
+            st.caption(TRACKER_UNAVAILABLE_MSG)
+        elif my_log_df.empty:
             st.caption("No saved predictions yet for this email. Save one after running a prediction below.")
         else:
             resolved = my_log_df[my_log_df["status"] == "resolved"]
@@ -1169,8 +1185,8 @@ with st.sidebar:
                 })
                 st.dataframe(display_log, use_container_width=True, hide_index=True)
                 st.caption(
-                    "Showing Points only here for space — all 8 tracked stats are saved "
-                    f"in the underlying file at {os.path.basename(LOG_PATH)}."
+                    f"Showing Points only here for space — all {len(STAT_COLUMNS)} "
+                    "tracked stats are saved with each prediction."
                 )
 
 st.markdown(
@@ -2104,12 +2120,16 @@ with tab1:
                             "so you can find this prediction again."
                         )
                     else:
-                        new_id = append_prediction_to_log(
-                            player_id, player_full_name, opponent_full_name,
-                            opponent_abbr, tracked_game_date, predictions,
-                            layer_results=layer_results, saved_by_email=save_email,
-                        )
-                        st.success(f"Saved (id: {new_id}). Check the Prediction Tracker in the sidebar later.")
+                        try:
+                            new_id = append_prediction_to_log(
+                                player_id, player_full_name, opponent_full_name,
+                                opponent_abbr, tracked_game_date, predictions,
+                                layer_results=layer_results, saved_by_email=save_email,
+                            )
+                        except TrackerStorageError:
+                            st.error(TRACKER_UNAVAILABLE_MSG)
+                        else:
+                            st.success(f"Saved (id: {new_id}). Check the Prediction Tracker in the sidebar later.")
 
         # Recent trend chart -- reuses the same game log already fetched
         # for hit rates, no extra API call. Lives outside the form so
@@ -2871,11 +2891,15 @@ with tab2:
                     }
                     for t in all_trackable
                 ]
-                new_ids = append_predictions_batch(rows_input, saved_by_email=save_email, source="full_matchup")
-                st.success(
-                    f"Saved {len(new_ids)} player predictions for this matchup. "
-                    f"Check the Prediction Tracker in the sidebar later."
-                )
+                try:
+                    new_ids = append_predictions_batch(rows_input, saved_by_email=save_email, source="full_matchup")
+                except TrackerStorageError:
+                    st.error(TRACKER_UNAVAILABLE_MSG)
+                else:
+                    st.success(
+                        f"Saved {len(new_ids)} player predictions for this matchup. "
+                        f"Check the Prediction Tracker in the sidebar later."
+                    )
 
 # ---------------------------- Footer ----------------------------
 # The full legal notice lives here, on every page view; the hero carries
