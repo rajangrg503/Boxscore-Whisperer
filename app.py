@@ -57,7 +57,9 @@ from engine.cache import cached_or_live
 from engine.adjustments.missing_players import get_opponent_missing_adjustment
 from engine.adjustments.defender import get_defender_matchup_adjustment
 from engine.adjustments.scheme import get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS
+from engine.adjustments.base import AdjustmentResult
 from engine.adjustments.teammates import (
+    OUT_REDISTRIBUTION_LAYER,
     get_teammate_availability_adjustment,
     get_new_teammate_impact_adjustment,
     get_out_redistribution_adjustment,
@@ -1818,10 +1820,99 @@ with tab2:
         "defender, scheme) stays in the single-player tool for now."
     )
 
-def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_id=None):
+# Bounds the COMBINED out-redistribution multiplier per stat, and only
+# when two or more out players actually stack. One player's result is
+# passed through untouched (see combine_out_redistributions), because
+# single ratios on low-count stats often fall outside this band by
+# themselves. The clamp exists so several small-sample ratios can't
+# compound into a number no evidence supports. See this patch's module
+# docstring for the worked example.
+OUT_STACK_CLAMP = (0.75, 1.35)
+
+_DATA_QUALITY_RANK = {
+    "unavailable": 0,
+    "real_thin_sample": 1,
+    "manual_estimate": 2,
+    "real_fallback_season": 3,
+    "real_current": 4,
+}
+
+
+def combine_out_redistributions(results):
+    """Fold several out-redistribution AdjustmentResults into one, so
+    downstream consumers still see a single "out_redistribution" layer
+    with the shape engine/adjustments/base.py documents.
+
+    Returns None when nothing was computed at all, so the caller can
+    keep its existing "no redistribution" branch unchanged.
+
+    Only results with .applied True contribute to the product -- a
+    layer that found no usable sample returns a neutral value AND
+    applied=False, and multiplying by its neutral 1.0 would be
+    harmless but would wrongly drag sample_n and data_quality down."""
+    if not results:
+        return None
+
+    contributing = [r for r in results if r.applied]
+    if not contributing:
+        # Nothing usable: hand back the first neutral result so the
+        # caller's "computed but not applied" messaging still works.
+        return results[0]
+
+    if len(contributing) == 1:
+        # Nothing to stack, so nothing to clamp: hand back that layer's
+        # own result untouched (its per-stat note included). Without
+        # this, the band would bind on a SINGLE player's low-count
+        # stats -- a 0.4 -> 0.6 BLK swing is already a 1.5x ratio --
+        # and one-out-player behaviour would silently change.
+        return contributing[0]
+
+    lo, hi = OUT_STACK_CLAMP
+    value = {}
+    clamped_stats = []
+    for col, _label in STAT_COLUMNS:
+        product = 1.0
+        for r in contributing:
+            product *= r.multiplier_for(col)
+        bounded = max(lo, min(hi, product))
+        if bounded != product:
+            clamped_stats.append(col)
+        value[col] = bounded
+
+    # The weakest evidence in the stack is what the combined number is
+    # really worth -- and `note` below is built from this same variable,
+    # never a second count expression (base.py contract, rule 2).
+    sample_n = min(r.sample_n for r in contributing)
+    data_quality = min(
+        (r.data_quality for r in contributing),
+        key=lambda q: _DATA_QUALITY_RANK.get(q, 0),
+    )
+
+    note = (
+        f"Combined redistribution from {len(contributing)} player(s) marked out, "
+        f"backed by at least {sample_n} real game(s) for the thinnest of them."
+    )
+    if clamped_stats:
+        note += (
+            f" Combined effect capped to the {lo:g}-{hi:g} band for "
+            f"{', '.join(clamped_stats)} -- stacked small-sample ratios "
+            f"compounded past what the evidence supports."
+        )
+
+    return AdjustmentResult(
+        layer=OUT_REDISTRIBUTION_LAYER,
+        value=value,
+        note=note,
+        data_quality=data_quality,
+        sample_n=sample_n,
+        applied=True,
+    )
+
+
+def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_ids=None):
     """MVP matchup-predictor engine: season baseline + opponent-defense
     adjustment, plus an optional out-redistribution adjustment when
-    out_player_id is given (Full Matchup's "mark a player as out"
+    out_player_ids is given (Full Matchup's "mark players as out"
     feature -- see engine/adjustments/teammates.py's
     get_out_redistribution_adjustment for the real "games with vs.
     without" comparison and why it's a distinct, narrowly-scoped
@@ -1830,7 +1921,14 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
     teammate, primary defender, and scheme adjustments -- that nuance
     stays in the single-player tool, per the approved v1 scope.
 
-    out_player_id=None (the default, and every call site before this
+    out_player_ids accepts None, a single id, or a list. Several out
+    players each get their own redistribution against the same resolved
+    gamelog; combine_out_redistributions() folds them into ONE
+    AdjustmentResult under the existing "out_redistribution" layer key,
+    with the combined per-stat multiplier bounded by OUT_STACK_CLAMP so
+    stacked small-sample ratios can't compound past their evidence.
+
+    out_player_ids=None (the default, and every call site before this
     parameter existed): the redistribution branch below never runs,
     redistribution_result is always None, and the returned predictions
     are exactly what this function always computed -- season baseline
@@ -1869,16 +1967,31 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
     # x0.5 strength exactly. See engine/adjustments/defense.py.
     defense_result = get_defense_adjustment(team_def_rating, league_avg_def, def_source_note)
 
+    # Accepts None, a single id (every pre-multi-out call site), or a
+    # list -- normalised here so there is one code path below.
+    if out_player_ids is None:
+        out_ids = []
+    elif isinstance(out_player_ids, (list, tuple, set)):
+        out_ids = [pid for pid in out_player_ids if pid is not None]
+    else:
+        out_ids = [out_player_ids]
+
     redistribution_result = None
-    if out_player_id is not None:
+    if out_ids:
         try:
             player_df, season, _source = resolve_season_gamelog(player_id)
         except Exception:
             player_df = pd.DataFrame()
         if not player_df.empty:
-            redistribution_result = get_out_redistribution_adjustment(
-                player_id, out_player_id, season, player_df
-            )
+            # One resolve_season_gamelog call for all of them -- each
+            # out player is a Game_ID set-membership test against the
+            # same log, so this adds no extra live fetches per extra
+            # player marked out.
+            per_out = [
+                get_out_redistribution_adjustment(player_id, out_id, season, player_df)
+                for out_id in out_ids
+            ]
+            redistribution_result = combine_out_redistributions(per_out)
 
     predictions = {}
     for col, _label in STAT_COLUMNS:
@@ -1944,14 +2057,15 @@ with tab2:
         team_a_id, team_a_full, team_a_abbr = ctx["team_a_id"], ctx["team_a_full"], ctx["team_a_abbr"]
         team_b_id, team_b_full, team_b_abbr = ctx["team_b_id"], ctx["team_b_full"], ctx["team_b_abbr"]
 
-        def build_team_projection(team_id, opponent_id, out_player_id=None):
-            """out_player_id: excluded entirely from the projected rows
-            (not called through predict_player_vs_opponent at all --
-            there's nothing to project for a player marked out), and
+        def build_team_projection(team_id, opponent_id, out_player_ids=None):
+            """out_player_ids: a list -- each is excluded entirely from
+            the projected rows (not called through
+            predict_player_vs_opponent at all -- there's nothing to
+            project for a player marked out), and the whole list is
             passed through to every remaining player's prediction so
             engine/adjustments/teammates.py's
-            get_out_redistribution_adjustment can apply. Returns
-            (rows, skipped, unadjusted, out_name, trackable):
+            get_out_redistribution_adjustment can apply per out player.
+            Returns (rows, skipped, unadjusted, out_names, trackable):
             `skipped` is the existing "not enough data to project at
             all" case; `unadjusted` is a distinct, narrower case -- the
             player WAS projected, but there wasn't enough real "games
@@ -1965,16 +2079,17 @@ with tab2:
             context through here (the caller adds that; this function
             doesn't know the game being tracked, only the matchup)."""
             roster = get_team_roster(team_id)
+            out_ids = list(out_player_ids or [])
             rows = []
             skipped = []
             unadjusted = []
-            out_name = None
+            out_names = []
             trackable = []
             for pid, pname in roster:
-                if pid == out_player_id:
-                    out_name = pname
+                if pid in out_ids:
+                    out_names.append(pname)
                     continue
-                result = predict_player_vs_opponent(pid, pname, opponent_id, out_player_id=out_player_id)
+                result = predict_player_vs_opponent(pid, pname, opponent_id, out_player_ids=out_ids)
                 if result is None:
                     skipped.append(pname)
                     continue
@@ -1990,37 +2105,44 @@ with tab2:
                     "player_id": pid, "player_full_name": pname,
                     "predictions": predictions, "layer_results": layer_results,
                 })
-            return rows, skipped, unadjusted, out_name, trackable
+            return rows, skipped, unadjusted, out_names, trackable
 
         def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr, out_key):
             st.markdown(f"**{team_full}** projected box score")
             roster = get_team_roster(team_id)
             roster_id_to_name = dict(roster)
-            out_id = st.selectbox(
-                f"Mark a {team_full} player as out (optional)",
-                options=[None] + [pid for pid, _pname in roster],
-                format_func=lambda pid: "None" if pid is None else player_search_label(roster_id_to_name[pid]),
+            out_ids = st.multiselect(
+                f"Mark {team_full} players as out (optional)",
+                options=[pid for pid, _pname in roster],
+                format_func=lambda pid: player_search_label(roster_id_to_name[pid]),
                 key=out_key,
+                help=(
+                    "Each player marked out is compared against this team's real "
+                    "games with vs. without them. Stacked effects are capped, so "
+                    "marking several players out won't compound into a projection "
+                    "the sample can't support."
+                ),
             )
 
             with st.spinner("Calculating..."):
-                rows, skipped, unadjusted, out_name, trackable = build_team_projection(
-                    team_id, opponent_id, out_player_id=out_id
+                rows, skipped, unadjusted, out_names, trackable = build_team_projection(
+                    team_id, opponent_id, out_player_ids=out_ids
                 )
 
             if rows:
                 st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
             else:
                 st.info("No players with enough data to project.")
-            if out_name:
+            out_label = ", ".join(out_names)
+            if out_names:
                 st.caption(
-                    f"Marked out: {out_name}. Remaining players' numbers above are "
+                    f"Marked out: {out_label}. Remaining players' numbers above are "
                     f"adjusted using their real historical games with vs. without "
-                    f"{out_name} this season, where enough real data exists."
+                    f"those players this season, where enough real data exists."
                 )
             if unadjusted:
                 st.caption(
-                    f"Not enough real head-to-head history with {out_name} to trust "
+                    f"Not enough real history without {out_label} to trust "
                     f"an adjustment -- shown at their normal projection instead: "
                     f"{', '.join(unadjusted)}"
                 )
