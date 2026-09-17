@@ -1105,6 +1105,22 @@ TRACKER_UNAVAILABLE_MSG = (
     "Your predictions still work; please try saving or checking again in a minute."
 )
 
+
+def flash_saved_and_rerun(where, message):
+    """After a successful save: remember the confirmation and rerun, so
+    the sidebar (rendered earlier in the script) shows the new count
+    straight away. show_tracker_flash() prints the message once, below
+    the save row, on that rerun."""
+    st.session_state["tracker_flash"] = (where, message)
+    st.rerun()
+
+
+def show_tracker_flash(where):
+    flash = st.session_state.get("tracker_flash")
+    if flash and flash[0] == where:
+        del st.session_state["tracker_flash"]
+        st.success(flash[1])
+
 with st.sidebar:
     st.markdown(
         '<div class="bw-side-title">'
@@ -2111,25 +2127,34 @@ with tab1:
                     key="tracked_game_date_input",
                 )
             with save_col2:
-                if st.button("Save to tracker", key="save_prediction_btn",
-                             icon=":material/bookmark_add:", width="stretch"):
-                    save_email = st.session_state.get("tracker_email_input", "").strip().lower()
-                    if not save_email:
-                        st.warning(
-                            "Enter your email in the Prediction Tracker (sidebar) first, "
-                            "so you can find this prediction again."
-                        )
-                    else:
-                        try:
-                            new_id = append_prediction_to_log(
-                                player_id, player_full_name, opponent_full_name,
-                                opponent_abbr, tracked_game_date, predictions,
-                                layer_results=layer_results, saved_by_email=save_email,
-                            )
-                        except TrackerStorageError:
-                            st.error(TRACKER_UNAVAILABLE_MSG)
-                        else:
-                            st.success(f"Saved (id: {new_id}). Check the Prediction Tracker in the sidebar later.")
+                save_prediction_clicked = st.button(
+                    "Save to tracker", key="save_prediction_btn",
+                    icon=":material/bookmark_add:", width="stretch",
+                )
+        # Messages go below the row, not inside the button's column,
+        # where they pushed the button out of line with the date field.
+        if save_prediction_clicked:
+            save_email = st.session_state.get("tracker_email_input", "").strip().lower()
+            if not save_email:
+                st.warning(
+                    "Enter your email in the Prediction Tracker (sidebar) first, "
+                    "so you can find this prediction again."
+                )
+            else:
+                try:
+                    new_id = append_prediction_to_log(
+                        player_id, player_full_name, opponent_full_name,
+                        opponent_abbr, tracked_game_date, predictions,
+                        layer_results=layer_results, saved_by_email=save_email,
+                    )
+                except TrackerStorageError:
+                    st.error(TRACKER_UNAVAILABLE_MSG)
+                else:
+                    flash_saved_and_rerun(
+                        "single",
+                        f"Saved (id: {new_id}). Check the Prediction Tracker in the sidebar later.",
+                    )
+        show_tracker_flash("single")
 
         # Recent trend chart -- reuses the same game log already fetched
         # for hit rates, no extra API call. Lives outside the form so
@@ -2896,10 +2921,12 @@ with tab2:
                 except TrackerStorageError:
                     st.error(TRACKER_UNAVAILABLE_MSG)
                 else:
-                    st.success(
+                    flash_saved_and_rerun(
+                        "matchup",
                         f"Saved {len(new_ids)} player predictions for this matchup. "
-                        f"Check the Prediction Tracker in the sidebar later."
+                        f"Check the Prediction Tracker in the sidebar later.",
                     )
+        show_tracker_flash("matchup")
 
 # ---------------------------- Footer ----------------------------
 # The full legal notice lives here, on every page view; the hero carries
