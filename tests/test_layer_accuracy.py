@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from engine import tracker
+from tests.conftest import write_raw_log
 from analytics import layer_accuracy
 
 
@@ -33,7 +34,7 @@ def _make_row(id_, base, actual, multiplier, saved_at="2026-09-06T00:00:00",
 
 
 def _write_rows(temp_log, rows):
-    pd.DataFrame(rows).to_csv(temp_log, index=False)
+    write_raw_log(pd.DataFrame(rows), temp_log)
 
 
 def test_context_only_by_design_short_circuits_without_touching_log(temp_log):
