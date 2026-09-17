@@ -83,7 +83,14 @@ from engine.team_total import (
     minutes_profile,
 )
 from engine.baseline_stats import stats_from_gamelog
-from engine.lean import LEAN_MODELS, strong_lean_lines
+from engine.lean import (
+    LEAN_MODELS,
+    LEAN_TIER_SUMMARY,
+    LEAN_TIERS,
+    MIN_GAMES as LEAN_MIN_GAMES,
+    clearest_read,
+    strong_lean_lines,
+)
 
 
 # ---------- Data functions (same logic as the terminal version) ----------
@@ -880,6 +887,58 @@ div[data-testid="stAlertContentSuccess"] {
 .confidence-medium { background: var(--bw-amber-soft); border-color: var(--bw-amber-line); color: var(--bw-amber-text); }
 .confidence-low { background: var(--bw-red-soft); border-color: var(--bw-red-line); color: var(--bw-red-text); }
 
+/* ---- Clearest read (strongest above/below-average lean) ---- */
+.read-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 20px;
+    margin: 6px 0 12px;
+    padding: 16px 18px;
+    border: 1px solid var(--bw-accent-line);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(34, 197, 94, 0.09) 0%, rgba(34, 197, 94, 0.02) 100%);
+}
+.read-card .read-body { flex: 1 1 320px; min-width: 0; }
+.read-card .read-eyebrow {
+    color: var(--bw-accent-text);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.read-card .read-main {
+    margin-top: 4px;
+    color: #ffffff;
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+}
+.read-card .read-main .dir { color: var(--bw-accent-text); }
+.read-card .read-sub { margin-top: 6px; color: var(--bw-muted); font-size: 13px; line-height: 1.5; }
+.read-card .read-score { text-align: right; }
+.read-card .read-pct { color: #ffffff; font-size: 34px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
+.read-card .read-pct-label { margin-top: 4px; color: var(--bw-muted); font-size: 12px; }
+.read-list { width: 100%; border-collapse: collapse; margin: 4px 0 8px; font-size: 14px; }
+.read-list th {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--bw-border);
+    color: var(--bw-muted);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+}
+.read-list td { padding: 9px 10px; border-bottom: 1px solid var(--bw-border-soft); color: var(--bw-text); }
+.read-list td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.read-list th.num { text-align: right; }
+.read-list .dir { color: var(--bw-accent-text); font-weight: 600; }
+.read-list .team { color: var(--bw-faint); font-size: 12px; }
+@media (max-width: 640px) {
+    .read-card .read-score { text-align: left; }
+    .read-list .hide-sm { display: none; }
+}
+
 /* ---- Stat cards ---- */
 .stat-card-row {
     display: grid;
@@ -1094,6 +1153,33 @@ def section_heading(title, sub=None, first=False):
     )
 
 
+def read_card_html(read, stat_label):
+    """The Single Player "Clearest read" card for engine.lean.clearest_read()
+    output. Above/below his own season average only -- no lines, odds or
+    betting words."""
+    lean_ = read["lean"]
+    arrow = "▲" if lean_["direction"] == "above" else "▼"
+    strength = f"{lean_['tier']} lean" if lean_.get("tier") else "Strong lean"
+    calls = f" ({lean_['historical_calls']:,} calls)" if lean_.get("historical_calls") else ""
+    return (
+        '<div class="read-card">'
+        '<div class="read-body">'
+        '<div class="read-eyebrow">Clearest read for this game</div>'
+        f'<div class="read-main">{html.escape(stat_label)}: <span class="dir">{arrow} '
+        f'{lean_["direction"]}</span> his season average of {read["season_avg"]:.1f}</div>'
+        f'<div class="read-sub">{html.escape(strength)} — of this game\'s leans, the one with '
+        f'the best record. Calls this strong were right {lean_["historical_accuracy"]:.0%} of '
+        f'the time in 3 seasons of backtests the model never saw{calls}. It says which side '
+        'of his average, not the exact number.</div>'
+        '</div>'
+        '<div class="read-score">'
+        f'<div class="read-pct">{lean_["historical_accuracy"]:.0%}</div>'
+        '<div class="read-pct-label">right in backtests</div>'
+        '</div>'
+        '</div>'
+    )
+
+
 # Short labels where the full STAT_COLUMNS label doesn't fit a card or a
 # table header. Display only -- every calculation keys on the column.
 STAT_SHORT_LABELS = {
@@ -1264,7 +1350,55 @@ with st.expander("Methodology and backtest results"):
     # Strong leans (engine/lean.py) -- numbers come straight from
     # engine/lean_models.json (written by lean_model_sweep.py), so this
     # table can't drift from what the Single Player tab actually shows.
-    if LEAN_MODELS:
+    if LEAN_MODELS and LEAN_TIERS and LEAN_TIER_SUMMARY:
+        _sum = LEAN_TIER_SUMMARY
+        _lean_names = [label.lower() for col, label in STAT_COLUMNS if col in LEAN_MODELS]
+        _all_calls = [m["all_calls_accuracy"] for m in LEAN_MODELS.values()]
+        st.markdown(
+            "**Strong leans and clearest reads.** Calling every game above or below a player's "
+            "season average is close to a coin flip — the table above, and still only "
+            f"{min(_all_calls) * 100:.0f}-{max(_all_calls):.0%} with the recent-form model below. "
+            "Strong leans are the games where that model is confident, and the more confident "
+            "it was, the more often it was right, so each lean is graded and shown with its "
+            "own grade's record. Grades under 60% aren't shown. Only "
+            + ", ".join(_lean_names[:-1]) + f" and {_lean_names[-1]} get leans — for the "
+            "other stats the apparent accuracy came from those stats usually landing below "
+            "average, not from the model."
+        )
+        _elig = _sum.get("eligibility", {})
+        st.markdown(
+            f"Shown leans were right **{_sum['shown_accuracy']:.1%}** of the time "
+            f"({_sum['shown_accuracy_ci'][0]:.1%}-{_sum['shown_accuracy_ci'][1]:.1%}, "
+            f"{_sum['shown_calls']:,} calls) in seasons the model never saw (each season held "
+            f"out in turn); the hidden weaker grades were right {_sum['hidden_accuracy']:.0%}. "
+            f"{_sum['games_with_a_read_share']:.0%} of player-games got at least one. "
+            "The **clearest read** is the shown lean whose grade has the best record: across "
+            f"all games it was right {_sum['clearest_read_accuracy']:.1%} "
+            f"({_sum['clearest_read_accuracy_ci'][0]:.1%}-{_sum['clearest_read_accuracy_ci'][1]:.1%}; by season "
+            + ", ".join(f"{k} {v:.0%}" for k, v in sorted(_sum["clearest_read_by_season"].items()))
+            + "), and on games with two or more leans it was right "
+            f"{_sum['multi_lean_top_accuracy']:.0%} against {_sum['multi_lean_rest_accuracy']:.0%} for "
+            "the others. The backtest covered the top 150 players by minutes each season, so leans "
+            f"are only shown for players averaging {_elig.get('min_mpg', 20):g}+ minutes, and not "
+            f"for stats a player averages under {_elig.get('min_season_avg', 1):g} of. The grade "
+            "boundaries were fixed in advance, but which grades to show was decided on these same "
+            "backtests, so treat the numbers as slightly optimistic."
+        )
+        st.markdown(
+            '<table class="methodology-table">'
+            '<tr><th>Stat</th><th>Grade</th><th>Accuracy</th><th>95% CI</th>'
+            '<th>Calls</th><th>Shown</th></tr>'
+            + "".join(
+                f'<tr><td>{col}</td><td>{t["label"]}</td><td>{t["accuracy"]:.1%}</td>'
+                f'<td>{t["ci"][0]:.1%}-{t["ci"][1]:.1%}</td><td>{t["n"]:,}</td>'
+                f'<td>{"Yes" if t["shown"] else "No"}</td></tr>'
+                for col, _label in STAT_COLUMNS
+                for t in LEAN_TIERS.get(col, {}).get("tiers", [])
+            )
+            + '</table>',
+            unsafe_allow_html=True,
+        )
+    elif LEAN_MODELS:
         _lean_calls = sum(m["n"] for m in LEAN_MODELS.values())
         _lean_acc = sum(m["oos_accuracy"] * m["n"] for m in LEAN_MODELS.values()) / _lean_calls
         _lean_names = [label.lower() for col, label in STAT_COLUMNS if col in LEAN_MODELS]
@@ -2115,7 +2249,16 @@ with tab1:
                 "Above or below his season average only, not a prediction of the exact "
                 "number. Most games get no lean; see the methodology for the backtest.",
             )
-            st.markdown("\n".join(f"- {line}" for line in _lean_lines))
+            _read = clearest_read(_lean_log, _lean_season, CURRENT_SEASON, _lean_multiplier)
+            if _read is not None:
+                _read_label = dict(STAT_COLUMNS).get(_read["lean"]["stat"], _read["lean"]["stat"])
+                st.markdown(read_card_html(_read, _read_label), unsafe_allow_html=True)
+                _other_lines = _lean_lines[1:]
+                if _other_lines:
+                    st.caption("Other leans for this game, strongest first:")
+                    st.markdown("\n".join(f"- {line}" for line in _other_lines))
+            else:
+                st.markdown("\n".join(f"- {line}" for line in _lean_lines))
         else:
             st.caption(_lean_lines[0])
 
@@ -2744,6 +2887,87 @@ with tab2:
         )
         return rows, skipped, unadjusted, out_names, trackable, expected_total
 
+    def matchup_reads(tracked):
+        """(kind, reads): the clearest read of every projected player in
+        the matchup, strongest first. kind is "reads", "none" (some
+        players are in the current season but none has a lean) or
+        "not_yet" (no player has a current-season log with enough
+        games). tracked: [(trackable dict, team name), ...]."""
+        reads, any_current = [], False
+        for t, team_name in tracked:
+            try:
+                log_df, log_season, _source = resolve_season_gamelog(t["player_id"])
+            except Exception:
+                continue
+            if log_season != CURRENT_SEASON:
+                continue
+            defense = t["layer_results"].get("opponent_defense")
+            multiplier = defense.multiplier_for("PTS") if defense is not None else None
+            read = clearest_read(log_df, log_season, CURRENT_SEASON, multiplier)
+            if read is None:
+                if log_df is not None and len(log_df) and (
+                    log_df["Game_ID"].astype(str).str.startswith("0022").sum() >= LEAN_MIN_GAMES
+                ):
+                    any_current = True
+                continue
+            any_current = True
+            reads.append({**read, "player": t["player_full_name"], "team": team_name})
+        # same order as engine.lean.leans_for_game: best graded record, then margin
+        reads.sort(key=lambda r: (-r["lean"]["historical_accuracy"], -r["lean"]["margin"]))
+        if reads:
+            return "reads", reads
+        return ("none" if any_current else "not_yet"), []
+
+    def render_matchup_reads(tracked, any_out=False, limit=6):
+        kind, reads = matchup_reads(tracked)
+        section_heading(
+            "Clearest reads",
+            "The strongest above/below-season-average leans across both rosters, "
+            "with how often calls that strong were right in backtests. Most players "
+            "don't get one.",
+        )
+        if kind == "not_yet":
+            st.caption(
+                f"Clearest reads start once players have {LEAN_MIN_GAMES} regular-season "
+                "games this season."
+            )
+            return
+        if kind == "none":
+            st.caption("No player has a clear read for this game — most games don't have one.")
+            return
+        labels = dict(STAT_COLUMNS)
+        body = "".join(
+            "<tr>"
+            f'<td>{html.escape(r["player"])}<br><span class="team">{html.escape(r["team"])}</span></td>'
+            f'<td>{html.escape(labels.get(r["lean"]["stat"], r["lean"]["stat"]))}</td>'
+            f'<td><span class="dir">{"▲ Above" if r["lean"]["direction"] == "above" else "▼ Below"}</span>'
+            f' {r["season_avg"]:.1f}</td>'
+            f'<td class="hide-sm">{html.escape(r["lean"]["tier"] or "Strong")}</td>'
+            f'<td class="num">{r["lean"]["historical_accuracy"]:.0%}</td>'
+            "</tr>"
+            for r in reads[:limit]
+        )
+        st.markdown(
+            '<table class="read-list"><tr><th>Player</th><th>Stat</th><th>Vs his season average</th>'
+            '<th class="hide-sm">Strength</th><th class="num">Right in backtests</th></tr>'
+            + body + "</table>",
+            unsafe_allow_html=True,
+        )
+        more = len(reads) - limit
+        note = (
+            "Each read says which side of the player's own season average the stat is likely "
+            "to land, not the exact number. \"Right in backtests\" is how often calls that "
+            "strong were right in 3 seasons the model never saw."
+        )
+        if more > 0:
+            note += f" {more} more player{'s' if more != 1 else ''} with a weaker read not shown."
+        if any_out:
+            note += (
+                " Reads use each player's own season and the opponent's defense; they don't "
+                "account for players marked out."
+            )
+        st.caption(note)
+
     def pick_out_players(team_id, team_full, out_key):
         """One team's "who's out" picker. Rendered for BOTH teams
         before either table is built, because each table depends on
@@ -2932,6 +3156,11 @@ with tab2:
         team_b_trackable = render_team_projection(
             team_b_id, team_b_full, team_a_id, team_a_full, team_a_abbr,
             team_b_out_ids, team_a_out_names,
+        )
+
+        render_matchup_reads(
+            [(t, team_a_full) for t in team_a_trackable] + [(t, team_b_full) for t in team_b_trackable],
+            any_out=bool(team_a_out_ids or team_b_out_ids),
         )
 
         section_heading(
