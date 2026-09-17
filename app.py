@@ -151,7 +151,7 @@ def get_head_to_head_baseline(player_id, opponent_abbr, num_games, cutoff_date=N
     return stats_dict, source, actual_n
 
 
-def blend_baseline_stats(season_stats, shrinkage_k=4, team_h2h=None, team_h2h_n=0,
+def blend_baseline_stats(season_stats, shrinkage_k=32, team_h2h=None, team_h2h_n=0,
                           extra_sources=None):
     """Blend season average, team head-to-head, and any number of
     extra sources -- e.g. head-to-head vs. one specific opponent
@@ -162,14 +162,16 @@ def blend_baseline_stats(season_stats, shrinkage_k=4, team_h2h=None, team_h2h_n=
     to weigh as heavily as the season average; below that it still
     earns real influence, just proportionally less.
 
-    At the current default (shrinkage_k=4) this is a weak safeguard,
-    not a strong one: weight is n / (n + shrinkage_k), so a 2-game
-    head-to-head sample already gets 33% (2/6), and a 4-game sample
-    reaches 50% -- full parity with the season average -- off a sample
-    most people would still call small. shrinkage_k was lowered from 8
-    to 4 by patch_shrinkage_k.py on intuition, not backtested data; see
-    ~/.claude/plans/hazy-jumping-glade.md for the k-sweep this docstring
-    should eventually cite instead of hand-derived weight examples.
+    shrinkage_k=32 comes from shrinkage_k_sweep.py, not intuition.
+    Replayed point-in-time over run_backtest.py's case set, error
+    relative to season-only was k=2 1.042, k=4 1.018, k=8 1.005,
+    k=16 0.999, k=32 0.998 (best for every stat), and raw head-to-head
+    1.158. The old k=4 was reliably worse than ignoring head-to-head
+    entirely; k=32 is only marginally better than season-only. Weight
+    is n / (k + total n), so a 5-game sample now gets 13% and 10
+    meetings plus 10 defender games leave the season at 62%. The
+    vs.-specific-player sources share this k but can't be backtested
+    (no historical defender assignments).
 
     extra_sources: list of (label, stats_dict, n) tuples. stats_dict
     may be None (no data found) -- such entries are skipped in the
