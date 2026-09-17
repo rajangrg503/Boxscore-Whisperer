@@ -37,7 +37,7 @@ from nba_api.stats.endpoints import (
 
 from engine.players import get_player_id, get_team_id, player_search_label
 from engine.career_stats import resolve_season_mpg
-from engine.season import CURRENT_SEASON, PREVIOUS_SEASON
+from engine.season import CURRENT_SEASON, PREVIOUS_SEASON, recent_seasons
 from engine.stat_columns import STAT_COLUMNS
 from engine.tracker import (
     LOG_COLUMNS,
@@ -71,6 +71,7 @@ from engine.adjustments.defense import (
     get_opponent_defense_with_fallback,
     get_opponent_defense_post_change,
     get_defense_adjustment,
+    team_stats_season,
 )
 from analytics.layer_accuracy import build_layer_lines
 from engine.confidence import score_prediction
@@ -92,7 +93,7 @@ from engine.lean import LEAN_MODELS, strong_lean_lines
 # objects at save time.
 
 
-HEAD_TO_HEAD_SEASONS = [CURRENT_SEASON, PREVIOUS_SEASON, "2024-25", "2023-24"]
+HEAD_TO_HEAD_SEASONS = recent_seasons(4)  # current season plus the three before it
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1818,7 +1819,7 @@ with tab1:
                 )
             new_teammate_note = new_teammate_result.note
             opp_missing_result = get_opponent_missing_adjustment(
-                missing_opponents, PREVIOUS_SEASON
+                missing_opponents, team_stats_season()
             )
             opp_missing_note = opp_missing_result.note
             defender_result = get_defender_matchup_adjustment(
@@ -1869,7 +1870,7 @@ with tab1:
                         )
 
             scheme_result = get_synergy_scheme_adjustment(
-                opponent_id, scheme_input, PREVIOUS_SEASON
+                opponent_id, scheme_input, team_stats_season()
             )
             scheme_note = scheme_result.note
 
@@ -2718,10 +2719,10 @@ with tab2:
     def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr,
                                out_ids, opponent_out_names):
         section_heading(team_full, "Projected box score")
-        # Same season as the Single Player tool's call -- see this
-        # patch's docstring; change both together.
+        # Same season rule as the Single Player tool's call: this season
+        # once it has enough games, last season before that.
         opponent_missing_result = (
-            get_opponent_missing_adjustment_cached(tuple(opponent_out_names), PREVIOUS_SEASON)
+            get_opponent_missing_adjustment_cached(tuple(opponent_out_names), team_stats_season())
             if opponent_out_names else None
         )
 

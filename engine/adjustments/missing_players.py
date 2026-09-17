@@ -33,6 +33,11 @@ LAYER = "missing_opponents"
 # changes the number.
 OPPONENT_MISSING_STRENGTH = 0.0
 
+# During a season, a player's minutes this season are only used once he
+# has played this many games; before that his previous season's minutes
+# stand in (and the note says so).
+MIN_PLAYER_GAMES_THIS_SEASON = 5
+
 
 def get_opponent_missing_adjustment(missing_opponents, season) -> AdjustmentResult:
     if not missing_opponents:
@@ -84,8 +89,21 @@ def get_opponent_missing_adjustment(missing_opponents, season) -> AdjustmentResu
                 career = playercareerstats.PlayerCareerStats(player_id=pid, timeout=5)
                 return career.get_data_frames()[0]
 
-            df, _source = cached_or_live(f"career_stats_{pid}", _fetch_career)
-            mpg, skip_reason = resolve_season_mpg(df, season)
+            df, source = cached_or_live(f"career_stats_{pid}", _fetch_career)
+            if source == "live":
+                # Pace real nba_api requests only; a cached read costs nothing.
+                time.sleep(0.5)
+            mpg_season = season
+            if season == PREVIOUS_SEASON:
+                mpg, skip_reason = resolve_season_mpg(df, season)
+            else:
+                mpg, skip_reason = resolve_season_mpg(
+                    df, season, min_games=MIN_PLAYER_GAMES_THIS_SEASON
+                )
+                if mpg is None:
+                    prev_mpg, _prev_reason = resolve_season_mpg(df, PREVIOUS_SEASON)
+                    if prev_mpg is not None:
+                        mpg, mpg_season = prev_mpg, PREVIOUS_SEASON
             if mpg is None:
                 skipped_zero_gp.append((name, skip_reason))
                 continue
@@ -94,15 +112,14 @@ def get_opponent_missing_adjustment(missing_opponents, season) -> AdjustmentResu
             if net_rating is not None:
                 quality_multiplier = max(MIN_QUALITY_MULTIPLIER, 1 + (net_rating / QUALITY_SCALE))
                 weighted_mpg = mpg * quality_multiplier
-                found_players.append((name, round(mpg, 1), round(net_rating, 1), ambiguity_note))
+                found_players.append((name, round(mpg, 1), round(net_rating, 1), ambiguity_note, mpg_season))
             else:
                 weighted_mpg = mpg  # no estimated-metrics data found for this
                                      # player -- fall back to raw MPG rather
                                      # than dropping them entirely
-                found_players.append((name, round(mpg, 1), None, ambiguity_note))
+                found_players.append((name, round(mpg, 1), None, ambiguity_note, mpg_season))
 
             total_weighted_mpg += weighted_mpg
-            time.sleep(0.5)
         except Exception:
             continue
 
@@ -127,11 +144,12 @@ def get_opponent_missing_adjustment(missing_opponents, season) -> AdjustmentResu
     adjustment = 1 + (minutes_fraction * OPPONENT_MISSING_STRENGTH)
     detail_parts = []
     ambiguity_notes = []
-    for n, m, nr, amb in found_players:
+    for n, m, nr, amb, mpg_season in found_players:
+        mpg_text = f"{m} MPG" if mpg_season == season else f"{m} MPG in {mpg_season}"
         if nr is not None:
-            detail_parts.append(f"{n} ({m} MPG, {nr:+.1f} net rtg)")
+            detail_parts.append(f"{n} ({mpg_text}, {nr:+.1f} net rtg)")
         else:
-            detail_parts.append(f"{n} ({m} MPG, net rtg unavailable)")
+            detail_parts.append(f"{n} ({mpg_text}, net rtg unavailable)")
         if amb:
             ambiguity_notes.append(amb)
     detail = ", ".join(detail_parts)

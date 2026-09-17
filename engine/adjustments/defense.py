@@ -66,6 +66,33 @@ def get_league_advanced_team_stats(season):
     return df
 
 
+MIN_TEAM_GAMES_FOR_CURRENT_SEASON = 5
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def team_stats_season():
+    """Which season's league-wide numbers to use right now: CURRENT_SEASON
+    once any team has played MIN_TEAM_GAMES_FOR_CURRENT_SEASON games,
+    otherwise PREVIOUS_SEASON. Same threshold as
+    get_opponent_defense_with_fallback and app.py's get_team_profiles.
+
+    For layers that were hard-wired to PREVIOUS_SEASON (missing
+    opponents, scheme): that was right in the off-season but would have
+    kept showing last season's minutes and team numbers all through the
+    new one. Those layers still fall back to PREVIOUS_SEASON themselves
+    when a current-season fetch comes back empty."""
+    try:
+        df = get_league_advanced_team_stats(CURRENT_SEASON)
+    except Exception:
+        return PREVIOUS_SEASON
+    if (
+        df is not None and not df.empty and "GP" in df.columns
+        and df["GP"].max() >= MIN_TEAM_GAMES_FOR_CURRENT_SEASON
+    ):
+        return CURRENT_SEASON
+    return PREVIOUS_SEASON
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_team_defensive_rating(team_id, season):
     df = get_league_advanced_team_stats(season)
