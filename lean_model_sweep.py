@@ -142,7 +142,8 @@ def season_features(reg):
         base, l5, l10 = raw[stat]
         f = {"season_avg": base, "form_l5": _rel(l5, base), "form_l10": _rel(l10, base),
              "min_l5": _rel(m5, m_base), "min_l10": _rel(m10, m_base),
-             "log_games": np.log(k), "log_level": np.log1p(np.maximum(base, 0.0))}
+             "log_games": np.log(k), "log_level": np.log1p(np.maximum(base, 0.0)),
+             "mpg": m_base}
         if stat in lean.VOLUME_COLUMN:
             v_base, _v5, v10 = raw[lean.VOLUME_COLUMN[stat]]
             f["volume_l10"] = _rel(v10, v_base)

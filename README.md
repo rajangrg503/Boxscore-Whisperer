@@ -35,3 +35,17 @@ To run the tracker tests against a throwaway Postgres too:
 
 Never point BW_TEST_DATABASE_URL at the production database: the tests
 empty the table.
+
+Strong leans and the clearest read
+----------------------------------
+The "Strong leans" block and the "Clearest read(s)" on both tabs come
+from two generated files:
+
+* engine/lean_models.json -- the per-stat models, from
+  `python3 lean_model_sweep.py`
+* engine/lean_tiers.json -- each lean's grade and its held-out record,
+  from `python3 clearest_read_sweep.py` (run it after the first one)
+
+Both only say whether a stat lands above or below the player's own
+season average. Leans start once a player has 10 regular-season games
+in the current season.

@@ -146,3 +146,126 @@ def test_models_file_missing_means_no_leans(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{not json")
     assert lean._load_models(str(bad)) == {}
+
+
+# ---- graded leans / clearest read (engine/lean_tiers.json) ----------------
+TOY2 = {
+    "PTS": dict(TOY["PTS"]),
+    "AST": {"features": ["form_l5"], "mean": [0.0], "scale": [1.0], "coef": [4.0],
+            "intercept": 0.0, "threshold": 0.1, "oos_accuracy": 0.61, "oos_coverage": 0.1, "n": 50},
+}
+TIERS = {
+    "PTS": {"shown_coverage": 0.12, "tiers": [
+        {"label": "Borderline", "min_margin": 0.0, "accuracy": 0.57, "ci": [0.55, 0.59], "n": 10, "shown": False},
+        {"label": "Solid", "min_margin": 0.02, "accuracy": 0.63, "ci": [0.6, 0.66], "n": 20, "shown": True},
+        {"label": "Very strong", "min_margin": 0.10, "accuracy": 0.75, "ci": [0.7, 0.8], "n": 30, "shown": True},
+    ]},
+    "AST": {"shown_coverage": 0.05, "tiers": [
+        {"label": "Borderline", "min_margin": 0.0, "accuracy": 0.58, "ci": [0.5, 0.6], "n": 5, "shown": False},
+        {"label": "Strong", "min_margin": 0.05, "accuracy": 0.66, "ci": [0.6, 0.7], "n": 7, "shown": True},
+    ]},
+}
+
+
+def _p_margin(coef, x, threshold=0.1):
+    return abs(1 / (1 + math.exp(-coef * x)) - 0.5) - threshold
+
+
+def test_tier_for_picks_highest_reached_tier():
+    assert lean.tier_for("PTS", 0.0, TIERS)["label"] == "Borderline"
+    assert lean.tier_for("PTS", 0.05, TIERS)["label"] == "Solid"
+    assert lean.tier_for("PTS", 0.3, TIERS)["label"] == "Very strong"
+    assert lean.tier_for("REB", 0.3, TIERS) is None
+    assert lean.tier_for("PTS", 0.3, {}) is None
+
+
+def test_lean_for_uses_tier_accuracy_and_hides_weak_tiers():
+    # form_l5 = 0.3 -> |p-0.5| = 0.146, margin 0.046 -> Solid
+    solid = lean.lean_for("PTS", {"PTS": {"form_l5": 0.3}}, models=TOY2, tiers=TIERS)
+    assert solid["tier"] == "Solid" and solid["historical_accuracy"] == 0.63
+    assert solid["historical_calls"] == 20 and solid["coverage"] == 0.12
+    assert solid["margin"] == pytest.approx(_p_margin(2.0, 0.3))
+    # form_l5 = 0.22 -> margin ~0.009 -> Borderline, hidden
+    assert lean.lean_for("PTS", {"PTS": {"form_l5": 0.22}}, models=TOY2, tiers=TIERS) is None
+    # untiered (explicit models, no tiers) keeps the original rule and numbers
+    plain = lean.lean_for("PTS", {"PTS": {"form_l5": 0.22}}, models=TOY2)
+    assert plain["tier"] is None and plain["historical_accuracy"] == 0.63 and plain["coverage"] == 0.19
+
+
+def test_leans_for_game_strongest_first_and_clearest_read():
+    feats = {"PTS": {"form_l5": 1.0, "season_avg": 20.0}, "AST": {"form_l5": 0.2, "season_avg": 5.0}}
+    got = lean.leans_for_game(feats, models=TOY2, tiers=TIERS)
+    assert [g["stat"] for g in got] == ["PTS", "AST"]
+    assert got[0]["margin"] > got[1]["margin"]
+    assert got[1]["tier"] == "Strong"
+    assert lean.leans_for_game(None, models=TOY2, tiers=TIERS) == []
+
+    read = lean.clearest_read(_log(), "2025-26", "2025-26", 1.0, models=TOY2, tiers=TIERS)
+    assert read["lean"]["stat"] in {"PTS", "AST"}
+    assert read["season_avg"] == pytest.approx(13.0 if read["lean"]["stat"] == "PTS" else 1.0)
+    assert lean.clearest_read(_log(), "2024-25", "2025-26", 1.0, models=TOY2, tiers=TIERS) is None
+    assert lean.clearest_read(_log(n_regular=9), "2025-26", "2025-26", 1.0, models=TOY2, tiers=TIERS) is None
+    assert lean.clearest_read(_log(), "2025-26", "2025-26", 1.0, models={}, tiers=TIERS) is None
+
+
+def test_strong_lean_lines_graded_wording():
+    feats_log = _log()
+    kind, lines = lean.strong_lean_lines(feats_log, "2025-26", "2025-26", 1.0, models=TOY, tiers=TIERS)
+    assert kind == "leans" and len(lines) == 1
+    # PTS form_l5 = 7/13 -> p = sigmoid(1.08), margin ~0.146 -> Very strong
+    assert "Very strong lean — calls like this were right 75% of the time" in lines[0]
+    assert "30 calls" in lines[0]
+    for word in ["over", "under", "pick", "bet", "lock", "odds", "wager"]:
+        assert not re.search(rf"\b{word}\b", lines[0], re.I)
+
+
+def test_shipped_tiers_are_consistent():
+    assert set(lean.LEAN_TIERS) == set(lean.LEAN_MODELS)
+    for stat, entry in lean.LEAN_TIERS.items():
+        tiers = entry["tiers"]
+        edges = [t["min_margin"] for t in tiers]
+        assert edges[0] == 0.0 and edges == sorted(edges) and len(set(edges)) == len(edges)
+        for t in tiers:
+            assert t["shown"] == (t["accuracy"] >= 0.60)
+            assert t["n"] >= 300
+            assert t["ci"][0] <= t["accuracy"] <= t["ci"][1]
+        assert any(t["shown"] for t in tiers), stat
+        assert 0 < entry["shown_coverage"] < 1
+    s = lean.LEAN_TIER_SUMMARY
+    assert s["shown_accuracy"] >= 0.60 and s["clearest_read_accuracy"] >= 0.60
+    assert s["hidden_accuracy"] < s["shown_accuracy"]
+    assert 0 < s["games_with_a_read_share"] < 1
+
+
+def test_tiers_file_missing_or_bad(tmp_path):
+    assert lean._load_tiers(str(tmp_path / "nope.json")) == ({}, {})
+    bad = tmp_path / "bad.json"
+    bad.write_text("[]")
+    assert lean._load_tiers(str(bad)) == ({}, {})
+
+
+def test_graded_leans_need_regular_minutes_and_a_real_average():
+    feats = {"mpg": 30.0, "PTS": {"form_l5": 1.0, "season_avg": 12.0}}
+    assert lean.lean_for("PTS", feats, models=TOY2, tiers=TIERS) is not None
+    low_min = dict(feats, mpg=lean.MIN_MPG - 0.1)
+    assert lean.lean_for("PTS", low_min, models=TOY2, tiers=TIERS) is None
+    tiny = {"mpg": 30.0, "PTS": {"form_l5": 1.0, "season_avg": 0.4}}
+    assert lean.lean_for("PTS", tiny, models=TOY2, tiers=TIERS) is None
+    # untiered keeps the original behaviour
+    assert lean.lean_for("PTS", tiny, models=TOY2) is not None
+    # compute_features reports minutes per game
+    assert lean.compute_features(_log(), 1.0)["mpg"] == pytest.approx((7 * 30 + 5 * 35) / 12)
+
+
+def test_clearest_read_prefers_the_better_graded_lean():
+    tiers = {
+        "PTS": {"shown_coverage": 0.1, "tiers": [
+            {"label": "Solid", "min_margin": 0.0, "accuracy": 0.62, "ci": [0.6, 0.64], "n": 400, "shown": True}]},
+        "AST": {"shown_coverage": 0.1, "tiers": [
+            {"label": "Strong", "min_margin": 0.0, "accuracy": 0.70, "ci": [0.65, 0.75], "n": 400, "shown": True}]},
+    }
+    # PTS has the far larger margin, AST the better grade -> AST first
+    feats = {"mpg": 30.0, "PTS": {"form_l5": 3.0, "season_avg": 20.0}, "AST": {"form_l5": 0.2, "season_avg": 5.0}}
+    got = lean.leans_for_game(feats, models=TOY2, tiers=tiers)
+    assert [g["stat"] for g in got] == ["AST", "PTS"]
+    assert got[1]["margin"] > got[0]["margin"]

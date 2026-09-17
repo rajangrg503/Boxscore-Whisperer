@@ -26,8 +26,18 @@ SCOPE / LIMITS:
     `python3 lean_model_sweep.py`. Stats absent from that file have no
     lean (they never reached the bar out of sample). This module never
     fits anything.
-  * "historical_accuracy"/"coverage" are the sweep's pooled
-    leave-one-season-out results, not a promise about any single game.
+  * "historical_accuracy"/"coverage" are held-out (leave-one-season-
+    out) results, not a promise about any single game. With
+    engine/lean_tiers.json present (written by clearest_read_sweep.py)
+    the accuracy is the lean's GRADE's: stronger leans were right more
+    often (about 57% just past the threshold, 71% well past it), so
+    each lean carries the number for its own strength, grades under 60%
+    aren't shown, and the "clearest read" is the lean whose grade has
+    the best record. Graded leans are only shown for players averaging
+    MIN_MPG+ minutes and for stats he averages MIN_SHOWN_AVG+ of (the
+    backtest's population). Without the file, the stat's pooled number
+    is used
+    and every lean past the threshold is shown (the original behaviour).
 """
 
 import json
@@ -41,10 +51,18 @@ from engine.stat_columns import STAT_COLUMNS
 
 STATS = [col for col, _ in STAT_COLUMNS]
 MIN_GAMES = 10
+# Graded leans are only shown for players like the backtest's (the top
+# 150 by minutes each season: 98% of its games had a season-to-date
+# average of 20+ minutes) and for stats he actually racks up (a "below
+# his 0.1 three-point attempts" call is trivially true and says nothing).
+# clearest_read_sweep.py applies the same two filters before grading.
+MIN_MPG = 20.0
+MIN_SHOWN_AVG = 1.0
 REL_FLOOR = 1.0        # denominator floor for relative trends (keeps 0.3-block averages sane)
 REL_CLIP = 3.0         # a relative trend is clipped to +/- this
 VOLUME_COLUMN = {"PTS": "FGA", "FG3M": "FG3A", "FG3A": "FGA"}
 MODELS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lean_models.json")
+TIERS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lean_tiers.json")
 
 
 def feature_names(stat):
@@ -64,6 +82,30 @@ def _load_models(path=MODELS_PATH):
 
 
 LEAN_MODELS = _load_models()
+
+
+def _load_tiers(path=TIERS_PATH):
+    """(per-stat tiers, summary) from lean_tiers.json, or ({}, {})."""
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+        return dict(payload["stats"]), dict(payload.get("summary", {}))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}, {}
+
+
+LEAN_TIERS, LEAN_TIER_SUMMARY = _load_tiers()
+
+
+def tier_for(stat, margin, tiers):
+    """The tier dict a lean `margin` past the threshold falls in, or
+    None when the stat has no tiers."""
+    stat_tiers = (tiers or {}).get(stat, {}).get("tiers") or []
+    chosen = None
+    for t in stat_tiers:
+        if margin >= t["min_margin"] - 1e-12:
+            chosen = t
+    return chosen
 
 
 def _rel(recent, season):
@@ -98,7 +140,7 @@ def compute_features(gamelog_df, defense_multiplier):
         return pd.to_numeric(frame[name], errors="coerce").astype(float)
 
     min_season = col(df, "MIN").mean()
-    out = {"n_games": int(len(df))}
+    out = {"n_games": int(len(df)), "mpg": float(min_season)}
     for stat in STATS:
         base = col(df, stat).mean()
         f = {
@@ -126,10 +168,16 @@ def probability_above(model, feature_values):
     return float(1.0 / (1.0 + math.exp(-(model["intercept"] + float(np.dot(model["coef"], z))))))
 
 
-def lean_for(stat, features, models=None):
-    """None, or {"direction", "probability", "historical_accuracy",
-    "coverage"} when this stat has a model and the call clears its
-    confidence threshold. `probability` is P(the called direction)."""
+def lean_for(stat, features, models=None, tiers=None):
+    """None, or {"stat", "direction", "probability", "margin", "tier",
+    "historical_accuracy", "historical_calls", "coverage"} when this stat
+    has a model, the call clears its confidence threshold and (with
+    tiers) its tier is one that's shown. `probability` is P(the called
+    direction); `margin` is how far |p - 0.5| is past the threshold.
+    tiers defaults to the shipped LEAN_TIERS only when models does too
+    (explicit models without tiers = untiered, the original rule)."""
+    if tiers is None:
+        tiers = LEAN_TIERS if models is None else {}
     models = LEAN_MODELS if models is None else models
     model = models.get(stat)
     if model is None or not features or stat not in features:
@@ -137,40 +185,85 @@ def lean_for(stat, features, models=None):
     p = probability_above(model, features[stat])
     if abs(p - 0.5) < model["threshold"] or p == 0.5:
         return None
+    margin = abs(p - 0.5) - model["threshold"]
+    tier = tier_for(stat, margin, tiers)
+    if tier is not None:
+        if not tier["shown"]:
+            return None
+        avg, mpg = features[stat].get("season_avg"), features.get("mpg")
+        if (avg is not None and avg < MIN_SHOWN_AVG) or (mpg is not None and mpg < MIN_MPG):
+            return None
     above = p > 0.5
+    stat_tiers = (tiers or {}).get(stat, {})
     return {
+        "stat": stat,
         "direction": "above" if above else "below",
         "probability": p if above else 1.0 - p,
-        "historical_accuracy": model["oos_accuracy"],
-        "coverage": model["oos_coverage"],
+        "margin": margin,
+        "tier": tier["label"] if tier else None,
+        "historical_accuracy": tier["accuracy"] if tier else model["oos_accuracy"],
+        "historical_calls": tier["n"] if tier else model.get("n"),
+        "coverage": stat_tiers.get("shown_coverage", model["oos_coverage"]) if tier else model["oos_coverage"],
     }
 
 
+def leans_for_game(features, models=None, tiers=None):
+    """Every shown lean for one game, clearest first: with grades, the
+    lean whose grade has the best backtested record (ties: larger
+    margin); without, the larger margin. Element 0 is the clearest read.
+    [] when there are none."""
+    if not features:
+        return []
+    found = [lean_for(stat, features, models=models, tiers=tiers) for stat in STATS if stat in features]
+    found = [x for x in found if x]
+    if any(x["tier"] for x in found):
+        # graded: the best backtested record first, then the larger margin
+        return sorted(found, key=lambda x: (-x["historical_accuracy"], -x["margin"]))
+    return sorted(found, key=lambda x: -x["margin"])
+
+
+def describe_lean(lean, season_avg, stat_labels=None, with_frequency=True):
+    """One plain-English line for a lean (no betting words)."""
+    stat_labels = stat_labels or dict(STAT_COLUMNS)
+    strength = f"{lean['tier']} lean — " if lean.get("tier") else ""
+    calls = f", {lean['historical_calls']:,} calls" if lean.get("tier") and lean.get("historical_calls") else ""
+    every = max(1, round(1.0 / lean["coverage"])) if with_frequency and lean["coverage"] > 0 else None
+    freq = f" (about 1 in {every} games gets a call)" if every else ""
+    return (
+        f"{stat_labels.get(lean['stat'], lean['stat'])}: leans {lean['direction'].upper()} his season "
+        f"average ({season_avg:.1f}) — {strength}calls like this were right "
+        f"{lean['historical_accuracy']:.0%} of the time in 3 seasons of backtests{calls}{freq}"
+    )
+
+
 def strong_lean_lines(gamelog_df, gamelog_season, current_season, defense_multiplier,
-                      stat_labels=None, models=None):
+                      stat_labels=None, models=None, tiers=None):
     """What the Single Player tab renders under the stat cards:
     (kind, lines) with kind "leans" (one line per stat with a lean),
     "none" (no stat cleared its threshold) or "not_yet" (not the
     current season, or too few games) -- the last two carry a single
-    caption line."""
+    caption line. Lean lines are strongest first."""
     stat_labels = stat_labels or dict(STAT_COLUMNS)
     features = compute_features(gamelog_df, defense_multiplier) if gamelog_season == current_season else None
     if features is None:
         return "not_yet", [
             f"Strong leans start once a player has {MIN_GAMES} regular-season games this season."
         ]
-    lines = []
-    for stat in STATS:
-        lean = lean_for(stat, features, models=models)
-        if lean is None:
-            continue
-        every = max(1, round(1.0 / lean["coverage"])) if lean["coverage"] > 0 else None
-        freq = f" (about 1 in {every} games gets a call)" if every else ""
-        lines.append(
-            f"{stat_labels.get(stat, stat)}: leans {lean['direction'].upper()} his season average "
-            f"({features[stat]['season_avg']:.1f}) — calls like this were right "
-            f"{lean['historical_accuracy']:.0%} of the time in 3 seasons of backtests{freq}"
-        )
-    if not lines:
+    leans = leans_for_game(features, models=models, tiers=tiers)
+    if not leans:
         return "none", ["No strong lean for this game — most games don't have one."]
-    return "leans", lines
+    return "leans", [describe_lean(x, features[x["stat"]]["season_avg"], stat_labels) for x in leans]
+
+
+def clearest_read(gamelog_df, gamelog_season, current_season, defense_multiplier,
+                  models=None, tiers=None):
+    """The strongest shown lean for one player's game plus his season
+    average for that stat, or None (not the current season, too few
+    games, or no lean). {"lean": ..., "season_avg": float}."""
+    if gamelog_season != current_season:
+        return None
+    features = compute_features(gamelog_df, defense_multiplier)
+    leans = leans_for_game(features, models=models, tiers=tiers)
+    if not leans:
+        return None
+    return {"lean": leans[0], "season_avg": features[leans[0]["stat"]]["season_avg"]}
