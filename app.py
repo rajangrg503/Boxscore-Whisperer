@@ -2051,8 +2051,8 @@ with tab2:
         "opponent-defense engine as the single-player tool above. This does "
         "not model rotations or minutes -- every player is projected at "
         "their own adjusted season-average rate, not a coach's actual "
-        "rotation plan. Per-player nuance (missing/new teammates, primary "
-        "defender, scheme) stays in the single-player tool for now."
+        "rotation plan. Players marked out are handled here; new teammates, "
+        "primary defender and scheme stay in the single-player tool."
     )
 
 # Bounds the COMBINED out-redistribution multiplier per stat, and only
@@ -2443,6 +2443,13 @@ with tab2:
                         f"the Single Player tool uses. It's one multiplier for every "
                         f"stat, not a per-stat estimate."
                     )
+                elif opponent_missing_result.sample_n > 0:
+                    st.caption(
+                        f"{opponent_full} without {opp_label}: shown for context, not "
+                        f"applied. Backtested over 16,101 real games, an opponent's "
+                        f"missing players didn't make individual stat lines more "
+                        f"accurate, so these numbers don't change."
+                    )
                 else:
                     st.caption(
                         f"{opponent_full} without {opp_label}: no adjustment applied "
@@ -2466,9 +2473,10 @@ with tab2:
                 team_b_id, team_b_full, "team_b_out_input"
             )
         st.caption(
-            "A player marked out changes both tables: their teammates' lines "
-            "are adjusted from real games without them, and the other team's "
-            "lines get the missing-opponent adjustment."
+            "A player marked out is removed from his team's table, and his "
+            "teammates' lines are adjusted from real games without him. The "
+            "other team's lines are noted but not changed -- see the note under "
+            "each table."
         )
 
         team_a_trackable = render_team_projection(

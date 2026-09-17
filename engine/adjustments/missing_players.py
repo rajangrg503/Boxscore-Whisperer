@@ -19,6 +19,20 @@ from engine.adjustments.base import AdjustmentResult, ALL_STATS
 
 LAYER = "missing_opponents"
 
+# How strongly the opponent's absences move this player's numbers:
+#     multiplier = 1 + (weighted absent MPG / 240) * OPPONENT_MISSING_STRENGTH
+# Was 0.35 (never tested). missing_opponents_sweep.py replayed it
+# point-in-time over the backtest case set (16,101 games where the
+# opponent was missing a key player): at 0.35 predictions were 2.0% WORSE
+# than no adjustment (95% CI +1.8..+2.2%; +3.5% with 2+ absent), error
+# rose steadily with strength, every strength above 0 lost, and the
+# net-rating quality weighting made it worse again. The measured
+# "opponent is short-handed" effect on individual stat lines is ~0 for
+# every stat (BLK slightly positive, still not worth applying). So the
+# layer still reports who is missing -- useful context -- but no longer
+# changes the number.
+OPPONENT_MISSING_STRENGTH = 0.0
+
 
 def get_opponent_missing_adjustment(missing_opponents, season) -> AdjustmentResult:
     if not missing_opponents:
@@ -110,7 +124,7 @@ def get_opponent_missing_adjustment(missing_opponents, season) -> AdjustmentResu
         )
 
     minutes_fraction = total_weighted_mpg / 240
-    adjustment = 1 + (minutes_fraction * 0.35)
+    adjustment = 1 + (minutes_fraction * OPPONENT_MISSING_STRENGTH)
     detail_parts = []
     ambiguity_notes = []
     for n, m, nr, amb in found_players:
@@ -130,8 +144,14 @@ def get_opponent_missing_adjustment(missing_opponents, season) -> AdjustmentResu
         if skipped_zero_gp else ""
     )
     ambiguity_prefix = (" ".join(ambiguity_notes) + " ") if ambiguity_notes else ""
-    note = (f"{ambiguity_prefix}Missing: {detail}{metrics_note}{skip_note} -> "
-            f"\U0001F691 Opponent Missing Players Layer Applied — x{adjustment:.3f}")
+    if OPPONENT_MISSING_STRENGTH == 0:
+        note = (f"{ambiguity_prefix}Missing: {detail}{metrics_note}{skip_note}. Shown for "
+                f"context only -- backtested over 16,101 real games, the opponent missing "
+                f"players didn't make individual predictions more accurate at any strength, "
+                f"so this doesn't change the number.")
+    else:
+        note = (f"{ambiguity_prefix}Missing: {detail}{metrics_note}{skip_note} -> "
+                f"\U0001F691 Opponent Missing Players Layer Applied — x{adjustment:.3f}")
 
     if metrics_season_used == season:
         data_quality = "real_current"
@@ -148,5 +168,6 @@ def get_opponent_missing_adjustment(missing_opponents, season) -> AdjustmentResu
 
     return AdjustmentResult(
         layer=LAYER, value={ALL_STATS: adjustment}, note=note,
-        data_quality=data_quality, sample_n=sample_n, applied=True,
+        data_quality=data_quality, sample_n=sample_n,
+        applied=OPPONENT_MISSING_STRENGTH != 0,
     )
