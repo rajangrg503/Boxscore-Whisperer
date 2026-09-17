@@ -61,12 +61,47 @@ OUT_REDISTRIBUTION_LAYER = "out_redistribution"
 OUT_RATIO_SHRINK_K = 80
 
 
-def shrink_ratio(raw_ratio, n_without, k=OUT_RATIO_SHRINK_K):
-    """Pull a with/without ratio toward 1.0 in proportion to how few
-    real games back it. See OUT_RATIO_SHRINK_K."""
+def shrink_ratio(raw_ratio, n_without, k=OUT_RATIO_SHRINK_K, prior=1.0):
+    """Pull a with/without ratio toward `prior` (1.0 = no change) in
+    proportion to how few real games back it. See OUT_RATIO_SHRINK_K."""
     if n_without <= 0:
-        return 1.0
-    return 1.0 + (raw_ratio - 1.0) * n_without / (n_without + k)
+        return prior
+    return prior + (raw_ratio - prior) * n_without / (n_without + k)
+
+
+# The league-wide "a teammate is out, so I pick up some of his load"
+# prior that Full Matchup's out-redistribution shrinks toward, instead
+# of 1.0:
+#     prior[stat] = 1 + OUT_PRIOR_BETA[stat] * out_player_avg[stat] / LEAGUE_TEAM_PER_GAME[stat]
+# From out_prior_sweep.py. Shrinking to 1.0 (k=80) made a benched
+# star's production vanish from the team box score: projected team
+# points on treated games ran 3.4 short (case-set players). With this
+# prior that drops to 1.1, with per-player error unchanged (-0.04%,
+# 95% CI -0.08..+0.00%). Betas were constrained >= 0 (teammates pick up
+# load, never lose it); only PTS, AST and FG3A came out non-zero, and
+# they were stable across leave-one-season-out folds. Unconstrained
+# fits "won" only by shrinking every prediction regardless of who was
+# out, so they aren't used. Applies to get_out_redistribution_adjustment
+# only -- the Single Player missing-teammates layer matches teammates by
+# name from box scores and has no gamelog for them, so it keeps prior 1.
+OUT_PRIOR_BETA = {"PTS": 0.20, "AST": 0.15, "FG3A": 0.10}
+LEAGUE_TEAM_PER_GAME = {"PTS": 114.0, "AST": 26.0, "FG3A": 36.0}
+
+
+def out_prior(out_df):
+    """Per-stat prior multiplier from the out player's own per-game
+    averages this season (his gamelog, which the caller already has).
+    1.0 for every stat without a beta, or when his log is empty or
+    lacks the column."""
+    prior = {}
+    for col, _label in STAT_COLUMNS:
+        beta = OUT_PRIOR_BETA.get(col, 0.0)
+        if beta == 0.0 or out_df is None or out_df.empty or col not in out_df.columns:
+            prior[col] = 1.0
+            continue
+        avg = pd.to_numeric(out_df[col], errors="coerce").mean()
+        prior[col] = 1.0 + beta * avg / LEAGUE_TEAM_PER_GAME[col] if pd.notna(avg) else 1.0
+    return prior
 
 
 def get_teammate_availability_adjustment(player_id, missing_names, season, df=None) -> AdjustmentResult:
@@ -324,18 +359,30 @@ def get_out_redistribution_adjustment(player_id, out_player_id, season, player_d
 
     out_df = fetch_combined_game_log(out_player_id, season)
     out_game_ids = set(out_df["Game_ID"]) if not out_df.empty else set()
+    prior = out_prior(out_df)
 
     with_out = player_df[player_df["Game_ID"].isin(out_game_ids)]
     without_out = player_df[~player_df["Game_ID"].isin(out_game_ids)]
 
     if len(without_out) < 3 or len(with_out) < 3:
+        thin_note = (f"Found {len(without_out)} game(s) without the marked-out player "
+                     f"out of {len(player_df)} in {season} (and {len(with_out)} with them "
+                     f"present) -- not enough real contrast in both directions to trust a "
+                     f"player-specific comparison")
+        if all(v == 1.0 for v in prior.values()):
+            return AdjustmentResult(
+                layer=OUT_REDISTRIBUTION_LAYER, value=neutral,
+                note=thin_note + ", skipping this adjustment.",
+                data_quality="unavailable", sample_n=len(without_out), applied=False,
+            )
+        prior_detail = ", ".join(
+            f"{col} {(v - 1) * 100:+.1f}%" for col, v in prior.items() if v != 1.0
+        )
         return AdjustmentResult(
-            layer=OUT_REDISTRIBUTION_LAYER, value=neutral,
-            note=(f"Found {len(without_out)} game(s) without the marked-out player "
-                  f"out of {len(player_df)} in {season} (and {len(with_out)} with them "
-                  f"present) -- not enough real contrast in both directions to trust a "
-                  f"comparison, skipping this adjustment."),
-            data_quality="unavailable", sample_n=len(without_out), applied=False,
+            layer=OUT_REDISTRIBUTION_LAYER, value=prior,
+            note=(thin_note + f", so only the league-wide pickup for a teammate this "
+                  f"size is applied: {prior_detail}."),
+            data_quality="real_thin_sample", sample_n=len(without_out), applied=True,
         )
 
     sample_n = len(without_out)
@@ -344,8 +391,8 @@ def get_out_redistribution_adjustment(player_id, out_player_id, season, player_d
     for col, _label in STAT_COLUMNS:
         avg_without = without_out[col].mean()
         avg_overall = player_df[col].mean()
-        raw_ratio = avg_without / avg_overall if avg_overall else 1.0
-        ratio = shrink_ratio(raw_ratio, sample_n)
+        raw_ratio = avg_without / avg_overall if avg_overall else prior[col]
+        ratio = shrink_ratio(raw_ratio, sample_n, prior=prior[col])
         adjustments[col] = ratio
         per_stat_notes.append(
             f"{col} {avg_without:.1f} vs {avg_overall:.1f} overall "
@@ -356,8 +403,10 @@ def get_out_redistribution_adjustment(player_id, out_player_id, season, player_d
     note = (
         f"Found {sample_n} games without the marked-out player this {season} season "
         f"(vs. {len(with_out)} with them present), stat-by-stat: {summary}. Raw "
-        f"differences are shrunk toward zero by sample size ({sample_n} games vs. a "
-        f"{OUT_RATIO_SHRINK_K}-game prior) -- backtested, small samples overshoot."
+        f"differences are shrunk by sample size ({sample_n} games vs. a "
+        f"{OUT_RATIO_SHRINK_K}-game prior) toward the league-wide pickup for a "
+        f"teammate this size (points, assists and 3PA only) -- backtested, small "
+        f"samples overshoot."
     )
     return AdjustmentResult(
         layer=OUT_REDISTRIBUTION_LAYER, value=adjustments, note=note,

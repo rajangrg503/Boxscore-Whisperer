@@ -343,7 +343,10 @@ def verify_against_production(verify):
         if gl is not None:
             gl_n += 1
             gl_prior = gl[pd.to_datetime(gl["GAME_DATE"]) < ts]
-            res2 = call_production(player_id, a, season, prior, gl_prior)
+            # Game_ID only: this compares out-player MEMBERSHIP. The real
+            # gamelog's stat columns would also switch on production's
+            # pooled prior (teammates.out_prior), which this sweep predates.
+            res2 = call_production(player_id, a, season, prior, gl_prior[["Game_ID"]])
             got2 = np.array([res2.multiplier_for(c) for c in STATS])
             if res2.applied != res.applied or not np.allclose(got2, got, atol=1e-12, equal_nan=True):
                 gl_bad += 1
