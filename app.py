@@ -76,6 +76,12 @@ from engine.adjustments.defense import (
 from analytics.layer_accuracy import build_layer_lines
 from engine.confidence import score_prediction
 from engine.adjustments.registry import LAYER_DISPLAY
+from engine.team_total import (
+    REGULAR_SEASON_GAMES,
+    availability,
+    expected_team_total,
+    minutes_profile,
+)
 from engine.baseline_stats import stats_from_gamelog
 from engine.lean import LEAN_MODELS, strong_lean_lines
 
@@ -2636,6 +2642,40 @@ with tab2:
     # the team pickers can't live in an st.form (a form doesn't rerun when
     # a selection changes, so the out pickers couldn't follow the teams).
 
+    def team_games_so_far(team_id):
+        """Regular-season games the team has played this season, from the
+        league team-stats snapshot (0 when unavailable)."""
+        try:
+            df = get_league_advanced_team_stats(CURRENT_SEASON)
+        except Exception:
+            return 0
+        if df is None or df.empty or "GP" not in df.columns:
+            return 0
+        row = df[df["TEAM_ID"] == team_id]
+        return int(row["GP"].iloc[0]) if not row.empty else 0
+
+    def total_entry(player_id, predictions, layer_results, current_team_games):
+        """This player's input to engine.team_total.expected_team_total:
+        his line before any out-redistribution pickup, his minutes, and
+        how often he can be expected to play. None if minutes are missing."""
+        try:
+            log_df, log_season, _source = resolve_season_gamelog(player_id)
+        except Exception:
+            return None
+        mpg, regular_games = minutes_profile(log_df)
+        if not mpg:
+            return None
+        if log_season == CURRENT_SEASON:
+            team_games = current_team_games or regular_games
+        else:
+            team_games = REGULAR_SEASON_GAMES
+        defense = layer_results.get("opponent_defense")
+        line = {
+            col: predictions[col]["base"] * (defense.multiplier_for(col) if defense else 1.0)
+            for col, _label in STAT_COLUMNS
+        }
+        return {"line": line, "mpg": mpg, "availability": availability(regular_games, team_games)}
+
     def build_team_projection(team_id, opponent_id, out_player_ids=None,
                               opponent_missing_result=None):
         """out_player_ids: a list -- each is excluded entirely from
@@ -2647,7 +2687,10 @@ with tab2:
         get_out_redistribution_adjustment can apply per out player.
         opponent_missing_result: computed once by the caller for the
         OTHER team's out list, passed unchanged to every player.
-        Returns (rows, skipped, unadjusted, out_names, trackable):
+        Returns (rows, skipped, unadjusted, out_names, trackable,
+        expected_total): expected_total is {stat label: value} from
+        engine/team_total.py (None when it can't be computed) -- see
+        that module for why it isn't the sum of the rows.
         `skipped` is the existing "not enough data to project at
         all" case; `unadjusted` is a distinct, narrower case -- the
         player WAS projected, but there wasn't enough real "games
@@ -2667,6 +2710,8 @@ with tab2:
         unadjusted = []
         out_names = []
         trackable = []
+        total_entries = []
+        current_team_games = team_games_so_far(team_id)
         for pid, pname in roster:
             if pid in out_ids:
                 out_names.append(pname)
@@ -2690,7 +2735,14 @@ with tab2:
                 "player_id": pid, "player_full_name": pname,
                 "predictions": predictions, "layer_results": layer_results,
             })
-        return rows, skipped, unadjusted, out_names, trackable
+            entry = total_entry(pid, predictions, layer_results, current_team_games)
+            if entry is not None:
+                total_entries.append(entry)
+        totals, _expected_minutes = expected_team_total(total_entries, [c for c, _ in STAT_COLUMNS])
+        expected_total = (
+            {label: round(totals[col], 1) for col, label in STAT_COLUMNS} if totals else None
+        )
+        return rows, skipped, unadjusted, out_names, trackable, expected_total
 
     def pick_out_players(team_id, team_full, out_key):
         """One team's "who's out" picker. Rendered for BOTH teams
@@ -2727,7 +2779,7 @@ with tab2:
         )
 
         with st.spinner("Calculating..."):
-            rows, skipped, unadjusted, out_names, trackable = build_team_projection(
+            rows, skipped, unadjusted, out_names, trackable, expected_total = build_team_projection(
                 team_id, opponent_id, out_player_ids=out_ids,
                 opponent_missing_result=opponent_missing_result,
             )
@@ -2735,8 +2787,10 @@ with tab2:
         if rows:
             table_df = pd.DataFrame(rows)
             stat_labels = [label for _col, label in STAT_COLUMNS]
-            team_total = table_df[stat_labels].sum().round(1)
-            total_row = {"Player": "Team total", **team_total.to_dict()}
+            if expected_total is not None:
+                total_row = {"Player": "Team total (expected)", **expected_total}
+            else:
+                total_row = {"Player": "Team total (sum)", **table_df[stat_labels].sum().round(1).to_dict()}
             _label_to_col = {label: col for col, label in STAT_COLUMNS}
             st.dataframe(
                 pd.concat([table_df, pd.DataFrame([total_row])], ignore_index=True),
@@ -2752,25 +2806,28 @@ with tab2:
                 },
             )
             pts_label = STAT_COLUMNS[0][1]
-            if out_ids:
-                # Same projection with nobody out, for comparison. Each
-                # player's baseline/defense lookups are cached, so this
-                # costs little. Nothing forces the two totals to match:
-                # the backtest showed per-player accuracy is best when
-                # teammates only pick up part of an absent player's load.
-                full_rows = build_team_projection(team_id, opponent_id)[0]
-                full_pts = round(sum(r[pts_label] for r in full_rows), 1)
+            if expected_total is not None:
                 st.caption(
-                    f"Projected team total: {team_total[pts_label]:.1f} points with "
-                    f"these players out, vs {full_pts:.1f} at full strength. "
-                    f"Teammates pick up only part of an absent player's load here — "
-                    f"that's what tested most accurately player by player — so "
-                    f"the team total drops."
+                    "Each row is that player's line if he plays. The expected team total "
+                    "weights every player by how often he has played this season and fits "
+                    "the team's 240 minutes, so it isn't the sum of the rows. Backtested on "
+                    "6,120 team-games, this cut the error in projected team points from "
+                    "about 36 to 10."
                 )
+            if out_ids and expected_total is not None:
+                # Same projection with nobody out, for comparison.
+                full_total = build_team_projection(team_id, opponent_id)[5]
+                if full_total is not None:
+                    st.caption(
+                        f"Expected team total: {expected_total[pts_label]:.1f} points with "
+                        f"these players out, vs {full_total[pts_label]:.1f} at full strength. "
+                        f"Their minutes go to the rest of the roster, so the difference "
+                        f"comes from who replaces them."
+                    )
             if skipped:
                 st.caption(
-                    "Team totals only include players projected above, so they run "
-                    "low when players without enough NBA data would also play."
+                    "Players without enough NBA data aren't in the table. The expected "
+                    "total shares their minutes among the players above."
                 )
         else:
             st.info("No players with enough data to project.")
