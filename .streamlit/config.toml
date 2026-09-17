@@ -1,0 +1,34 @@
+# Boxscore Whisperer theme (Streamlit 1.64 option names).
+#
+# Without this file Streamlit follows each visitor's system setting, so
+# anyone in light mode got light widgets, a white header and a light
+# sidebar on top of app.py's forced dark background: dark-on-dark tab
+# labels, white inputs inside dark cards. Pinning the dark base makes
+# every widget match the custom CSS in app.py, and primaryColor replaces
+# Streamlit's default red (tab underline, focus rings, checkboxes,
+# multiselect chips) with the app's green.
+
+[theme]
+base = "dark"
+primaryColor = "#22c55e"
+backgroundColor = "#0a0d12"
+secondaryBackgroundColor = "#161a23"
+textColor = "#e7eaf0"
+linkColor = "#4ade80"
+borderColor = "#252b38"
+dataframeHeaderBackgroundColor = "#11151c"
+showWidgetBorder = true
+baseRadius = "10px"
+buttonRadius = "10px"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap, sans-serif"
+headingFont = "Inter, sans-serif"
+chartCategoricalColors = ["#22c55e", "#60a5fa", "#fbbf24", "#f87171", "#a78bfa"]
+
+[theme.sidebar]
+backgroundColor = "#0e1219"
+secondaryBackgroundColor = "#161a23"
+borderColor = "#1d2230"
+
+[client]
+# Hide Streamlit's developer menu and toolbar for visitors.
+toolbarMode = "minimal"
