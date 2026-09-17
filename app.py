@@ -2416,7 +2416,35 @@ with tab2:
                 )
 
             if rows:
-                st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                table_df = pd.DataFrame(rows)
+                stat_labels = [label for _col, label in STAT_COLUMNS]
+                team_total = table_df[stat_labels].sum().round(1)
+                total_row = {"Player": "Team total", **team_total.to_dict()}
+                st.dataframe(
+                    pd.concat([table_df, pd.DataFrame([total_row])], ignore_index=True),
+                    width="stretch", hide_index=True,
+                )
+                pts_label = STAT_COLUMNS[0][1]
+                if out_ids:
+                    # Same projection with nobody out, for comparison. Each
+                    # player's baseline/defense lookups are cached, so this
+                    # costs little. Nothing forces the two totals to match:
+                    # the backtest showed per-player accuracy is best when
+                    # teammates only pick up part of an absent player's load.
+                    full_rows = build_team_projection(team_id, opponent_id)[0]
+                    full_pts = round(sum(r[pts_label] for r in full_rows), 1)
+                    st.caption(
+                        f"Projected team total: {team_total[pts_label]:.1f} points with "
+                        f"these players out, vs {full_pts:.1f} at full strength. "
+                        f"Teammates pick up only part of an absent player's load here -- "
+                        f"that's what tested most accurately player by player -- so "
+                        f"the team total drops."
+                    )
+                if skipped:
+                    st.caption(
+                        "Team totals only include players projected above, so they run "
+                        "low when players without enough NBA data would also play."
+                    )
             else:
                 st.info("No players with enough data to project.")
             out_label = ", ".join(out_names)
