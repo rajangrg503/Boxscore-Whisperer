@@ -74,6 +74,7 @@ from analytics.layer_accuracy import build_layer_lines
 from engine.confidence import score_prediction
 from engine.adjustments.registry import LAYER_DISPLAY
 from engine.baseline_stats import stats_from_gamelog
+from engine.lean import LEAN_MODELS, strong_lean_lines
 
 
 # ---------- Data functions (same logic as the terminal version) ----------
@@ -599,8 +600,9 @@ html, body, [class*="css"] {
     color: #ffffff;
 }
 
-/* Search-bar-style container around the form */
-div[data-testid="stForm"] {
+/* Search-bar-style container around the form (and the Full Matchup box,
+   which can't be a form -- see tab2) */
+div[data-testid="stForm"], .st-key-matchup_box {
     background-color: #171a21;
     border-radius: 20px;
     padding: 28px 24px 12px 24px;
@@ -609,7 +611,7 @@ div[data-testid="stForm"] {
 }
 
 /* Green accent button, StatMuse-style */
-div[data-testid="stFormSubmitButton"] button {
+div[data-testid="stFormSubmitButton"] button, .st-key-predict_matchup_btn button {
     background-color: #00c853;
     color: white;
     font-weight: 700;
@@ -619,7 +621,7 @@ div[data-testid="stFormSubmitButton"] button {
     font-size: 16px;
     width: 100%;
 }
-div[data-testid="stFormSubmitButton"] button:hover {
+div[data-testid="stFormSubmitButton"] button:hover, .st-key-predict_matchup_btn button:hover {
     background-color: #00b34a;
     color: white;
 }
@@ -971,6 +973,39 @@ with st.expander("📊 See methodology"):
         '</table>',
         unsafe_allow_html=True,
     )
+    # Strong leans (engine/lean.py) -- numbers come straight from
+    # engine/lean_models.json (written by lean_model_sweep.py), so this
+    # table can't drift from what the Single Player tab actually shows.
+    if LEAN_MODELS:
+        _lean_calls = sum(m["n"] for m in LEAN_MODELS.values())
+        _lean_acc = sum(m["oos_accuracy"] * m["n"] for m in LEAN_MODELS.values()) / _lean_calls
+        _lean_names = [label.lower() for col, label in STAT_COLUMNS if col in LEAN_MODELS]
+        _all_calls = [m["all_calls_accuracy"] for m in LEAN_MODELS.values()]
+        st.markdown(
+            "**Strong leans.** Calling every game above or below a player's season average "
+            "is close to a coin flip -- the table above, and still only "
+            f"{min(_all_calls) * 100:.0f}-{max(_all_calls):.0%} with the recent-form model below. "
+            "Strong leans are the rare games where that model is "
+            f"confident; they were right {_lean_acc:.0%} of the time in seasons the model "
+            "never saw (each season held out in turn). Only "
+            + ", ".join(_lean_names[:-1]) + f" and {_lean_names[-1]} get them -- for the "
+            "other stats the apparent accuracy came from those stats usually landing below "
+            "average, not from the model."
+        )
+        st.markdown(
+            '<table class="methodology-table">'
+            '<tr><th>Stat</th><th>Strong-lean Accuracy</th><th>95% CI</th>'
+            '<th>Games With A Lean</th><th>Calls</th></tr>'
+            + "".join(
+                f'<tr><td>{col}</td><td>{m["oos_accuracy"]:.1%}</td>'
+                f'<td>{m["oos_accuracy_ci"][0]:.1%}-{m["oos_accuracy_ci"][1]:.1%}</td>'
+                f'<td>{m["oos_coverage"]:.0%}</td><td>{m["n"]:,}</td></tr>'
+                for col, _label in STAT_COLUMNS
+                for m in [LEAN_MODELS.get(col)] if m
+            )
+            + '</table>',
+            unsafe_allow_html=True,
+        )
 
 # Pull the current name lists once per session for the searchable
 # dropdowns -- typing inside these boxes filters the list live, no
@@ -1457,6 +1492,12 @@ with tab1:
                 opponent_full_name=opponent_full_name, team_h2h_weight=team_h2h_weight,
             )
             def_note = defense_result.note
+            # engine/lean.py's models were fit on the UNSCALED multiplier
+            # (team_h2h_weight=0, the backtest's), so the strong-lean block
+            # gets that one regardless of the baseline source picked.
+            lean_defense_multiplier = get_defense_adjustment(
+                team_def_rating, league_avg_def, def_source_note,
+            ).multiplier_for("PTS")
 
             if missing_teammates:
                 teammate_result = None
@@ -1643,6 +1684,7 @@ with tab1:
             # save time (see the "Real games actually behind..." comment
             # near blend_baseline_stats' call sites).
             "baseline_sample_n": baseline_sample_n,
+            "lean_defense_multiplier": lean_defense_multiplier,
             "def_note": def_note,
             "teammate_note": teammate_note,
             "new_teammate_note": new_teammate_note,
@@ -1762,6 +1804,31 @@ with tab1:
             "baseline is shown separately there in step [1] for comparison. \"Likely range\" "
             "reflects this player's real game-to-game variability."
         )
+
+        # Strong leans (engine/lean.py) -- only from the CURRENT season's
+        # own gamelog (resolve_season_gamelog is cached; early in a season
+        # it returns last season's log, and strong_lean_lines then says
+        # leans haven't started). Never changes the numbers above.
+        try:
+            _lean_log, _lean_season, _lean_source = resolve_season_gamelog(player_id)
+        except Exception:
+            _lean_log, _lean_season = None, None
+        _lean_multiplier = r.get("lean_defense_multiplier")
+        if _lean_multiplier is None and "opponent_defense" in layer_results:
+            _lean_multiplier = layer_results["opponent_defense"].multiplier_for("PTS")
+        _lean_kind, _lean_lines = strong_lean_lines(
+            _lean_log, _lean_season, CURRENT_SEASON, _lean_multiplier,
+        )
+        if _lean_kind == "leans":
+            st.markdown(
+                "**Strong leans**\n\n" + "\n".join(f"- {line}" for line in _lean_lines)
+            )
+            st.caption(
+                "Above or below his season average only -- not a prediction of the exact "
+                "number. Most games get no lean; see methodology for the backtest."
+            )
+        else:
+            st.caption(_lean_lines[0])
 
         # Save this prediction to the tracker, so you can come back after
         # the actual game and see how close it was.
@@ -2276,237 +2343,233 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
 
 
 with tab2:
-    with st.form("matchup_form"):
+    # The "who's out" pickers sit ABOVE the Predict button: each team's
+    # roster is known as soon as the team is picked, so there's no reason
+    # to make people predict first and then mark players out. That means
+    # the team pickers can't live in an st.form (a form doesn't rerun when
+    # a selection changes, so the out pickers couldn't follow the teams).
+
+    def build_team_projection(team_id, opponent_id, out_player_ids=None,
+                              opponent_missing_result=None):
+        """out_player_ids: a list -- each is excluded entirely from
+        the projected rows (not called through
+        predict_player_vs_opponent at all -- there's nothing to
+        project for a player marked out), and the whole list is
+        passed through to every remaining player's prediction so
+        engine/adjustments/teammates.py's
+        get_out_redistribution_adjustment can apply per out player.
+        opponent_missing_result: computed once by the caller for the
+        OTHER team's out list, passed unchanged to every player.
+        Returns (rows, skipped, unadjusted, out_names, trackable):
+        `skipped` is the existing "not enough data to project at
+        all" case; `unadjusted` is a distinct, narrower case -- the
+        player WAS projected, but there wasn't enough real "games
+        with vs. without the out player" history to trust a
+        redistribution adjustment for them specifically, so their
+        row shows their normal, unadjusted number instead of a
+        fabricated one. `trackable` is one dict per successfully-
+        projected player (player_id, player_full_name, predictions,
+        layer_results) -- everything needed to later save this
+        player's prediction, without threading opponent/game-date
+        context through here (the caller adds that; this function
+        doesn't know the game being tracked, only the matchup)."""
+        roster = get_team_roster(team_id)
+        out_ids = list(out_player_ids or [])
+        rows = []
+        skipped = []
+        unadjusted = []
+        out_names = []
+        trackable = []
+        for pid, pname in roster:
+            if pid in out_ids:
+                out_names.append(pname)
+                continue
+            result = predict_player_vs_opponent(
+                pid, pname, opponent_id, out_player_ids=out_ids,
+                opponent_missing_result=opponent_missing_result,
+            )
+            if result is None:
+                skipped.append(pname)
+                continue
+            predictions, _season_source, _def_source_note, layer_results = result
+            redistribution_result = layer_results.get("out_redistribution")
+            if redistribution_result is not None and not redistribution_result.applied:
+                unadjusted.append(pname)
+            row = {"Player": pname}
+            for col, label in STAT_COLUMNS:
+                row[label] = round(predictions[col]["predicted"], 1)
+            rows.append(row)
+            trackable.append({
+                "player_id": pid, "player_full_name": pname,
+                "predictions": predictions, "layer_results": layer_results,
+            })
+        return rows, skipped, unadjusted, out_names, trackable
+
+    def pick_out_players(team_id, team_full, out_key):
+        """One team's "who's out" picker. Rendered for BOTH teams
+        before either table is built, because each table depends on
+        both out lists. Returns (out_ids, out_names), both in
+        roster order."""
+        roster = get_team_roster(team_id)
+        roster_id_to_name = dict(roster)
+        out_ids = st.multiselect(
+            f"Mark {team_full} players as out (optional)",
+            options=[pid for pid, _pname in roster],
+            format_func=lambda pid: player_search_label(roster_id_to_name[pid]),
+            key=out_key,
+            help=(
+                "Each player marked out is compared against this team's real "
+                "games with vs. without them. Stacked effects are capped, so "
+                "marking several players out won't compound into a projection "
+                "the sample can't support."
+            ),
+        )
+
+        chosen = set(out_ids)
+        out_pairs = [(pid, pname) for pid, pname in roster if pid in chosen]
+        return [pid for pid, _ in out_pairs], [pname for _, pname in out_pairs]
+
+    def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr,
+                               out_ids, opponent_out_names):
+        st.markdown(f"**{team_full}** projected box score")
+        # Same season as the Single Player tool's call -- see this
+        # patch's docstring; change both together.
+        opponent_missing_result = (
+            get_opponent_missing_adjustment_cached(tuple(opponent_out_names), PREVIOUS_SEASON)
+            if opponent_out_names else None
+        )
+
+        with st.spinner("Calculating..."):
+            rows, skipped, unadjusted, out_names, trackable = build_team_projection(
+                team_id, opponent_id, out_player_ids=out_ids,
+                opponent_missing_result=opponent_missing_result,
+            )
+
+        if rows:
+            table_df = pd.DataFrame(rows)
+            stat_labels = [label for _col, label in STAT_COLUMNS]
+            team_total = table_df[stat_labels].sum().round(1)
+            total_row = {"Player": "Team total", **team_total.to_dict()}
+            st.dataframe(
+                pd.concat([table_df, pd.DataFrame([total_row])], ignore_index=True),
+                width="stretch", hide_index=True,
+            )
+            pts_label = STAT_COLUMNS[0][1]
+            if out_ids:
+                # Same projection with nobody out, for comparison. Each
+                # player's baseline/defense lookups are cached, so this
+                # costs little. Nothing forces the two totals to match:
+                # the backtest showed per-player accuracy is best when
+                # teammates only pick up part of an absent player's load.
+                full_rows = build_team_projection(team_id, opponent_id)[0]
+                full_pts = round(sum(r[pts_label] for r in full_rows), 1)
+                st.caption(
+                    f"Projected team total: {team_total[pts_label]:.1f} points with "
+                    f"these players out, vs {full_pts:.1f} at full strength. "
+                    f"Teammates pick up only part of an absent player's load here -- "
+                    f"that's what tested most accurately player by player -- so "
+                    f"the team total drops."
+                )
+            if skipped:
+                st.caption(
+                    "Team totals only include players projected above, so they run "
+                    "low when players without enough NBA data would also play."
+                )
+        else:
+            st.info("No players with enough data to project.")
+        out_label = ", ".join(out_names)
+        if out_names:
+            st.caption(
+                f"Marked out: {out_label}. Remaining players' numbers above are "
+                f"adjusted using their real historical games with vs. without "
+                f"those players this season, where enough real data exists."
+            )
+        if unadjusted:
+            st.caption(
+                f"Not enough real history without {out_label} to trust "
+                f"an adjustment -- shown at their normal projection instead: "
+                f"{', '.join(unadjusted)}"
+            )
+        if opponent_missing_result is not None:
+            opp_label = ", ".join(opponent_out_names)
+            if opponent_missing_result.applied:
+                opp_mult = opponent_missing_result.multiplier_for(STAT_COLUMNS[0][0])
+                st.caption(
+                    f"{opponent_full} without {opp_label}: every stat above is "
+                    f"scaled x{opp_mult:.3f}, weighted by their real minutes and "
+                    f"estimated net rating -- the same missing-opponent adjustment "
+                    f"the Single Player tool uses. It's one multiplier for every "
+                    f"stat, not a per-stat estimate."
+                )
+            elif opponent_missing_result.sample_n > 0:
+                st.caption(
+                    f"{opponent_full} without {opp_label}: shown for context, not "
+                    f"applied. Backtested over 16,101 real games, an opponent's "
+                    f"missing players didn't make individual stat lines more "
+                    f"accurate, so these numbers don't change."
+                )
+            else:
+                st.caption(
+                    f"{opponent_full} without {opp_label}: no adjustment applied "
+                    f"-- {opponent_missing_result.note}"
+                )
+        if skipped:
+            st.caption(f"Not enough data to project: {', '.join(skipped)}")
+
+        return [
+            {**t, "opponent_full_name": opponent_full, "opponent_abbr": opponent_abbr}
+            for t in trackable
+        ]
+
+    with st.container(border=True, key="matchup_box"):
         mcol1, mcol2 = st.columns(2)
         with mcol1:
             default_a = team_names.index("Oklahoma City Thunder") if "Oklahoma City Thunder" in team_names else None
             team_a_input = st.selectbox(
                 "Team A", options=team_names, index=default_a,
-                placeholder="Search a team..."
+                placeholder="Search a team...", key="matchup_team_a",
             )
         with mcol2:
             default_b = team_names.index("San Antonio Spurs") if "San Antonio Spurs" in team_names else None
             team_b_input = st.selectbox(
                 "Team B", options=team_names, index=default_b,
-                placeholder="Search a team..."
+                placeholder="Search a team...", key="matchup_team_b",
             )
-        matchup_submitted = st.form_submit_button("Predict matchup")
+
+        teams_ready = bool(team_a_input and team_b_input and team_a_input != team_b_input)
+        if team_a_input and team_b_input and team_a_input == team_b_input:
+            st.error("Please select two different teams.")
+
+        if teams_ready:
+            team_a_id, team_a_full, team_a_abbr = get_team_id(team_a_input)
+            team_b_id, team_b_full, team_b_abbr = get_team_id(team_b_input)
+            pick_a, pick_b = st.columns(2)
+            # Keyed by team id: switching a team gives a fresh, empty
+            # picker instead of carrying over ids from another roster.
+            with pick_a:
+                team_a_out_ids, team_a_out_names = pick_out_players(
+                    team_a_id, team_a_full, f"out_input_{team_a_id}"
+                )
+            with pick_b:
+                team_b_out_ids, team_b_out_names = pick_out_players(
+                    team_b_id, team_b_full, f"out_input_{team_b_id}"
+                )
+            st.caption(
+                "Optional: mark anyone who won't play. A player marked out is "
+                "removed from his team's table, and his teammates' lines are "
+                "adjusted from real games without him. The other team's lines "
+                "are noted but not changed."
+            )
+
+        matchup_submitted = st.button("Predict matchup", key="predict_matchup_btn")
 
     if matchup_submitted:
-        if not team_a_input or not team_b_input:
-            st.error("Please select both teams.")
-            st.stop()
-        if team_a_input == team_b_input:
+        if not teams_ready:
             st.error("Please select two different teams.")
-            st.stop()
+        else:
+            st.session_state["matchup_pair"] = (team_a_id, team_b_id)
 
-        team_a_id, team_a_full, team_a_abbr = get_team_id(team_a_input)
-        team_b_id, team_b_full, team_b_abbr = get_team_id(team_b_input)
-        st.session_state["matchup_context"] = {
-            "team_a_id": team_a_id, "team_a_full": team_a_full, "team_a_abbr": team_a_abbr,
-            "team_b_id": team_b_id, "team_b_full": team_b_full, "team_b_abbr": team_b_abbr,
-        }
-        # A freshly-submitted matchup starts with nobody marked out --
-        # also avoids a stale selection from a PREVIOUS matchup (a
-        # different team's roster) surviving into this one, which
-        # would otherwise point at a player id that isn't even on the
-        # newly selected team.
-        st.session_state.pop("team_a_out_input", None)
-        st.session_state.pop("team_b_out_input", None)
-
-    if "matchup_context" in st.session_state:
-        ctx = st.session_state["matchup_context"]
-        team_a_id, team_a_full, team_a_abbr = ctx["team_a_id"], ctx["team_a_full"], ctx["team_a_abbr"]
-        team_b_id, team_b_full, team_b_abbr = ctx["team_b_id"], ctx["team_b_full"], ctx["team_b_abbr"]
-
-        def build_team_projection(team_id, opponent_id, out_player_ids=None,
-                                  opponent_missing_result=None):
-            """out_player_ids: a list -- each is excluded entirely from
-            the projected rows (not called through
-            predict_player_vs_opponent at all -- there's nothing to
-            project for a player marked out), and the whole list is
-            passed through to every remaining player's prediction so
-            engine/adjustments/teammates.py's
-            get_out_redistribution_adjustment can apply per out player.
-            opponent_missing_result: computed once by the caller for the
-            OTHER team's out list, passed unchanged to every player.
-            Returns (rows, skipped, unadjusted, out_names, trackable):
-            `skipped` is the existing "not enough data to project at
-            all" case; `unadjusted` is a distinct, narrower case -- the
-            player WAS projected, but there wasn't enough real "games
-            with vs. without the out player" history to trust a
-            redistribution adjustment for them specifically, so their
-            row shows their normal, unadjusted number instead of a
-            fabricated one. `trackable` is one dict per successfully-
-            projected player (player_id, player_full_name, predictions,
-            layer_results) -- everything needed to later save this
-            player's prediction, without threading opponent/game-date
-            context through here (the caller adds that; this function
-            doesn't know the game being tracked, only the matchup)."""
-            roster = get_team_roster(team_id)
-            out_ids = list(out_player_ids or [])
-            rows = []
-            skipped = []
-            unadjusted = []
-            out_names = []
-            trackable = []
-            for pid, pname in roster:
-                if pid in out_ids:
-                    out_names.append(pname)
-                    continue
-                result = predict_player_vs_opponent(
-                    pid, pname, opponent_id, out_player_ids=out_ids,
-                    opponent_missing_result=opponent_missing_result,
-                )
-                if result is None:
-                    skipped.append(pname)
-                    continue
-                predictions, _season_source, _def_source_note, layer_results = result
-                redistribution_result = layer_results.get("out_redistribution")
-                if redistribution_result is not None and not redistribution_result.applied:
-                    unadjusted.append(pname)
-                row = {"Player": pname}
-                for col, label in STAT_COLUMNS:
-                    row[label] = round(predictions[col]["predicted"], 1)
-                rows.append(row)
-                trackable.append({
-                    "player_id": pid, "player_full_name": pname,
-                    "predictions": predictions, "layer_results": layer_results,
-                })
-            return rows, skipped, unadjusted, out_names, trackable
-
-        def pick_out_players(team_id, team_full, out_key):
-            """One team's "who's out" picker. Rendered for BOTH teams
-            before either table is built, because each table depends on
-            both out lists. Returns (out_ids, out_names), both in
-            roster order."""
-            roster = get_team_roster(team_id)
-            roster_id_to_name = dict(roster)
-            out_ids = st.multiselect(
-                f"Mark {team_full} players as out (optional)",
-                options=[pid for pid, _pname in roster],
-                format_func=lambda pid: player_search_label(roster_id_to_name[pid]),
-                key=out_key,
-                help=(
-                    "Each player marked out is compared against this team's real "
-                    "games with vs. without them. Stacked effects are capped, so "
-                    "marking several players out won't compound into a projection "
-                    "the sample can't support."
-                ),
-            )
-
-            chosen = set(out_ids)
-            out_pairs = [(pid, pname) for pid, pname in roster if pid in chosen]
-            return [pid for pid, _ in out_pairs], [pname for _, pname in out_pairs]
-
-        def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr,
-                                   out_ids, opponent_out_names):
-            st.markdown(f"**{team_full}** projected box score")
-            # Same season as the Single Player tool's call -- see this
-            # patch's docstring; change both together.
-            opponent_missing_result = (
-                get_opponent_missing_adjustment_cached(tuple(opponent_out_names), PREVIOUS_SEASON)
-                if opponent_out_names else None
-            )
-
-            with st.spinner("Calculating..."):
-                rows, skipped, unadjusted, out_names, trackable = build_team_projection(
-                    team_id, opponent_id, out_player_ids=out_ids,
-                    opponent_missing_result=opponent_missing_result,
-                )
-
-            if rows:
-                table_df = pd.DataFrame(rows)
-                stat_labels = [label for _col, label in STAT_COLUMNS]
-                team_total = table_df[stat_labels].sum().round(1)
-                total_row = {"Player": "Team total", **team_total.to_dict()}
-                st.dataframe(
-                    pd.concat([table_df, pd.DataFrame([total_row])], ignore_index=True),
-                    width="stretch", hide_index=True,
-                )
-                pts_label = STAT_COLUMNS[0][1]
-                if out_ids:
-                    # Same projection with nobody out, for comparison. Each
-                    # player's baseline/defense lookups are cached, so this
-                    # costs little. Nothing forces the two totals to match:
-                    # the backtest showed per-player accuracy is best when
-                    # teammates only pick up part of an absent player's load.
-                    full_rows = build_team_projection(team_id, opponent_id)[0]
-                    full_pts = round(sum(r[pts_label] for r in full_rows), 1)
-                    st.caption(
-                        f"Projected team total: {team_total[pts_label]:.1f} points with "
-                        f"these players out, vs {full_pts:.1f} at full strength. "
-                        f"Teammates pick up only part of an absent player's load here -- "
-                        f"that's what tested most accurately player by player -- so "
-                        f"the team total drops."
-                    )
-                if skipped:
-                    st.caption(
-                        "Team totals only include players projected above, so they run "
-                        "low when players without enough NBA data would also play."
-                    )
-            else:
-                st.info("No players with enough data to project.")
-            out_label = ", ".join(out_names)
-            if out_names:
-                st.caption(
-                    f"Marked out: {out_label}. Remaining players' numbers above are "
-                    f"adjusted using their real historical games with vs. without "
-                    f"those players this season, where enough real data exists."
-                )
-            if unadjusted:
-                st.caption(
-                    f"Not enough real history without {out_label} to trust "
-                    f"an adjustment -- shown at their normal projection instead: "
-                    f"{', '.join(unadjusted)}"
-                )
-            if opponent_missing_result is not None:
-                opp_label = ", ".join(opponent_out_names)
-                if opponent_missing_result.applied:
-                    opp_mult = opponent_missing_result.multiplier_for(STAT_COLUMNS[0][0])
-                    st.caption(
-                        f"{opponent_full} without {opp_label}: every stat above is "
-                        f"scaled x{opp_mult:.3f}, weighted by their real minutes and "
-                        f"estimated net rating -- the same missing-opponent adjustment "
-                        f"the Single Player tool uses. It's one multiplier for every "
-                        f"stat, not a per-stat estimate."
-                    )
-                elif opponent_missing_result.sample_n > 0:
-                    st.caption(
-                        f"{opponent_full} without {opp_label}: shown for context, not "
-                        f"applied. Backtested over 16,101 real games, an opponent's "
-                        f"missing players didn't make individual stat lines more "
-                        f"accurate, so these numbers don't change."
-                    )
-                else:
-                    st.caption(
-                        f"{opponent_full} without {opp_label}: no adjustment applied "
-                        f"-- {opponent_missing_result.note}"
-                    )
-            if skipped:
-                st.caption(f"Not enough data to project: {', '.join(skipped)}")
-
-            return [
-                {**t, "opponent_full_name": opponent_full, "opponent_abbr": opponent_abbr}
-                for t in trackable
-            ]
-
-        pick_a, pick_b = st.columns(2)
-        with pick_a:
-            team_a_out_ids, team_a_out_names = pick_out_players(
-                team_a_id, team_a_full, "team_a_out_input"
-            )
-        with pick_b:
-            team_b_out_ids, team_b_out_names = pick_out_players(
-                team_b_id, team_b_full, "team_b_out_input"
-            )
-        st.caption(
-            "A player marked out is removed from his team's table, and his "
-            "teammates' lines are adjusted from real games without him. The "
-            "other team's lines are noted but not changed -- see the note under "
-            "each table."
-        )
-
+    if teams_ready and st.session_state.get("matchup_pair") == (team_a_id, team_b_id):
         team_a_trackable = render_team_projection(
             team_a_id, team_a_full, team_b_id, team_b_full, team_b_abbr,
             team_a_out_ids, team_b_out_names,
