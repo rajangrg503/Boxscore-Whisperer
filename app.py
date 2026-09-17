@@ -56,7 +56,7 @@ from engine.game_log import fetch_combined_game_log, resolve_season_gamelog
 from engine.cache import cached_or_live
 from engine.adjustments.missing_players import get_opponent_missing_adjustment
 from engine.adjustments.defender import get_defender_matchup_adjustment
-from engine.adjustments.scheme import get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS
+from engine.adjustments.scheme import get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS, NO_SCHEME
 from engine.adjustments.base import AdjustmentResult
 from engine.adjustments.teammates import (
     OUT_REDISTRIBUTION_LAYER,
@@ -72,6 +72,7 @@ from engine.adjustments.defense import (
 )
 from analytics.layer_accuracy import build_layer_lines
 from engine.confidence import score_prediction
+from engine.adjustments.registry import LAYER_DISPLAY
 from engine.baseline_stats import stats_from_gamelog
 
 
@@ -110,7 +111,10 @@ def get_head_to_head_log(player_id, opponent_abbr, cutoff_date=None):
             continue  # this season unavailable (blocked live + not cached) -- skip, don't fail the whole lookup
         if df.empty:
             continue
-        matched = df[df["MATCHUP"].str.contains(opponent_abbr, na=False)]
+        # MATCHUP is "<player's team> vs. <opp>" or "<player's team> @ <opp>".
+        # Match only the last token: a substring test also matched games the
+        # player played FOR this team (before or after a trade).
+        matched = df[df["MATCHUP"].astype(str).str.split().str[-1] == opponent_abbr]
         if not matched.empty:
             frames.append(matched)
     if not frames:
@@ -1237,7 +1241,11 @@ with tab1:
                     format_func=lambda pid: player_search_label(player_id_to_name[pid]),
                 )
                 missing_opponents = [player_id_to_name[pid] for pid in missing_opponents_ids]
-                scheme_input = st.selectbox("Defensive scheme", list(SCHEME_ADJUSTMENTS.keys()))
+                _scheme_options = list(SCHEME_ADJUSTMENTS.keys())
+                scheme_input = st.selectbox(
+                    "Defensive scheme", _scheme_options,
+                    index=_scheme_options.index(NO_SCHEME),
+                )
                 scheme_executor_input_id = st.selectbox(
                     "Scheme executed primarily by (reference only -- optional)",
                     options=player_ids, index=None, placeholder="Search a player...",
@@ -1254,19 +1262,21 @@ with tab1:
             roster_change_checked = st.checkbox(
                 "Opponent just made a major roster change (trade, etc.)",
             )
-            roster_change_date = None
-            if roster_change_checked:
-                roster_change_date = st.date_input(
-                    "Change effective date", value=None,
-                )
-                st.caption(
-                    "When set, opponent defense and head-to-head history use only "
-                    "games since this date. The season-long average otherwise blends "
-                    "pre- and post-change games together -- misleading right after a "
-                    "big trade (e.g. a star player switching teams). Predictions "
-                    "based on a very small post-change sample will show a wider "
-                    "likely range to reflect the extra uncertainty."
-                )
+            # Always rendered: this sits inside st.form, which doesn't rerun
+            # when the checkbox is ticked, so a conditional date input only
+            # appeared after a first submit. Ignored unless the box is ticked.
+            roster_change_date_input = st.date_input(
+                "Change effective date (used only when the box above is ticked)", value=None,
+            )
+            roster_change_date = roster_change_date_input if roster_change_checked else None
+            st.caption(
+                "When set, opponent defense and head-to-head history use only "
+                "games since this date. The season-long average otherwise blends "
+                "pre- and post-change games together -- misleading right after a "
+                "big trade (e.g. a star player switching teams). Predictions "
+                "based on a very small post-change sample will show a wider "
+                "likely range to reflect the extra uncertainty."
+            )
 
             st.markdown("---")  # patch_expander_spacing
             key_players_input_ids = st.multiselect(
@@ -1499,18 +1509,38 @@ with tab1:
             # Surface the real weight here rather than let defender_note's
             # "never folded in" framing read as a blanket claim it isn't.
             if defender_input:
-                defender_blend_weight = sum(
-                    blend_weights.get(label, 0.0)
-                    for label, stats, n in extra_sources
-                    if stats is not None and n > 0 and defender_input in label
-                )
-                if defender_blend_weight > 0:
+                # Match the source label exactly: "vs. {name}" is the
+                # defender's own history; "vs. A + B together" is a combined
+                # source the defender is only part of. A substring test
+                # attributed the whole combined weight to the defender.
+                solo_label = f"vs. {defender_input}"
+                solo_weight = 0.0
+                combo_parts = []
+                for label, stats, n in extra_sources:
+                    if stats is None or n <= 0:
+                        continue
+                    weight = blend_weights.get(label, 0.0)
+                    if label == solo_label:
+                        solo_weight += weight
+                    elif label.endswith(" together"):
+                        members = label[len("vs. "):-len(" together")].split(" + ")
+                        if defender_input in members:
+                            combo_parts.append((label, weight))
+                if solo_weight > 0:
                     defender_note += (
                         f' Separately, {defender_input}\'s own head-to-head history IS '
                         f'folded into the baseline above via the "vs. specific player" '
                         f'blend (a different mechanism from the matchup-tracking signal '
-                        f'above) -- {defender_blend_weight:.0%} of the blended baseline weight.'
+                        f'above) -- {solo_weight:.0%} of the blended baseline weight.'
                     )
+                for label, weight in combo_parts:
+                    if weight > 0:
+                        defender_note += (
+                            f' Separately, {defender_input} is part of the combined '
+                            f'"{label}" source in the baseline above ({weight:.0%} of the '
+                            f'blended weight) -- that weight covers the whole combination, '
+                            f'not {defender_input} alone.'
+                        )
 
             scheme_result = get_synergy_scheme_adjustment(
                 opponent_id, scheme_input, PREVIOUS_SEASON
@@ -1714,12 +1744,23 @@ with tab1:
 
         render_stat_card_row(["PTS", "AST", "REB", "OREB"])
         render_stat_card_row(["STL", "BLK", "FG3M", "FG3A", "TOV"])
+        _applied_labels = [
+            label.lower() for key, label in LAYER_DISPLAY
+            if key in layer_results and layer_results[key].applied
+        ]
+        if not _applied_labels:
+            _applied_phrase = "no adjustments applied this time, so the number shown is the baseline itself"
+        elif len(_applied_labels) == 1:
+            _applied_phrase = f"adjusted for {_applied_labels[0]}"
+        else:
+            _applied_phrase = (
+                "adjusted for " + ", ".join(_applied_labels[:-1]) + " and " + _applied_labels[-1]
+            )
         st.caption(
-            "This isn't a raw season average -- it's that average adjusted for opponent "
-            "defense, missing teammates, and scheme, using the math shown in \"See how this "
-            "estimate was built\" below. The unadjusted season average is shown separately "
-            "there in step [1] for comparison. \"Likely range\" reflects this player's "
-            "real game-to-game variability."
+            f"This isn't a raw season average -- it's the baseline {_applied_phrase}, using "
+            "the math shown in \"See how this estimate was built\" below. The unadjusted "
+            "baseline is shown separately there in step [1] for comparison. \"Likely range\" "
+            "reflects this player's real game-to-game variability."
         )
 
         # Save this prediction to the tracker, so you can come back after

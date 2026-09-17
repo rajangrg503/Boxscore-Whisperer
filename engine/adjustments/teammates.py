@@ -120,7 +120,7 @@ def get_teammate_availability_adjustment(player_id, missing_names, season, df=No
     if len(matching_games) < 3 or present_count < 3:
         return AdjustmentResult(
             layer=MISSING_TEAMMATES_LAYER, value=neutral,
-            note=(f"Found {len(matching_games)} game(s) missing {missing_names} "
+            note=(f"Found {len(matching_games)} game(s) missing {', '.join(missing_names)} "
                   f"out of {games_checked} checked (and {present_count} with them "
                   f"present) -- not enough real contrast in both directions to "
                   f"trust a comparison, skipping this adjustment."),
@@ -142,7 +142,7 @@ def get_teammate_availability_adjustment(player_id, missing_names, season, df=No
     summary = ", ".join(per_stat_notes)
     sample_n = len(matching_games)
     note = (
-        f"Found {sample_n} games missing {missing_names} (vs. {present_count} "
+        f"Found {sample_n} games missing {', '.join(missing_names)} (vs. {present_count} "
         f"with them present), stat-by-stat: {summary}."
     )
     return AdjustmentResult(
