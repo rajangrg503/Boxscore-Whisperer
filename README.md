@@ -112,3 +112,51 @@ To run it every morning on a Mac, edit the two paths in
 The app shows the cache's age in the header during the season
 (engine/freshness.py), so a refresh that stops running is visible rather
 than silent.
+
+
+Hit rates, and not counting the same games twice
+------------------------------------------------
+The L5 / L10 / L20 / Season row is the most scannable thing on the page,
+which makes it the easiest to misread: each badge is a percentage with
+no denominator, so four greens look like four pieces of evidence. When
+the log is shorter than the widest window they are one piece of evidence
+shown four times -- five head-to-head games against one opponent gave
+L5, L10, L20 and All H2H all computed over those same five games, and
+the page read 100% / 100% / 100% / 100%.
+
+engine/hit_rates.py builds the windows, then collapses any that cover
+the same games, keeping the widest honest label, and carries the game
+count on every badge:
+
+| games in the log | what the row shows |
+|---|---|
+| 30 | L5 (5) · L10 (10) · L20 (20) · Season (30) |
+| 8 | L5 (5) · Season (8) |
+| 5 | Season (5) — one badge, not four |
+
+Under ten games the page adds a line saying how far a single game moves
+the number (`sample_caveat`).
+
+
+On a phone's home screen
+------------------------
+The site is a plain web app, not an App Store build. Added to an iPhone
+home screen it launches full-screen with its own icon -- iOS does the
+standalone part by itself; what it needs from us is an
+`apple-touch-icon`, a short name, and a theme colour, or it invents a
+grey letter on black and truncates the title.
+
+Streamlit owns the page `<head>` and offers no hook into it, and
+`st.markdown` strips `<script>`, so `_install_home_screen_tags()` in
+app.py adds them from a zero-height component iframe. It is idempotent
+and wrapped in try/catch: if a future Streamlit closes that door the
+cost is a plainer icon, not a broken page.
+
+The icons are generated, not hand-made, so they cannot drift from the
+wordmark:
+
+    python3 tools/make_icons.py     # -> static/
+
+`static/` is served at `/app/static/` via `server.enableStaticServing`
+in `.streamlit/config.toml`; an apple-touch-icon has to be fetchable by
+URL, as iOS will not accept a data: URI for it.

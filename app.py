@@ -25,6 +25,7 @@ import datetime
 import pandas as pd
 import altair as alt
 import streamlit as st
+import streamlit.components.v1 as components
 from nba_api.stats.static import players, teams
 from nba_api.stats.endpoints import (
     playergamelog,
@@ -84,6 +85,7 @@ from engine.team_total import (
 )
 from engine.baseline_stats import stats_from_gamelog
 from engine.freshness import cache_age, describe as describe_cache_age
+from engine.hit_rates import hit_rates as build_hit_rates, sample_caveat
 from engine.distribution import (
     DISTRIBUTION_META,
     STAT_DISTRIBUTIONS,
@@ -507,26 +509,9 @@ def get_full_game_log(player_id, season):
     return df
 
 
-def get_hit_rate_table(game_log_df, line, stat_col="PTS"):
-    """Mimics props.cash's L5/L10/L20/season hit-rate columns: what
-    percent of games did the player clear a given line. Since we
-    don't have real sportsbook lines, this uses whatever number the
-    user enters (or the season average as a transparent default)."""
-    windows = {"L5": 5, "L10": 10, "L20": 20}
-    results = {}
-    for label, n in windows.items():
-        subset = game_log_df.head(n)
-        if len(subset) == 0:
-            results[label] = (None, 0)
-        else:
-            hits = (subset[stat_col] > line).sum()
-            results[label] = (hits / len(subset) * 100, len(subset))
-    season_hits = (game_log_df[stat_col] > line).sum()
-    results["Season"] = (
-        season_hits / len(game_log_df) * 100 if len(game_log_df) > 0 else None,
-        len(game_log_df),
-    )
-    return results
+# Hit-rate windows live in engine/hit_rates.py: see the note there on why
+# windows that cover the same games are collapsed into one row instead of
+# repeating a five-game sample four times across the page.
 
 
 # ---------------------------- Streamlit UI ----------------------------
@@ -576,6 +561,14 @@ header[data-testid="stHeader"] {
 }
 [data-testid="stMainMenu"], [data-testid="stAppDeployButton"], footer {
     display: none !important;
+}
+/* The home-screen-tag injector is a component with no visual output.
+   Streamlit still gives its container a slot in the vertical rhythm, so
+   without this there is an unexplained gap above the hero. */
+iframe[height="0"] { display: none; }
+div[data-testid="stElementContainer"]:has(> iframe[height="0"]),
+div[data-testid="element-container"]:has(> iframe[height="0"]) {
+    display: none;
 }
 /* Wide layout, capped: room for the 10-column matchup tables without
    stretching the form across a whole monitor. */
@@ -1026,9 +1019,10 @@ div[data-testid="stAlertContentSuccess"] {
     gap: 8px;
 }
 .hit-rate-badge {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: baseline;
-    justify-content: space-between;
+    column-gap: 8px;
     padding: 8px 12px;
     border: 1px solid transparent;
     border-radius: 10px;
@@ -1042,6 +1036,17 @@ div[data-testid="stAlertContentSuccess"] {
 .hit-rate-badge .pct {
     font-size: 16px;
     font-weight: 700;
+    text-align: right;
+}
+/* The denominator, kept with the percentage: "80%" over five games and
+   "80%" over fifty are not the same claim, and the row is scanned far
+   too quickly for that to live only in the caption. */
+.hit-rate-badge .games {
+    grid-column: 1 / -1;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    opacity: 0.6;
 }
 .hit-rate-green { background: var(--bw-accent-soft); border-color: rgba(34, 197, 94, 0.18); color: var(--bw-accent-text); }
 .hit-rate-red { background: var(--bw-red-soft); border-color: rgba(248, 113, 113, 0.18); color: var(--bw-red-text); }
@@ -1125,10 +1130,39 @@ div[data-testid="stAlertContentSuccess"] {
     color: var(--bw-text);
 }
 
+/* Streamlit pins the "open the sidebar" chevron to the top-left corner of
+   the viewport and leaves it there while the page scrolls. Against a
+   transparent header that means it rides over whatever happens to be
+   underneath -- a player's avatar, a section heading, a paragraph of the
+   methodology. Giving it its own surface makes it read as a control
+   instead of as debris on the page. */
+[data-testid="stSidebarCollapsedControl"] {
+    background: rgba(17, 21, 28, 0.92);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid var(--bw-border);
+    border-radius: 10px;
+    padding: 2px;
+}
+
 /* ---- Phones ---- */
 @media (max-width: 640px) {
+    /* ...and on a phone there is no margin for it to sit in at all, so
+       the header becomes a real bar and the content starts below it. */
+    header[data-testid="stHeader"] {
+        background: rgba(10, 13, 18, 0.92);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--bw-border-soft);
+    }
+    [data-testid="stSidebarCollapsedControl"] {
+        background: transparent;
+        border-color: transparent;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+    }
     [data-testid="stMainBlockContainer"], .block-container {
-        padding-top: 1.5rem;
+        padding-top: 4.25rem;
     }
     .bw-wordmark { flex-direction: column; gap: 10px; }
     .bw-wordmark svg { width: 52px; height: 52px; }
@@ -1140,7 +1174,8 @@ div[data-testid="stAlertContentSuccess"] {
     .stat-card-row, .stat-card-row.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .stat-card .stat-value { font-size: 26px; }
     .hr-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-    .hit-rate-badge { flex-direction: column; align-items: flex-start; gap: 2px; padding: 7px 10px; }
+    .hit-rate-badge { grid-template-columns: minmax(0, 1fr); row-gap: 2px; padding: 7px 10px; }
+    .hit-rate-badge .pct { text-align: left; }
     .stTabs [role="tab"] { padding: 0 14px; }
 }
 </style>
@@ -1387,6 +1422,63 @@ def _freshness_html():
     icon = _CHECK_ICON if state["level"] == "fresh" else _WARN_ICON
     return f'<span class="bw-freshness {css}">{icon}<span>{html.escape(line)}</span></span>'
 
+
+def _install_home_screen_tags():
+    """Tell iOS what this looks like on a home screen.
+
+    Added to a phone's home screen the site came out as a black square
+    with a grey "B" in it, labelled "BoxscoreWhisp...". iOS was inventing
+    both: the page offers a `shortcut icon` (which it ignores for the
+    home screen) and nothing else, so it fell back to the first letter of
+    a too-long title.
+
+    The tags below are ordinary <head> tags, but Streamlit owns the
+    <head> and exposes no hook into it, and st.markdown strips <script>.
+    A zero-height component iframe is the one place a script does run,
+    and it shares this page's origin, so it can reach up and add them.
+    That is a workaround, so it is written to fail quietly: wrapped in
+    try/catch, idempotent (Streamlit reruns this on every interaction),
+    and worth nothing but a plainer icon if a future Streamlit closes
+    the door.
+    """
+    icons = "/app/static"
+    components.html(
+        f"""<script>
+(function () {{
+  try {{
+    var d = window.parent.document;
+    if (!d || !d.head) return;
+    function add(selector, tag, attrs) {{
+      if (d.head.querySelector(selector)) return;
+      var el = d.createElement(tag);
+      for (var k in attrs) el.setAttribute(k, attrs[k]);
+      d.head.appendChild(el);
+    }}
+    add('link[rel="apple-touch-icon"]', 'link',
+        {{rel: 'apple-touch-icon', sizes: '180x180',
+          href: '{icons}/apple-touch-icon.png'}});
+    add('link[rel="manifest"]', 'link',
+        {{rel: 'manifest', href: '{icons}/manifest.json'}});
+    add('meta[name="apple-mobile-web-app-title"]', 'meta',
+        {{name: 'apple-mobile-web-app-title', content: 'Boxscore'}});
+    add('meta[name="apple-mobile-web-app-capable"]', 'meta',
+        {{name: 'apple-mobile-web-app-capable', content: 'yes'}});
+    add('meta[name="mobile-web-app-capable"]', 'meta',
+        {{name: 'mobile-web-app-capable', content: 'yes'}});
+    add('meta[name="apple-mobile-web-app-status-bar-style"]', 'meta',
+        {{name: 'apple-mobile-web-app-status-bar-style', content: 'black'}});
+    add('meta[name="theme-color"]', 'meta',
+        {{name: 'theme-color', content: '#0a0d12'}});
+  }} catch (e) {{
+    /* A plainer home-screen icon is not worth breaking the page over. */
+  }}
+}})();
+</script>""",
+        height=0,
+    )
+
+
+_install_home_screen_tags()
 
 st.markdown(
     '<div class="bw-hero">'
@@ -2625,8 +2717,9 @@ with tab1:
         else:
             section_heading(
                 "Hit rates",
-                "Model is this projection's own chance of clearing the line tonight. L5, L10 "
-                "and L20 are how often he actually cleared it in his last 5, 10 and 20 games.",
+                "Model is this projection's own chance of clearing the line tonight. The rest "
+                "are how often he actually cleared it, over the number of games shown on each. "
+                "Windows covering the same games are shown once, not repeated.",
             )
 
         for stat_label, line_val, base_val, col in hit_rate_configs:
@@ -2638,13 +2731,11 @@ with tab1:
             else:
                 line_source_note = "season average"
 
-            hit_rates = get_hit_rate_table(game_log_for_hitrate, effective_line, col)
+            rate_rows = build_hit_rates(
+                game_log_for_hitrate, effective_line, col, h2h=using_h2h
+            )
             _dist = predictions[col].get("dist")
             model_pct = 100.0 * _dist.sf(effective_line) if _dist is not None else None
-            if using_h2h:
-                # "Season" doesn't mean much for a head-to-head-only log --
-                # relabel it to reflect what it actually represents here.
-                hit_rates = {("All H2H" if k == "Season" else k): v for k, v in hit_rates.items()}
 
             badges_html = (
                 f'<div class="hr-row"><div class="hr-label">'
@@ -2658,23 +2749,31 @@ with tab1:
                     f'title="This projection\'s own chance of clearing the line tonight — '
                     f'from the fitted distribution, not from past games.">'
                     f'<div class="label">Model</div>'
-                    f'<div class="pct">{model_pct:.0f}%</div></div>'
+                    f'<div class="pct">{model_pct:.0f}%</div>'
+                    f'<div class="games">tonight</div></div>'
                 )
-            for label, (pct, n) in hit_rates.items():
-                if pct is None or n == 0:
-                    css_class = "hit-rate-gray"
-                    display = "N/A"
-                else:
-                    css_class = "hit-rate-green" if pct >= 50 else "hit-rate-red"
-                    display = f"{pct:.0f}%"
+            if not rate_rows:
+                badges_html += (
+                    '<div class="hit-rate-badge hit-rate-gray">'
+                    '<div class="label">Past games</div>'
+                    '<div class="pct">N/A</div>'
+                    '<div class="games">none on record</div></div>'
+                )
+            for row in rate_rows:
+                css_class = "hit-rate-green" if row.pct >= 50 else "hit-rate-red"
                 badges_html += (
                     f'<div class="hit-rate-badge {css_class}">'
-                    f'<div class="label">{label}</div>'
-                    f'<div class="pct">{display}</div>'
+                    f'<div class="label">{row.label}</div>'
+                    f'<div class="pct">{row.pct:.0f}%</div>'
+                    f'<div class="games">{row.games} game{"" if row.games == 1 else "s"}</div>'
                     f'</div>'
                 )
             badges_html += '</div></div>'
             st.markdown(badges_html, unsafe_allow_html=True)
+
+        thin_sample = sample_caveat(len(game_log_for_hitrate), h2h=using_h2h)
+        if thin_sample:
+            st.caption(thin_sample)
 
         st.caption(
             "Note on Turnovers: green here just means the player exceeded the line more "
