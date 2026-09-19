@@ -54,6 +54,7 @@ from engine.stat_columns import STAT_COLUMNS
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 BACKTEST_PATH = os.path.join(REPO_ROOT, "backtest_results.csv")
+POPULATION_PATH = os.path.join(REPO_ROOT, "backtest_population.csv")
 OUTPUT_PATH = os.path.join(REPO_ROOT, "engine", "stat_distribution.json")
 RESULTS_PATH = os.path.join(REPO_ROOT, "calibration_sweep_results.csv")
 STATS = [col for col, _ in STAT_COLUMNS]
@@ -66,10 +67,18 @@ RELIABILITY_BINS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 
 
 # ---- data -----------------------------------------------------------------
-def load_cases():
+def load_cases(population=False):
     """One row per backtest game per stat context: the app's prediction
     (mu), the player's point-in-time mean/std/n from his prior games in
-    that season, and what he actually did."""
+    that season, and what he actually did.
+
+    population=True uses backtest_population.csv -- every player, with
+    eligibility decided as of the game date (build_backtest_population.py)
+    -- instead of the old top-150-by-end-of-season-minutes set, which
+    already carries the prior std and game count."""
+    if population:
+        cases = pd.read_csv(POPULATION_PATH, dtype={"player_id": str, "game_id": str})
+        return cases[cases["n_prior"] >= MIN_PRIOR_GAMES].reset_index(drop=True)
     bt = pd.read_csv(BACKTEST_PATH, dtype={"player_id": str, "game_id": str})
     frames = []
     for (pid, season), _g in bt.groupby(["player_id", "season"]):
@@ -340,7 +349,10 @@ def score(cand, params, mu, s, n, y):
 
 def main():
     dry_run = "--dry-run" in sys.argv
-    cases = load_cases()
+    population = "--population" in sys.argv
+    cases = load_cases(population=population)
+    print(("point-in-time population (every player)" if population
+           else "old set (top 150 by end-of-season minutes)"))
     seasons = sorted(cases["season"].unique())
     print(f"{len(cases)} point-in-time games with >= {MIN_PRIOR_GAMES} prior games; seasons {seasons}\n")
 

@@ -1,4 +1,12 @@
 """
+SUPERSEDED for published numbers: build_backtest_population.py now
+produces the case set the app quotes -- every player from his 6th played
+game of a season on, decided as of the game date. This script's fixed
+top-150-by-END-OF-SEASON-minutes list can only be known in April, so it
+quietly drops the players whose seasons fell apart. It is kept because
+backtest_results.csv (its output) is still the cross-check that the
+newer population reproduces exactly on the games the two share.
+
 Retroactive backtesting driver -- runs
 engine/backtest_point_in_time.py's point-in-time prediction engine
 across the fixed rotation-player list (top 150 by minutes played, per

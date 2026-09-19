@@ -3,216 +3,216 @@
  "rule": "held-out (LOSO, nested fold cutoff) accuracy of strong leans bucketed by |p-0.5| minus the cutoff at [0.0, 0.02, 0.05, 0.1]; buckets with < 300 calls merged downward; shown if accuracy >= 0.6; clearest read = shown lean whose grade has the best record, then the largest margin; only players averaging >= 20 min and stats averaging >= 1",
  "stats": {
   "AST": {
-   "shown_accuracy": 0.6309639727361246,
-   "shown_calls": 4108,
-   "shown_coverage": 0.15128526183987626,
+   "shown_accuracy": 0.6467693624304665,
+   "shown_calls": 4674,
+   "shown_coverage": 0.12132066656284068,
    "tiers": [
     {
-     "accuracy": 0.6027713625866051,
+     "accuracy": 0.5987277353689567,
      "ci": [
-      0.5792622953527763,
-      0.625735201312634
+      0.5821058811956268,
+      0.614627027387395
      ],
      "label": "Borderline",
      "min_margin": 0.0,
-     "n": 1732,
-     "shown": true
+     "n": 3930,
+     "shown": false
     },
     {
-     "accuracy": 0.6395348837209303,
+     "accuracy": 0.6334214002642008,
      "ci": [
-      0.6132746101654565,
-      0.6641463333605921
+      0.6163207832290046,
+      0.6522193376513344
      ],
      "label": "Solid",
      "min_margin": 0.02,
-     "n": 1376,
+     "n": 3028,
      "shown": true
     },
     {
-     "accuracy": 0.668,
+     "accuracy": 0.6713244228432563,
      "ci": [
-      0.6319656069250583,
-      0.7022682623913288
+      0.6447908545775838,
+      0.695180958734266
      ],
      "label": "Strong",
      "min_margin": 0.05,
-     "n": 1000,
+     "n": 1646,
      "shown": true
     }
    ]
   },
   "FG3A": {
-   "shown_accuracy": 0.6488304093567251,
-   "shown_calls": 3420,
-   "shown_coverage": 0.12594829491051043,
+   "shown_accuracy": 0.6365387464809601,
+   "shown_calls": 6749,
+   "shown_coverage": 0.1751803976535327,
    "tiers": [
     {
-     "accuracy": 0.5519083969465649,
+     "accuracy": 0.5538789277472039,
      "ci": [
-      0.5323554669026225,
-      0.5724544173382407
+      0.5403266197633615,
+      0.5669815688015422
      ],
      "label": "Borderline",
      "min_margin": 0.0,
-     "n": 2620,
+     "n": 5633,
      "shown": false
     },
     {
-     "accuracy": 0.5785603715170279,
+     "accuracy": 0.5588076854013287,
      "ci": [
-      0.5594549014622062,
-      0.5977189897712606
+      0.5448007084420156,
+      0.5722422509409805
      ],
      "label": "Solid",
      "min_margin": 0.02,
-     "n": 2584,
+     "n": 5569,
      "shown": false
     },
     {
-     "accuracy": 0.6291887125220459,
+     "accuracy": 0.6126934290199596,
      "ci": [
-      0.6075430109027672,
-      0.6517099560943527
+      0.5967557039570022,
+      0.6290394585558031
      ],
      "label": "Strong",
      "min_margin": 0.05,
-     "n": 2268,
+     "n": 4459,
      "shown": true
     },
     {
-     "accuracy": 0.6875,
+     "accuracy": 0.6829694323144104,
      "ci": [
-      0.648764631709174,
-      0.7226191837979759
+      0.6578575955955731,
+      0.7058854858517758
      ],
      "label": "Very strong",
      "min_margin": 0.1,
-     "n": 1152,
+     "n": 2290,
      "shown": true
     }
    ]
   },
   "PTS": {
-   "shown_accuracy": 0.6607944732297064,
-   "shown_calls": 2895,
-   "shown_coverage": 0.1066141268321426,
+   "shown_accuracy": 0.6592296852982621,
+   "shown_calls": 4258,
+   "shown_coverage": 0.1105227638477911,
    "tiers": [
     {
-     "accuracy": 0.5734086242299795,
+     "accuracy": 0.5804551539491298,
      "ci": [
-      0.5514311069253242,
-      0.5960016641452345
+      0.5654931691187993,
+      0.5962474028234914
      ],
      "label": "Borderline",
      "min_margin": 0.0,
-     "n": 1948,
+     "n": 3735,
      "shown": false
     },
     {
-     "accuracy": 0.633245382585752,
+     "accuracy": 0.629001156961049,
      "ci": [
-      0.6081046341971792,
-      0.6579142376788291
+      0.6109644833589449,
+      0.6476966046035743
      ],
      "label": "Solid",
      "min_margin": 0.02,
-     "n": 1516,
+     "n": 2593,
      "shown": true
     },
     {
-     "accuracy": 0.6585903083700441,
+     "accuracy": 0.6974169741697417,
      "ci": [
-      0.6278061320643595,
-      0.6856838969660951
+      0.6719855542452831,
+      0.7221414729719602
      ],
      "label": "Strong",
      "min_margin": 0.05,
-     "n": 908,
+     "n": 1355,
      "shown": true
     },
     {
-     "accuracy": 0.7537154989384289,
+     "accuracy": 0.7451612903225806,
      "ci": [
-      0.7175910894660894,
-      0.7848708684597886
+      0.6933333333333334,
+      0.7933360655737705
      ],
      "label": "Very strong",
      "min_margin": 0.1,
-     "n": 471,
+     "n": 310,
      "shown": true
     }
    ]
   },
   "REB": {
-   "shown_accuracy": 0.6553122465531225,
-   "shown_calls": 1233,
-   "shown_coverage": 0.04540767474405244,
+   "shown_accuracy": 0.6511415525114155,
+   "shown_calls": 3285,
+   "shown_coverage": 0.08526709235321601,
    "tiers": [
     {
-     "accuracy": 0.5845195729537367,
+     "accuracy": 0.5857787810383747,
      "ci": [
-      0.5555528999362651,
-      0.6124141786825424
+      0.5698915859327869,
+      0.6027158541251059
      ],
      "label": "Borderline",
      "min_margin": 0.0,
-     "n": 1124,
+     "n": 3544,
      "shown": false
     },
     {
-     "accuracy": 0.6556728232189973,
+     "accuracy": 0.6215970961887477,
      "ci": [
-      0.6220851673622673,
-      0.6918870690113765
+      0.6023866216008678,
+      0.6419955738892008
      ],
      "label": "Solid",
      "min_margin": 0.02,
-     "n": 758,
+     "n": 2204,
      "shown": true
     },
     {
-     "accuracy": 0.6547368421052632,
+     "accuracy": 0.7113783533765032,
      "ci": [
-      0.604925925925926,
-      0.7055241282235147
+      0.6799184505606524,
+      0.7403698328808795
      ],
      "label": "Strong",
      "min_margin": 0.05,
-     "n": 475,
+     "n": 1081,
      "shown": true
     }
    ]
   }
  },
  "summary": {
-  "clearest_read_accuracy": 0.6410545608346256,
+  "clearest_read_accuracy": 0.6383458646616541,
   "clearest_read_accuracy_ci": [
-   0.6277162756877246,
-   0.6542064565225594
+   0.6269800857989266,
+   0.6492954107472112
   ],
   "clearest_read_by_season": {
-   "2023-24": 0.6504729148753224,
-   "2024-25": 0.6300553426990209,
-   "2025-26": 0.6426799007444168
+   "2023-24": 0.6501005458201666,
+   "2024-25": 0.620605732828556,
+   "2025-26": 0.6454781854955215
   },
   "eligibility": {
    "min_mpg": 20.0,
    "min_season_avg": 1.0
   },
-  "games_with_a_read": 7093,
-  "games_with_a_read_share": 0.26121381748545336,
-  "hidden_accuracy": 0.5697196713388111,
-  "hidden_calls": 8276,
-  "multi_lean_games": 2778,
-  "multi_lean_rest_accuracy": 0.6541748849441157,
-  "multi_lean_top_accuracy": 0.673866090712743,
-  "n_games": 27154,
-  "shown_accuracy": 0.646190803019904,
+  "games_with_a_read": 10640,
+  "games_with_a_read_share": 0.2761771271349219,
+  "hidden_accuracy": 0.5724421043237696,
+  "hidden_calls": 22411,
+  "multi_lean_games": 4528,
+  "multi_lean_rest_accuracy": 0.6573384578429018,
+  "multi_lean_top_accuracy": 0.6738074204946997,
+  "n_games": 38526,
+  "shown_accuracy": 0.6466835389644627,
   "shown_accuracy_ci": [
-   0.6343943894023982,
-   0.6578040363077338
+   0.636871042379572,
+   0.6564988711192464
   ],
-  "shown_calls": 11656
+  "shown_calls": 18966
  }
 }

@@ -23,18 +23,20 @@ TWO FAMILIES, per stat, whichever won on held-out log loss:
   * "empirical_z" -- the pooled distribution of z = (actual - mu) / s
     over the backtest, stored as 1,001 percentiles. Shape-free: it
     carries the real skew of a stat line instead of assuming symmetry.
-  * "nb_pool" / "nb_shrunk" -- negative binomial with mean mu and
-    variance mu + alpha*mu^2 (nb_shrunk blends the player's own
-    dispersion toward the pooled alpha by n/(n+K)). Better for the
-    small counts (blocks, offensive rebounds) where a continuous
-    distribution wastes probability on impossible values.
+  * "nb_pool" / "nb_shrunk" / "nb_std" -- negative binomial with mean
+    mu. nb_pool sets the variance to mu + alpha*mu^2; nb_shrunk blends
+    the player's own dispersion toward the pooled alpha by n/(n+K);
+    nb_std sets it to a fitted multiple of the player's own spread.
+    Better for the small counts (blocks, offensive rebounds) where a
+    continuous distribution wastes probability on impossible values.
 
 LIMITS
   * Calibration is measured against the SAME engine that produced mu.
     If the projection is biased for some group of players, so is this.
-  * The fit population is the backtest's: top-150-by-minutes players,
-    5+ prior games that season. Deep-bench players and the first games
-    of a season are outside it -- callers get no distribution below
+  * The fit population is build_backtest_population.py's: every player
+    in the three cached seasons, from his 6th played game of a season
+    on, decided as of each game date. The first games of a season are
+    still outside it -- callers get no distribution below
     MIN_PRIOR_GAMES rather than a made-up one.
   * A probability here is "how often results like this landed above the
     line in three past seasons". It is not a bookmaker's price, and
@@ -133,6 +135,10 @@ class StatDistribution:
         self.model = entry["model"]
         if self.model == "empirical_z":
             self.z = entry["z"]
+        elif self.model == "nb_std":
+            # variance is a fitted multiple of the player's own spread
+            variance = float(entry["c"]) * max(self.sd, 1e-6) ** 2
+            self.r = _nb_r(max(self.mu, 1e-6), variance)
         else:
             alpha = float(entry["alpha"])
             if self.model == "nb_shrunk":

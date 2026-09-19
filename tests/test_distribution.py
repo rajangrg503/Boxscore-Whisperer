@@ -11,6 +11,8 @@ import pytest
 from engine import distribution as dist
 from engine.stat_columns import STAT_COLUMNS
 
+NB_STD_ENTRY = {"model": "nb_std", "c": 1.1,
+                "held_out": {"coverage_50": 0.5, "coverage_80": 0.8, "brier": 0.2}}
 NB_ENTRY = {"model": "nb_pool", "alpha": 0.25,
             "held_out": {"coverage_50": 0.5, "coverage_80": 0.8, "brier": 0.2}}
 EMP_ENTRY = {
@@ -106,6 +108,13 @@ def test_shrunk_model_blends_toward_the_players_own_spread():
     assert many.sf(4.5) > few.sf(4.5)
 
 
+def test_nb_std_uses_a_multiple_of_the_players_spread():
+    tight = dist.StatDistribution("BLK", 1.0, 0.8, 40, NB_STD_ENTRY)
+    wide = dist.StatDistribution("BLK", 1.0, 2.5, 40, NB_STD_ENTRY)
+    assert wide.sf(3.5) > tight.sf(3.5)
+    assert wide.quantile(0.9) >= tight.quantile(0.9)
+
+
 def test_chance_over_and_measured_coverage_pass_through():
     d = _d()
     assert d.chance_over(20.5) == pytest.approx(100 * d.sf(20.5))
@@ -145,6 +154,8 @@ def test_shipped_distributions_cover_every_stat_and_are_sane():
             assert len(z) == 1001
             assert z == sorted(z)
             assert z[0] < 0 < z[-1]
+        elif entry["model"] == "nb_std":
+            assert entry["c"] > 0
         else:
             assert entry["alpha"] > 0
         held = entry["held_out"]

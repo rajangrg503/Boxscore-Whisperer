@@ -1364,7 +1364,7 @@ st.markdown(
     '<p class="bw-tagline">Transparent player projections, built from real games. '
     'Every adjustment is shown, so you can judge it yourself.</p>'
     '<div class="bw-proof">'
-    f'<span>{_CHECK_ICON}<span><b>29,914</b> player-games backtested</span></span>'
+    f'<span>{_CHECK_ICON}<span><b>70,944</b> player-games backtested</span></span>'
     f'<span>{_CHECK_ICON}No lookahead</span>'
     f'<span>{_CHECK_ICON}Not a black-box model</span>'
     '</div>'
@@ -1378,11 +1378,18 @@ with st.expander("Methodology and backtest results"):
         "**How we know this works**\n\n"
         "Most prediction tools show you a number and ask you to trust it. We'd rather "
         "show you the evidence.\n\n"
-        "Before launch, we ran Boxscore Whisperer's core prediction engine against every "
+        "We ran Boxscore Whisperer's core prediction engine against every "
         "eligible regular-season game from the last three NBA seasons — 2023-24 through "
         "2025-26 — using only data that would have genuinely been available before each "
         "game was played. No lookahead, no using a season's final stats to \"predict\" "
-        "its opening week. That's 29,914 real, independently verified predictions.\n\n"
+        "its opening week. That's 70,944 real predictions, covering 746 players.\n\n"
+        "Who is in that test matters as much as the size of it. A player joins it from "
+        "his 6th game of a season onward, decided game by game — so a starter whose "
+        "minutes collapse in January is still in the test for every game he plays, "
+        "instead of being dropped for not finishing the season as a regular. An earlier "
+        "version of this page reported 29,914 predictions over the season's top 150 "
+        "players by minutes, a list only knowable in April; the numbers below are a "
+        "little worse and a lot more honest.\n\n"
         "Here's what we found: our season-baseline predictions are solid. Our "
         "opponent-defense adjustment currently adds a small, statistically real but "
         "practically modest edge over the raw baseline — and for some stats, "
@@ -1394,15 +1401,15 @@ with st.expander("Methodology and backtest results"):
     st.markdown(
         '<table class="methodology-table">'
         '<tr><th>Stat</th><th>Directional Accuracy</th><th>N</th></tr>'
-        '<tr><td>PTS</td><td>51.8%</td><td>29,791</td></tr>'
-        '<tr><td>AST</td><td>51.6%</td><td>29,610</td></tr>'
-        '<tr><td>REB</td><td>50.6%</td><td>29,663</td></tr>'
-        '<tr><td>STL</td><td>51.1%</td><td>29,456</td></tr>'
-        '<tr><td>BLK</td><td>50.4%</td><td>29,339</td></tr>'
-        '<tr><td>FG3M</td><td>50.4%</td><td>28,138</td></tr>'
-        '<tr><td>TOV</td><td>49.2%</td><td>29,523</td></tr>'
-        '<tr><td>FG3A</td><td>50.6%</td><td>28,849</td></tr>'
-        '<tr><td>OREB</td><td>50.2%</td><td>29,540</td></tr>'
+        '<tr><td>PTS</td><td>51.5%</td><td>70,626</td></tr>'
+        '<tr><td>AST</td><td>51.4%</td><td>69,996</td></tr>'
+        '<tr><td>REB</td><td>50.6%</td><td>70,255</td></tr>'
+        '<tr><td>STL</td><td>50.8%</td><td>69,334</td></tr>'
+        '<tr><td>BLK</td><td>49.8%</td><td>67,402</td></tr>'
+        '<tr><td>FG3M</td><td>50.0%</td><td>64,428</td></tr>'
+        '<tr><td>TOV</td><td>49.2%</td><td>69,765</td></tr>'
+        '<tr><td>FG3A</td><td>50.4%</td><td>67,312</td></tr>'
+        '<tr><td>OREB</td><td>50.0%</td><td>69,650</td></tr>'
         '</table>',
         unsafe_allow_html=True,
     )
@@ -1479,9 +1486,12 @@ with st.expander("Methodology and backtest results"):
             + ", ".join(f"{k} {v:.0%}" for k, v in sorted(_sum["clearest_read_by_season"].items()))
             + "), and on games with two or more leans it was right "
             f"{_sum['multi_lean_top_accuracy']:.0%} against {_sum['multi_lean_rest_accuracy']:.0%} for "
-            "the others. The backtest covered the top 150 players by minutes each season, so leans "
-            f"are only shown for players averaging {_elig.get('min_mpg', 20):g}+ minutes, and not "
-            f"for stats a player averages under {_elig.get('min_season_avg', 1):g} of. The grade "
+            "the others. Leans are measured and shown only for players averaging "
+            f"{_elig.get('min_mpg', 20):g}+ minutes, and not for stats a player averages under "
+            f"{_elig.get('min_season_avg', 1):g} of — below that the calls are noise. A stat also "
+            "has to beat the trivial \"this stat usually lands below average\" rule by at least "
+            "2 points to be shown at all, which is why steals, threes made, turnovers and "
+            "offensive rebounds get no lean despite looking accurate. The grade "
             "boundaries were fixed in advance, but which grades to show was decided on these same "
             "backtests, so treat the numbers as slightly optimistic."
         )
