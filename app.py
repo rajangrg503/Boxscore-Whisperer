@@ -89,6 +89,10 @@ from engine.hit_rates import (
     against_opponent as hit_rates_against_opponent,
     sample_caveat,
 )
+from engine.line_input import (
+    baseline as baseline_line,
+    interpret as entered_line,
+)
 from engine.minutes import describe as minutes_describe, why_not as minutes_why_not
 from engine.distribution import (
     DISTRIBUTION_META,
@@ -2614,11 +2618,16 @@ with tab1:
                         "so this is the old rough band — treat it as indicative only."
                     )
                 chance_html = ""
-                _line = line_inputs.get(col, 0) or 0
-                if p.get("dist") is not None and _line > 0:
+                # Same threshold reading as the hit-rate row below, and
+                # from the same function: a card saying "Clears 20 74%"
+                # while the badge under it says 77% would be two answers
+                # to one question.
+                _line = entered_line(line_inputs.get(col, 0) or 0)
+                if p.get("dist") is not None and _line is not None:
+                    _clears = _line.label or f"{_line.value:g}"
                     chance_html = (
-                        f'<div class="stat-chance">Clears {_line:g} '
-                        f'<b>{p["dist"].sf(_line):.0%}</b></div>'
+                        f'<div class="stat-chance">Clears {html.escape(_clears)} '
+                        f'<b>{p["dist"].sf(_line.cutoff):.0%}</b></div>'
                     )
                 row_html += (
                     f'<div class="stat-card{" lead" if col == lead else ""}">'
@@ -2759,9 +2768,14 @@ with tab1:
                 tooltip=["GAME_DATE:T", "MATCHUP:N", "value:Q"],
             )
         ]
-        entered_line = line_inputs.get(trend_stat_col, 0)
-        if entered_line and entered_line > 0:
-            rule_df = pd.DataFrame({"y": [entered_line]})
+        # Drawn at the number the reader typed, which is what the
+        # caption under the chart promises. The threshold reading is not
+        # applied here on purpose: the exact counts live in the hit-rate
+        # badges, and moving the rule to 19.5 when they typed 20 would
+        # make the picture disagree with its own label.
+        trend_rule_value = line_inputs.get(trend_stat_col, 0)
+        if trend_rule_value and trend_rule_value > 0:
+            rule_df = pd.DataFrame({"y": [trend_rule_value]})
             line_layers.append(
                 alt.Chart(rule_df).mark_rule(color="#f87171", strokeDash=[6, 4]).encode(y="y:Q")
             )
@@ -2906,7 +2920,16 @@ with tab1:
             )
 
         for stat_label, line_val, base_val, col in hit_rate_configs:
-            effective_line = line_val if line_val > 0 else round(base_val, 1)
+            # A whole number typed by the reader means "20+", because
+            # that is the only way the books using whole numbers write
+            # it; a decimal is left alone. engine/line_input.py has the
+            # reasoning and the 2.7-point measurement. `cutoff` is what
+            # the strict > downstream compares against -- both the hit
+            # rates and the model percentage read it, so the badges and
+            # the probability cannot disagree about what the line means.
+            line = (entered_line(line_val) if line_val > 0
+                    else baseline_line(round(base_val, 1)))
+            effective_line = line.value
             if line_val > 0:
                 line_source_note = "your line"
             elif using_h2h:
@@ -2917,17 +2940,19 @@ with tab1:
                 # the season average would be a number lying about what
                 # it is (engine/minutes.py).
                 line_source_note = "projected baseline"
+            if line.label:
+                line_source_note = f"{line_source_note}, read as {line.label}"
 
             rate_rows = hit_rates_against_opponent(
-                opponent_log_for_hitrate, season_log_for_hitrate, effective_line, col
+                opponent_log_for_hitrate, season_log_for_hitrate, line.cutoff, col
             )
             _dist = predictions[col].get("dist")
-            model_pct = 100.0 * _dist.sf(effective_line) if _dist is not None else None
+            model_pct = 100.0 * _dist.sf(line.cutoff) if _dist is not None else None
 
             badges_html = (
                 f'<div class="hr-row"><div class="hr-label">'
                 f'<div class="hr-stat">{stat_label}</div>'
-                f'<div class="hr-line">Line {effective_line} · {html.escape(line_source_note)}</div>'
+                f'<div class="hr-line">Line {effective_line:g} · {html.escape(line_source_note)}</div>'
                 f'</div><div class="hit-rate-row">'
             )
             if model_pct is not None:
