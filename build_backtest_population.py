@@ -67,6 +67,7 @@ from engine.backtest_point_in_time import (  # noqa: E402
     _is_regular_season_game_id,
     get_point_in_time_opponent_defense,
 )
+from engine import minutes  # noqa: E402
 from engine.stat_columns import STAT_COLUMNS  # noqa: E402
 from engine.tracker import _build_layers_json  # noqa: E402
 from run_backtest import SEASONS  # noqa: E402
@@ -164,7 +165,19 @@ def load_player_games(dates):
 
 
 def add_point_in_time_baselines(games):
-    """Mean/std/count of each player's PRIOR played games that season."""
+    """Mean/std/count of each player's PRIOR played games that season,
+    plus the minutes-aware baseline the app actually projects from.
+
+    Two baselines are carried deliberately:
+      {col}_flat  the flat per-game average. Still what the lean models
+                  call "season average" and measure direction against,
+                  and the control every sweep compares to.
+      {col}_base  per-minute rate x projected minutes -- what
+                  engine/baseline_stats.py now returns, so the numbers
+                  fitted here are the numbers the app serves.
+    Keeping both means the leans and the calibration can disagree about
+    what "baseline" means without either being quietly wrong.
+    """
     games = games.sort_values(["player_id", "season", "game_date"], kind="mergesort").copy()
     played = games["played"]
     grp = games.assign(**{f"_{c}": games[c].where(played) for c in BOX_FIELDS}).groupby(
@@ -173,11 +186,31 @@ def add_point_in_time_baselines(games):
     for col in BOX_FIELDS:
         shifted = grp[f"_{col}"].shift(1)
         by = shifted.groupby([games["player_id"], games["season"]], sort=False)
-        games[f"{col}_base"] = by.transform(lambda s: s.expanding().mean())
+        games[f"{col}_flat"] = by.transform(lambda s: s.expanding().mean())
         games[f"{col}_std"] = by.transform(lambda s: s.expanding().std())
-    games["mpg_prior"] = games["minutes"].where(played).groupby(
-        [games["player_id"], games["season"]], sort=False).transform(
-        lambda s: s.shift(1).expanding().mean())
+        games[f"{col}_sum_prior"] = by.transform(lambda s: s.expanding().sum())
+    minutes_played = games["minutes"].where(played)
+    by_min = minutes_played.groupby([games["player_id"], games["season"]], sort=False)
+    games["mpg_prior"] = by_min.transform(lambda s: s.shift(1).expanding().mean())
+    games["min_sum_prior"] = by_min.transform(lambda s: s.shift(1).expanding().sum())
+    # The recent window counts PLAYED games, not calendar games: a player
+    # back from a three-game absence must not have his last-three-minutes
+    # window land entirely on games he missed (that gave 1,299 NaNs, and
+    # it would have been a silent hole in the fit). engine/minutes.py
+    # filters to played games before taking its window; so does this.
+    played_only = games.loc[played, ["player_id", "season", "minutes"]]
+    recent_played = played_only.groupby(["player_id", "season"], sort=False)["minutes"].transform(
+        lambda s: s.shift(1).rolling(minutes.RECENT_WINDOW, min_periods=1).mean())
+    games["min_recent"] = recent_played.reindex(games.index)
+
+    # projected = w * recent + (1 - w) * season, exactly engine/minutes.py
+    projected = (minutes.RECENT_WEIGHT * games["min_recent"]
+                 + (1.0 - minutes.RECENT_WEIGHT) * games["mpg_prior"])
+    games["min_projected"] = projected
+    enough = games["min_sum_prior"] > 0
+    for col in BOX_FIELDS:
+        rate = games[f"{col}_sum_prior"].where(enough) / games["min_sum_prior"].where(enough)
+        games[f"{col}_base"] = (rate * projected).where(enough, games[f"{col}_flat"])
     return games
 
 
@@ -235,9 +268,11 @@ def main():
         "starter": eligible["starter"].values,
         "n_prior": eligible["n_prior"].values,
     })
+    out["min_projected"] = eligible["min_projected"].values
     for col, _label in STAT_COLUMNS:
         base = eligible[f"{col}_base"].values
         mult = [r.multiplier_for(col) for r in defense_results]
+        out[f"{col}_flat"] = eligible[f"{col}_flat"].values
         out[f"{col}_base"] = base
         out[f"{col}_predicted"] = base * mult
         out[f"{col}_actual"] = eligible[col].values

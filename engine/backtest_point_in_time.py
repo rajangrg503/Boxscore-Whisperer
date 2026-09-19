@@ -50,6 +50,24 @@ def point_in_time_baseline(player_id, season, target_date: date):
     return stats_from_gamelog(past_games)
 
 
+def point_in_time_flat_baseline(player_id, season, target_date: date):
+    """The same thing with the minutes model switched off -- flat
+    per-game averages.
+
+    Kept because "season average" still means the flat average to the
+    lean models, which call direction against it. Without this the two
+    meanings of "baseline" would quietly collapse into one and the lean
+    sweep's cross-check would be comparing a projection against an
+    average and calling the difference a bug."""
+    cache_key = f"gamelog_{player_id}_{season}"
+    df, _cached_at = _load_df_cache(cache_key)
+    if df is None:
+        raise FileNotFoundError(f"Missing required gamelog cache: {cache_key}.json")
+    parsed_dates = pd.to_datetime(df["GAME_DATE"])
+    past_games = df[parsed_dates < pd.Timestamp(target_date)]
+    return stats_from_gamelog(past_games, minutes_aware=False)
+
+
 def point_in_time_missing_teammate_games(df: pd.DataFrame, target_date: date, max_games: int = 20) -> pd.DataFrame:
     """The subset of a player's cached gamelog `df` that
     engine.adjustments.teammates.get_teammate_availability_adjustment()'s
@@ -178,6 +196,7 @@ def build_backtest_row(player_id, player_name, season, season_start: date, game_
     game_date = pd.to_datetime(game_row["GAME_DATE"]).date()
 
     baseline_stats, n_games = point_in_time_baseline(player_id, season, game_date)
+    flat_stats, _ = point_in_time_flat_baseline(player_id, season, game_date)
     if n_games < min_baseline_games:
         return None
 
@@ -205,6 +224,7 @@ def build_backtest_row(player_id, player_name, season, season_start: date, game_
     for col, _label in STAT_COLUMNS:
         base_mean, _base_std = baseline_stats[col]
         multiplier = defense_result.multiplier_for(col)
+        row[f"{col}_flat"] = flat_stats[col][0]
         row[f"{col}_base"] = base_mean
         row[f"{col}_predicted"] = base_mean * multiplier
         row[f"{col}_actual"] = game_row[col]

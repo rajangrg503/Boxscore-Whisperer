@@ -86,6 +86,7 @@ from engine.team_total import (
 from engine.baseline_stats import stats_from_gamelog
 from engine.freshness import cache_age, describe as describe_cache_age
 from engine.hit_rates import hit_rates as build_hit_rates, sample_caveat
+from engine.minutes import describe as minutes_describe
 from engine.distribution import (
     DISTRIBUTION_META,
     STAT_DISTRIBUTIONS,
@@ -374,6 +375,19 @@ def get_season_baseline(player_id, player_name):
     stats_dict, n_games = stats_from_gamelog(df)
 
     return stats_dict, source, n_games
+
+
+def get_projected_minutes_note(player_id):
+    """The minutes assumption behind the baseline, so the page can show
+    its working. Same season log get_season_baseline() just used (the
+    fetch is cached, so this is a dict lookup), and None whenever the
+    log is too thin to project from -- in which case the baseline fell
+    back to flat averages and there is no assumption to show."""
+    try:
+        df, _season, _source = resolve_season_gamelog(player_id)
+        return minutes_describe(df)
+    except Exception:
+        return None
 
 
 # get_league_advanced_team_stats, get_team_defensive_rating,
@@ -1597,7 +1611,7 @@ with st.expander("Methodology and backtest results"):
         "version of this page reported 29,914 predictions over the season's top 150 "
         "players by minutes, a list only knowable in April; the numbers below are a "
         "little worse and a lot more honest.\n\n"
-        "Here's what we found: our season-baseline predictions are solid. Our "
+        "Here's what we found: the baseline is solid. Our "
         "opponent-defense adjustment currently adds a small, statistically real but "
         "practically modest edge over the raw baseline — and for some stats, "
         "essentially none yet. We're not going to round that up. We think a tool that "
@@ -1608,17 +1622,41 @@ with st.expander("Methodology and backtest results"):
     st.markdown(
         '<table class="methodology-table">'
         '<tr><th>Stat</th><th>Directional Accuracy</th><th>N</th></tr>'
-        '<tr><td>PTS</td><td>51.5%</td><td>70,626</td></tr>'
-        '<tr><td>AST</td><td>51.4%</td><td>69,996</td></tr>'
-        '<tr><td>REB</td><td>50.6%</td><td>70,255</td></tr>'
-        '<tr><td>STL</td><td>50.8%</td><td>69,334</td></tr>'
-        '<tr><td>BLK</td><td>49.8%</td><td>67,402</td></tr>'
-        '<tr><td>FG3M</td><td>50.0%</td><td>64,428</td></tr>'
-        '<tr><td>TOV</td><td>49.2%</td><td>69,765</td></tr>'
-        '<tr><td>FG3A</td><td>50.4%</td><td>67,312</td></tr>'
-        '<tr><td>OREB</td><td>50.0%</td><td>69,650</td></tr>'
+        '<tr><td>PTS</td><td>55.5%</td><td>70,605</td></tr>'
+        '<tr><td>AST</td><td>54.5%</td><td>69,911</td></tr>'
+        '<tr><td>REB</td><td>54.7%</td><td>70,236</td></tr>'
+        '<tr><td>STL</td><td>52.0%</td><td>69,104</td></tr>'
+        '<tr><td>BLK</td><td>50.2%</td><td>66,982</td></tr>'
+        '<tr><td>FG3M</td><td>52.5%</td><td>64,229</td></tr>'
+        '<tr><td>TOV</td><td>53.0%</td><td>69,634</td></tr>'
+        '<tr><td>FG3A</td><td>54.9%</td><td>67,225</td></tr>'
+        '<tr><td>OREB</td><td>52.3%</td><td>69,465</td></tr>'
         '</table>',
         unsafe_allow_html=True,
+    )
+    st.markdown(
+        "**What that column is, and what it is not.** It asks one question: when the "
+        "projection sits above a player's own season average, does the real result land "
+        "above it too? That is a question about this model, measured against the player. "
+        "It is **not** a win rate against a sportsbook. A book's line is not a season "
+        "average — it is already a forecast, and a sharper one — so none of these numbers "
+        "say anything about beating a price. Nothing here clears the vig, and when the "
+        "season starts we intend to measure against real lines and publish whatever that "
+        "shows."
+    )
+    st.markdown(
+        "**Projected minutes.** Every projection is now a player's per-minute rate times "
+        "the minutes we expect him to play — half his last three games, half his season — "
+        "rather than a flat per-game average. Minutes are the single biggest thing that "
+        "separates one night from another: knowing a player's **actual** minutes would cut "
+        "points error by 14%, while projecting them in advance recovers only about 0.9% of "
+        "it. The error barely moves. What moves is the direction column above, by roughly "
+        "four points on points, rebounds, assists and three-point attempts — and close to "
+        "nothing on blocks. We tested the obvious alternative too (just weight his recent "
+        "scoring), and once you correct for the fact that recency flatters this metric, the "
+        "minutes model came out ahead on both error and accuracy. It still knows nothing "
+        "about tonight: no injury report, no rest, no blowout risk. A role change it can't "
+        "see, it won't see."
     )
     # Strong leans (engine/lean.py) -- numbers come straight from
     # engine/lean_models.json (written by lean_model_sweep.py), so this
@@ -2430,6 +2468,7 @@ with tab1:
             "scheme_note": scheme_note,
             "scheme_executor_input": scheme_executor_input,
             "game_log": game_log_for_hitrate,
+            "minutes_note": get_projected_minutes_note(player_id),
             "using_h2h": using_h2h,
             "h2h_cutoff": h2h_cutoff,
             "roster_change_active": roster_change_active,
@@ -2459,6 +2498,7 @@ with tab1:
         scheme_note = r["scheme_note"]
         scheme_executor_input = r["scheme_executor_input"]
         game_log_for_hitrate = r["game_log"]
+        minutes_note = r.get("minutes_note")
         using_h2h = r["using_h2h"]
         h2h_cutoff = r["h2h_cutoff"]
         roster_change_active = r["roster_change_active"]
@@ -2802,7 +2842,8 @@ with tab1:
                 "Hit rates",
                 "Model is this projection's own chance of clearing the line tonight. The rest "
                 "are how often he actually cleared it, over the number of games shown on each. "
-                "Windows covering the same games are shown once, not repeated.",
+                "Windows covering the same games are shown once, not repeated. With no line "
+                "entered, each row uses his projected baseline — not his season average.",
             )
 
         for stat_label, line_val, base_val, col in hit_rate_configs:
@@ -2812,7 +2853,11 @@ with tab1:
             elif using_h2h:
                 line_source_note = f"head-to-head avg vs. {opponent_full_name}"
             else:
-                line_source_note = "season average"
+                # Not "season average" any more: the baseline is a
+                # per-minute rate times projected minutes, so calling it
+                # the season average would be a number lying about what
+                # it is (engine/minutes.py).
+                line_source_note = "projected baseline"
 
             rate_rows = build_hit_rates(
                 game_log_for_hitrate, effective_line, col, h2h=using_h2h
@@ -2869,6 +2914,17 @@ with tab1:
                 f"{predictions[col]['base']:.1f} {col}" for col, _ in STAT_COLUMNS
             )
             st.write(f"**[1] Baseline** ({source}): {baseline_summary}")
+            _mins = minutes_note
+            if _mins is not None:
+                st.write(
+                    f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **Projected minutes: "
+                    f"{_mins['projected']:.1f}** — half his last {_mins['window']} games "
+                    f"({_mins['recent']:.1f}) and half his season "
+                    f"({_mins['mpg']:.1f} over {_mins['games']} games). Every stat above is "
+                    f"his per-minute rate times that number, which is why the baseline isn't "
+                    f"simply his season average. It knows his recent workload, not tonight's "
+                    f"plan: a role change it can't see, it won't see."
+                )
             notes_by_layer = {
                 "opponent_defense": def_note,
                 "missing_teammates": teammate_note,

@@ -193,3 +193,60 @@ alone will not apply it, the app has to be rebooted. An apple-touch-icon
 has to be fetchable by URL, as iOS will not accept a data: URI for it,
 and the manifest's icon paths are relative so they resolve under
 whichever prefix the app is running on.
+
+
+Projected minutes
+-----------------
+Every projection is a player's per-minute rate times the minutes we
+expect him to play, not a flat per-game average:
+
+    projected = 0.5 * mean(last 3 played games) + 0.5 * season MPG
+    line_s    = (total stat s / total minutes) * projected
+
+Config `min_3_0.5`, chosen leave-one-season-out on pooled relative MAE
+(`minutes_model_sweep.py`). It lives in `engine/minutes.py` and enters
+the app through `engine/baseline_stats.py`, so the live app and the
+point-in-time backtest cannot disagree about it.
+
+Measured on the honest 70,944-game population:
+
+| | error (rel-MAE) | direction | balanced |
+|---|---|---|---|
+| flat per-game average | 1.0000 | 50.5% | 51.0% |
+| **projected minutes** | **0.9910** | **53.3%** | **54.1%** |
+| recent-form control | 0.9943 | 53.5% | 53.4% |
+
+The recent-form control matters: if simply weighting a player's recent
+scoring did as well, "minutes" would be a story rather than a mechanism.
+On raw direction it looks better; on balanced accuracy and on error it
+is worse. Recency shifts predictions toward whatever just happened,
+which flatters raw direction through the base rate. Corrected for that,
+the minutes model wins.
+
+Two things it does not do:
+
+- **It does not know about tonight.** No injury report, no rest, no
+  blowout risk, no starter/bench change. It reads recent workload, not
+  role.
+- **It does not clear the vig.** 53.3% pooled direction is under the
+  53.5% break-even at -115, and that metric is measured against the
+  player's own average, not against a bookmaker's line, which is a
+  sharper number to begin with.
+
+Shipping it meant refitting the calibrated distributions: the 80% ranges
+were fitted against the old predictions and stop being 80% the moment
+the point estimate moves. The chain is
+
+    build_backtest_population.py     # carries {stat}_flat and {stat}_base
+    calibration_sweep.py --population  # refits engine/stat_distribution.json
+
+`{stat}_flat` is kept alongside `{stat}_base` because the lean models
+measure direction against the flat season average and that is still what
+"season average" means to them. `run_backtest.py` emits both columns too,
+so its cross-check against the population still holds: on the 29,914
+games the two sets share, the flat baselines match to zero.
+
+One seam worth knowing: the model is fitted on box-score minutes
+(accurate to the second, 27.783) and runs live on game-log minutes,
+which the NBA returns whole (28). Over those same shared games the
+rounding moves a projection by a median of 0.18%, 0.55% at p95.

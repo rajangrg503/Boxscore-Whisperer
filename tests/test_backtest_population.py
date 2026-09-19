@@ -31,17 +31,53 @@ def _games(points, minutes, season="2024-25"):
     } for i, (p, m) in enumerate(zip(points, minutes))])
 
 
-def test_baselines_use_only_prior_played_games():
+def test_flat_baselines_use_only_prior_played_games():
     games = bp.add_point_in_time_baselines(_games([10, 20, 30, 0, 40], [30, 30, 30, 0, 30]))
     # first game: nothing before it
     assert games["n_prior"].tolist() == [0, 1, 2, 3, 3]
-    assert pd.isna(games["PTS_base"].iloc[0])
-    assert games["PTS_base"].iloc[1] == pytest.approx(10.0)
-    assert games["PTS_base"].iloc[2] == pytest.approx(15.0)
+    assert pd.isna(games["PTS_flat"].iloc[0])
+    assert games["PTS_flat"].iloc[1] == pytest.approx(10.0)
+    assert games["PTS_flat"].iloc[2] == pytest.approx(15.0)
     # the DNP (0 minutes) contributes nothing and doesn't advance n_prior
-    assert games["PTS_base"].iloc[3] == pytest.approx(20.0)
-    assert games["PTS_base"].iloc[4] == pytest.approx(20.0)
+    assert games["PTS_flat"].iloc[3] == pytest.approx(20.0)
+    assert games["PTS_flat"].iloc[4] == pytest.approx(20.0)
     assert games["mpg_prior"].iloc[4] == pytest.approx(30.0)
+
+
+def test_minutes_aware_baseline_is_rate_times_projected_minutes():
+    """Steady 30 minutes a night: projected minutes equal MPG, so the
+    minutes-aware baseline collapses onto the flat average."""
+    games = bp.add_point_in_time_baselines(_games([10, 20, 30, 40], [30, 30, 30, 30]))
+    assert games["min_projected"].iloc[3] == pytest.approx(30.0)
+    assert games["PTS_base"].iloc[3] == pytest.approx(games["PTS_flat"].iloc[3])
+
+
+def test_minutes_aware_baseline_scales_with_a_rising_workload():
+    """Same points per minute, but his last three games ran longer: the
+    projection has to come out above the flat average, not equal to it."""
+    # minutes 10, 10, 30, 30, 30 -> at row 5 the last three played games
+    # are all 30s while the season average is still dragged down to 22
+    games = bp.add_point_in_time_baselines(
+        _games([10, 10, 30, 30, 30, 30], [10, 10, 30, 30, 30, 30]))
+    row = 5
+    mpg = games["mpg_prior"].iloc[row]
+    assert mpg == pytest.approx(22.0)
+    assert games["min_recent"].iloc[row] == pytest.approx(30.0)   # last 3 PLAYED
+    assert games["min_projected"].iloc[row] == pytest.approx(26.0)
+    assert games["min_projected"].iloc[row] == pytest.approx(0.5 * 30.0 + 0.5 * mpg)
+    # 1 point per minute throughout, so the baseline is just the minutes
+    assert games["PTS_base"].iloc[row] == pytest.approx(games["min_projected"].iloc[row])
+    assert games["PTS_base"].iloc[row] > games["PTS_flat"].iloc[row]
+
+
+def test_recent_window_counts_played_games_not_calendar_games():
+    """A player back from a three-game absence must still have a recent
+    window -- taking the last three CALENDAR games would land entirely on
+    games he missed and produce NaN."""
+    games = bp.add_point_in_time_baselines(
+        _games([10, 20, 30, 0, 0, 0, 40], [20, 20, 20, 0, 0, 0, 20]))
+    assert games["min_recent"].iloc[6] == pytest.approx(20.0)
+    assert not pd.isna(games["PTS_base"].iloc[6])
 
 
 def test_baseline_spread_is_the_prior_games_spread():

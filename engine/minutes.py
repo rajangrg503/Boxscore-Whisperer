@@ -1,0 +1,152 @@
+"""How long will he actually play? -- the one thing worth guessing.
+
+WHY THIS EXISTS
+Every projection in this app used to be a season per-game average. That
+average silently assumes tonight looks like the average night, and the
+biggest way a night differs is minutes: a starter on 34 and the same
+starter on 22 are two different players.
+
+Measured on the honest 70,944-game backtest population
+(minutes_model_sweep.py, 19 Sep 2026), against the season average:
+
+    knowing his ACTUAL minutes      points error -14.0%
+    projecting minutes in advance   points error  -0.9%, direction
+                                    50.5% -> 53.3% (balanced 51.0 -> 54.1)
+
+So the error barely moves -- most of the value of minutes is locked
+behind knowing them -- but the DIRECTION of the call improves by about
+three points, and direction is what a reader comparing a projection to a
+line actually cares about.
+
+WHY NOT JUST RECENT FORM
+The sweep tested a control: blend the player's recent per-game stat line
+into the average, no minutes involved. On raw direction it looks better
+(54.2% vs 53.3%). On BALANCED accuracy it is worse (53.7% vs 54.1%), and
+on error much worse (-0.57% vs -0.9%). Recent form shifts predictions
+toward whatever just happened, which flatters raw direction through the
+base rate rather than through skill. The minutes model wins once that is
+corrected for, which is why this module exists and a form-blend one does
+not.
+
+WHAT IT COMPUTES
+    mpg      = mean minutes over prior played games this season
+    recent   = mean minutes over the last RECENT_WINDOW played games
+    projected = WEIGHT * recent + (1 - WEIGHT) * mpg
+    rate_s   = total of stat s over prior games / total minutes
+    line_s   = rate_s * projected
+
+Config is min_3_0.5, chosen leave-one-season-out on pooled relative MAE.
+
+WHAT IT DOES NOT DO
+It knows nothing about tonight: no injury report, no rest, no blowout
+risk, no starter/bench change. It is a read on a player's recent
+workload, not a forecast of his role. A player whose minutes are about
+to change for a reason the log cannot see will be projected wrong, and
+confidently so.
+
+It also does not clear the vig. 53.3% direction is below the 53.5%
+break-even at -115. This is a better number, not a winning one, and
+nothing in the app should imply otherwise.
+
+ONE KNOWN SEAM
+The model was fitted on box-score minutes, which are accurate to the
+second (27.783), and runs live on game-log minutes, which the NBA
+returns as whole numbers (28). Measured over the 29,914 games both
+harnesses cover, that rounding moves the projection by a median of 0.18%
+and 0.55% at the 95th percentile -- far inside the noise of the thing
+being projected, and not worth "fixing" by throwing away the more
+accurate source on the fitting side.
+"""
+
+import pandas as pd
+
+# min_3_0.5, chosen leave-one-season-out on pooled relative MAE across
+# nine stats. See minutes_model_sweep_results.csv for the alternatives.
+RECENT_WINDOW = 3
+RECENT_WEIGHT = 0.5
+
+# Below this many prior games the rate and the recent window are both
+# too thin to lean on, and the plain average is the honest answer. Same
+# threshold the calibrated distributions use.
+MIN_PRIOR_GAMES = 5
+
+MINUTES_COLUMN = "MIN"
+DATE_COLUMN = "GAME_DATE"
+
+
+def _played(df):
+    """Prior games he actually played, newest first.
+
+    Sorted here rather than trusted from the caller: app.py hands over a
+    newest-first log and the backtest hands over whatever order the cache
+    had, and a silent disagreement about ordering would quietly turn
+    "his last three games" into "his first three"."""
+    if df is None or len(df) == 0 or MINUTES_COLUMN not in df.columns:
+        return None
+    out = df.copy()
+    out[MINUTES_COLUMN] = pd.to_numeric(out[MINUTES_COLUMN], errors="coerce")
+    out = out[out[MINUTES_COLUMN] > 0]
+    if len(out) == 0:
+        return None
+    if DATE_COLUMN in out.columns:
+        parsed = pd.to_datetime(out[DATE_COLUMN], errors="coerce")
+        if parsed.notna().all():
+            out = out.assign(_d=parsed).sort_values("_d", ascending=False).drop(columns="_d")
+    return out.reset_index(drop=True)
+
+
+def projected_minutes(df):
+    """Minutes to project for the next game, or None when the log is too
+    thin to say. Half his recent workload, half his season."""
+    played = _played(df)
+    if played is None or len(played) < MIN_PRIOR_GAMES:
+        return None
+    minutes = played[MINUTES_COLUMN]
+    mpg = float(minutes.mean())
+    recent = float(minutes.head(RECENT_WINDOW).mean())
+    return RECENT_WEIGHT * recent + (1.0 - RECENT_WEIGHT) * mpg
+
+
+def minutes_aware_means(df, stat_columns):
+    """{stat: projected mean} from per-minute rates times projected
+    minutes, or None when the log is too thin.
+
+    Returns None rather than falling back internally, so the caller
+    decides what the fallback is and the fallback stays visible in one
+    place instead of two."""
+    played = _played(df)
+    if played is None or len(played) < MIN_PRIOR_GAMES:
+        return None
+    total_minutes = float(played[MINUTES_COLUMN].sum())
+    if total_minutes <= 0:
+        return None
+    projected = projected_minutes(df)
+    if projected is None or projected <= 0:
+        return None
+
+    means = {}
+    for col, _label in stat_columns:
+        if col not in played.columns:
+            return None
+        total = pd.to_numeric(played[col], errors="coerce").sum()
+        means[col] = float(total) / total_minutes * projected
+    return means
+
+
+def describe(df):
+    """(projected, mpg, recent) for the page to show its working, or
+    None. A reader who can see the minutes assumption can argue with
+    it, which is the whole point of showing any of this."""
+    played = _played(df)
+    if played is None or len(played) < MIN_PRIOR_GAMES:
+        return None
+    minutes = played[MINUTES_COLUMN]
+    mpg = float(minutes.mean())
+    recent = float(minutes.head(RECENT_WINDOW).mean())
+    return {
+        "projected": RECENT_WEIGHT * recent + (1.0 - RECENT_WEIGHT) * mpg,
+        "mpg": mpg,
+        "recent": recent,
+        "window": RECENT_WINDOW,
+        "games": len(played),
+    }
