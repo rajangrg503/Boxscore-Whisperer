@@ -1,6 +1,11 @@
 __pycache__/
 *.pyc
 
+# Finder's per-folder view settings. macOS writes these constantly, so a
+# tracked one shows up as "modified" on almost every status and ends up
+# in commits that have nothing to do with it. Nothing reads them.
+.DS_Store
+
 # Locally-generated watchdog diagnostic state -- changes on every run,
 # not application data that should travel with the repo.
 data_cache/_watchdog_status.json
