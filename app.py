@@ -86,7 +86,7 @@ from engine.team_total import (
 from engine.baseline_stats import stats_from_gamelog
 from engine.freshness import cache_age, describe as describe_cache_age
 from engine.hit_rates import hit_rates as build_hit_rates, sample_caveat
-from engine.minutes import describe as minutes_describe
+from engine.minutes import describe as minutes_describe, why_not as minutes_why_not
 from engine.distribution import (
     DISTRIBUTION_META,
     STAT_DISTRIBUTIONS,
@@ -379,15 +379,22 @@ def get_season_baseline(player_id, player_name):
 
 def get_projected_minutes_note(player_id):
     """The minutes assumption behind the baseline, so the page can show
-    its working. Same season log get_season_baseline() just used (the
-    fetch is cached, so this is a dict lookup), and None whenever the
-    log is too thin to project from -- in which case the baseline fell
-    back to flat averages and there is no assumption to show."""
+    its working -- or the reason there isn't one.
+
+    Returns (description, reason). Exactly one is ever set. The first
+    deploy of this returned a description whenever the log LOOKED
+    projectable, which is not the same question as whether the baseline
+    actually used it: the page ended up explaining a per-minute rate
+    underneath flat season averages. Asking engine/minutes.py the same
+    question the baseline asks makes the two agree by construction."""
     try:
         df, _season, _source = resolve_season_gamelog(player_id)
-        return minutes_describe(df)
-    except Exception:
-        return None
+    except Exception as exc:                         # noqa: BLE001
+        return None, f"couldn't read the game log ({type(exc).__name__})"
+    reason = minutes_why_not(df, STAT_COLUMNS)
+    if reason is not None:
+        return None, reason
+    return minutes_describe(df), None
 
 
 # get_league_advanced_team_stats, get_team_defensive_rating,
@@ -2498,7 +2505,7 @@ with tab1:
         scheme_note = r["scheme_note"]
         scheme_executor_input = r["scheme_executor_input"]
         game_log_for_hitrate = r["game_log"]
-        minutes_note = r.get("minutes_note")
+        minutes_note, minutes_reason = r.get("minutes_note") or (None, None)
         using_h2h = r["using_h2h"]
         h2h_cutoff = r["h2h_cutoff"]
         roster_change_active = r["roster_change_active"]
@@ -2915,7 +2922,13 @@ with tab1:
             )
             st.write(f"**[1] Baseline** ({source}): {baseline_summary}")
             _mins = minutes_note
-            if _mins is not None:
+            if _mins is None:
+                st.write(
+                    f"&nbsp;&nbsp;&nbsp;&nbsp;↳ *Projected minutes not used here "
+                    f"({minutes_reason or 'reason unknown'}) — the numbers above are "
+                    f"flat per-game averages.*"
+                )
+            else:
                 st.write(
                     f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **Projected minutes: "
                     f"{_mins['projected']:.1f}** — half his last {_mins['window']} games "

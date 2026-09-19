@@ -107,27 +107,46 @@ def projected_minutes(df):
     return RECENT_WEIGHT * recent + (1.0 - RECENT_WEIGHT) * mpg
 
 
+def why_not(df, stat_columns):
+    """Why the minutes model can't be used here, or None when it can.
+
+    This exists because the first deploy of it shipped a page that
+    explained a per-minute rate underneath numbers that were still flat
+    averages: the model declined silently and the prose carried on
+    regardless. A silent fallback behind confident prose is worse than
+    no model at all, so the reason is now a value the page can read and
+    refuse to lie about."""
+    played = _played(df)
+    if played is None:
+        return "no usable minutes in the game log"
+    if len(played) < MIN_PRIOR_GAMES:
+        return f"only {len(played)} played games (needs {MIN_PRIOR_GAMES})"
+    if float(played[MINUTES_COLUMN].sum()) <= 0:
+        return "no minutes recorded"
+    missing = [col for col, _ in stat_columns if col not in played.columns]
+    if missing:
+        return f"game log is missing {', '.join(missing)}"
+    projected = projected_minutes(df)
+    if projected is None or projected <= 0:
+        return "projected minutes came out at zero"
+    return None
+
+
 def minutes_aware_means(df, stat_columns):
     """{stat: projected mean} from per-minute rates times projected
-    minutes, or None when the log is too thin.
+    minutes, or None when the log can't support it (why_not says why).
 
     Returns None rather than falling back internally, so the caller
     decides what the fallback is and the fallback stays visible in one
     place instead of two."""
+    if why_not(df, stat_columns) is not None:
+        return None
     played = _played(df)
-    if played is None or len(played) < MIN_PRIOR_GAMES:
-        return None
     total_minutes = float(played[MINUTES_COLUMN].sum())
-    if total_minutes <= 0:
-        return None
     projected = projected_minutes(df)
-    if projected is None or projected <= 0:
-        return None
 
     means = {}
     for col, _label in stat_columns:
-        if col not in played.columns:
-            return None
         total = pd.to_numeric(played[col], errors="coerce").sum()
         means[col] = float(total) / total_minutes * projected
     return means
