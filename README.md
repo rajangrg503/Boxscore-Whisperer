@@ -49,3 +49,15 @@ from two generated files:
 Both only say whether a stat lands above or below the player's own
 season average. Leans start once a player has 10 regular-season games
 in the current season.
+
+Ranges and "chance he clears the line"
+--------------------------------------
+Each stat card shows a calibrated 80% range, and, when a line is typed
+in, the chance the player clears it. Both come from a per-stat
+distribution in engine/stat_distribution.json, written by
+`python3 calibration_sweep.py` and read by engine/distribution.py.
+
+The sweep fits several candidate distributions, scores them on seasons
+they were never fitted on, and keeps the best per stat. It also records
+what the old fixed band did, for comparison. Rerun it after any change
+that moves the projections themselves.
