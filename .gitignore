@@ -1,9 +1,15 @@
 __pycache__/
 *.pyc
 
-# Locally-generated watchdog diagnostic state -- changes on every run,
-# not application data that should travel with the repo.
-data_cache/_watchdog_status.json
+# The cache travels as data_cache.zip, not as 148,684 loose files.
+# Tracking them made Streamlit Cloud's checkout unreliable -- twice it
+# deployed a new app.py beside a stale engine/ -- so the folder is a
+# local working directory now and tools/pack_cache.py builds the
+# archive that gets committed. engine/cache_archive.py has the whole
+# reasoning. To get the folder back on a fresh clone:
+#     python3 tools/pack_cache.py --unpack
+data_cache/
+data_cache.zip.tmp
 logs/
 
 # Local prediction tracker file (production uses Postgres; see engine/log_store.py)

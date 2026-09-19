@@ -12,6 +12,15 @@
 # delete a large part of the cache. A stale cache is a bad day; a cache
 # overwritten with junk is a bad week.
 #
+# WHAT IT COMMITS
+# data_cache/ itself is no longer tracked -- 148,684 loose files made
+# Streamlit Cloud's checkout unreliable (engine/cache_archive.py has the
+# reasoning). The refresh writes that folder exactly as before, then
+# packs it into data_cache.zip and commits the archive. So the safety
+# checks below can no longer ask git what changed: they ask
+# tools/pack_cache.py, which compares the folder against the archive
+# file by file and reports added / changed / removed separately.
+#
 # Install (macOS, runs every morning):
 #   cp tools/com.boxscorewhisperer.refresh.plist ~/Library/LaunchAgents/
 #   # edit the two paths in that file to match this checkout, then:
@@ -38,16 +47,35 @@ PYTHON="${PYTHON:-python3}"
 
 say "=== refresh starting (dry-run=$DRY_RUN) ==="
 
-# Never refresh on top of local edits: this job commits whatever is in
-# data_cache/, so it has to start from a clean tree.
-if [ -n "$(git status --porcelain -- data_cache)" ]; then
-    die "data_cache has uncommitted changes; sort those out first"
+# The swap to the archive is a one-time commit that has to be made by
+# hand (it can only be built on a machine that has the folder, and it
+# has to land in the same commit that untracks it). Until that has
+# happened, committing an archive here would add 69 MB beside a cache
+# that is still tracked file by file -- the worst of both.
+if [ "$(git ls-files data_cache | head -1)" != "" ]; then
+    die "data_cache is still tracked file by file; run tools/adopt_cache_archive.sh once first"
+fi
+
+# Never refresh on top of local edits: this job commits the archive it
+# builds, so it has to start from a clean tree.
+if [ -n "$(git status --porcelain -- data_cache.zip)" ]; then
+    die "data_cache.zip has uncommitted changes; sort those out first"
 fi
 
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 [ "$CURRENT_BRANCH" = "main" ] || die "on branch $CURRENT_BRANCH, not main"
 
 git pull --ff-only >>"$LOG" 2>&1 || die "git pull failed (see $LOG)"
+
+# A clone has the archive and no folder. Unpacking is the only way
+# back, and refreshing on top of an empty folder would look like every
+# file in the cache had just been deleted. After the pull, so a clone
+# unpacks the archive it is about to be compared against.
+if [ -z "$(find data_cache -name '*.json' -print -quit 2>/dev/null)" ]; then
+    say "no data_cache/ here -- unpacking the archive first"
+    "$PYTHON" tools/pack_cache.py --unpack >>"$LOG" 2>&1 \
+        || die "could not unpack data_cache.zip (see $LOG)"
+fi
 
 BEFORE="$(find data_cache -name '*.json' | wc -l | tr -d ' ')"
 
@@ -80,30 +108,42 @@ PY
 [ -n "$FAILED" ] && say "WARNING: endpoints failing validation: $FAILED"
 
 AFTER="$(find data_cache -name '*.json' | wc -l | tr -d ' ')"
-DELETED="$(git status --porcelain -- data_cache | grep -c '^ D' || true)"
-CHANGED="$(git status --porcelain -- data_cache | wc -l | tr -d ' ')"
-say "cache files: $BEFORE -> $AFTER, $CHANGED changed, $DELETED deleted"
+
+# What the folder now holds versus what the committed archive holds.
+# git can't answer this any more, so pack_cache.py does, and it reports
+# rewrites and deletions separately -- which is the distinction the
+# check below turns on.
+DIFF="$("$PYTHON" tools/pack_cache.py --diff 2>>"$LOG" | head -1)"
+ADDED="$(printf '%s' "$DIFF" | sed -n 's/.*added \([0-9]*\).*/\1/p')"
+CHANGED="$(printf '%s' "$DIFF" | sed -n 's/.*changed \([0-9]*\).*/\1/p')"
+DELETED="$(printf '%s' "$DIFF" | sed -n 's/.*removed \([0-9]*\).*/\1/p')"
+: "${ADDED:=0}" "${CHANGED:=0}" "${DELETED:=0}"
+say "cache files: $BEFORE -> $AFTER, $ADDED added, $CHANGED changed, $DELETED deleted"
 
 # A refresh adds and rewrites files. Mass deletion means something went
 # wrong upstream (an endpoint returning an empty payload, say), and that
-# is exactly what must never reach the live app.
+# is exactly what must never reach the live app. Nothing is committed
+# yet at this point, so stopping here leaves the archive untouched --
+# the live app keeps reading yesterday's, which is the safe side.
 if [ "$DELETED" -gt 50 ]; then
-    git checkout -- data_cache
-    die "$DELETED files would be deleted; reverted and pushed nothing"
+    die "$DELETED files are missing from data_cache/; packed and pushed nothing"
 fi
 
-if [ "$CHANGED" -eq 0 ]; then
+if [ "$ADDED" -eq 0 ] && [ "$CHANGED" -eq 0 ] && [ "$DELETED" -eq 0 ]; then
     say "nothing changed; done"
     exit 0
 fi
 
 if [ $DRY_RUN -eq 1 ]; then
-    say "dry run: leaving $CHANGED changed files in the working tree"
-    git status --short -- data_cache | head -20 | tee -a "$LOG"
+    say "dry run: $ADDED added, $CHANGED changed, $DELETED deleted -- archive left alone"
+    "$PYTHON" tools/pack_cache.py --diff | head -12 | tee -a "$LOG"
     exit 0
 fi
 
-git add data_cache
+say "packing data_cache/ into data_cache.zip"
+"$PYTHON" tools/pack_cache.py >>"$LOG" 2>&1 || die "pack failed (see $LOG)"
+
+git add data_cache.zip
 git -c user.name="Boxscore Whisperer refresh" -c user.email="noreply@boxscorewhisperer.com" \
     commit -q -m "Refresh data_cache ($(date '+%Y-%m-%d'))${FAILED:+ [partial: $FAILED failed validation]}" \
     >>"$LOG" 2>&1 || die "commit failed (see $LOG)"

@@ -91,7 +91,7 @@ def main():
         time.sleep(REQUEST_DELAY)
 
     print(f"\nDone. {counts['cached']} newly cached, {counts['skipped']} already had data, {counts['failed']} failed.")
-    print("Now commit and push the data_cache/ folder to GitHub so the deployed app picks it up.")
+    print("Now run tools/pack_cache.py and commit data_cache.zip so the deployed app picks it up.")
 
 
 if __name__ == "__main__":
