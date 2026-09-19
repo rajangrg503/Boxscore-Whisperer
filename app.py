@@ -1189,8 +1189,18 @@ div[data-testid="stAlertContentSuccess"] {
     .stat-card-row, .stat-card-row.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .stat-card .stat-value { font-size: 26px; }
     .hr-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    /* Five badges across a phone leaves about fifty points of text per
+       tile, which is not enough for "Season" (it ellipsised to "Seas…")
+       or for "10 games" on one line. Three per row and they all fit,
+       which matters more here than keeping the desktop's single row:
+       this is the block a reader scans fastest and trusts most. */
+    .hit-rate-row {
+        grid-auto-flow: row;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
     .hit-rate-badge { grid-template-columns: minmax(0, 1fr); row-gap: 2px; padding: 7px 10px; }
     .hit-rate-badge .pct { text-align: left; }
+    .hit-rate-badge .label { letter-spacing: 0.02em; }
     .stTabs [role="tab"] { padding: 0 14px; }
 }
 </style>
