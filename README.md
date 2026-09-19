@@ -81,3 +81,34 @@ The sweeps take `--population` to fit on the honest set:
     python3 lean_model_sweep.py --population
     python3 clearest_read_sweep.py --population
     python3 calibration_sweep.py --population
+
+Keeping the cache fresh in season
+---------------------------------
+stats.nba.com blocks the machines that could refresh it automatically.
+Measured on 19 Sep 2026 with `tools/probe_sources.py`, from a GitHub
+Actions runner:
+
+| Source | Result |
+|---|---|
+| stats.nba.com (raw, nba_api, game log) | timed out, 25s each |
+| cdn.nba.com static schedule | 403 Access Denied |
+| hoopR mirror on GitHub | 200 OK |
+
+So the refresh runs on a normal home machine instead:
+
+    bash tools/scheduled_refresh.sh --dry-run   # refresh, show the diff, push nothing
+    bash tools/scheduled_refresh.sh             # refresh, commit, push
+
+It refuses to push when the tree is dirty, when it isn't on `main`, or
+when the refresh would delete more than 50 cache files, and it says so
+when the watchdog reports an endpoint failing validation.
+
+To run it every morning on a Mac, edit the two paths in
+`tools/com.boxscorewhisperer.refresh.plist`, then:
+
+    cp tools/com.boxscorewhisperer.refresh.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.boxscorewhisperer.refresh.plist
+
+The app shows the cache's age in the header during the season
+(engine/freshness.py), so a refresh that stops running is visible rather
+than silent.
