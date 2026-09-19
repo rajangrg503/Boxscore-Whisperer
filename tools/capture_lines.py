@@ -63,16 +63,19 @@ Australian eastern time, which is the middle of a waking day rather
 than the middle of the night.
 
 THE KEY
-Read from SGO_API_KEY. It is never written to a file, never printed,
-and never committed -- the workflow takes it from a repository secret.
-If the variable is missing the script says so and exits, rather than
-making an unauthenticated request that would quietly return nothing.
+Read from SGO_API_KEY. It is never written to a file, never printed
+and never committed; keep it somewhere outside the repo, such as a
+chmod 600 file in the home directory that the job sources. If the
+variable is missing the script says so and exits, rather than making
+an unauthenticated request that would quietly return nothing and be
+indistinguishable from a night with no games.
 """
 
 import argparse
 import hashlib
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.parse
@@ -101,6 +104,43 @@ MAX_EVENTS_PER_RUN = 40
 TIMEOUT_SECONDS = 30
 
 
+def _ssl_context():
+    """A context that can actually verify the odds API's certificate.
+
+    The python.org framework build for macOS -- which is the one the
+    refresh job uses -- does not read the system keychain. It ships a
+    CA bundle that a separate "Install Certificates.command" has to
+    link into place, and until somebody runs it every stdlib HTTPS call
+    fails with:
+
+        [SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer
+        certificate
+
+    The refresh scripts never hit this because `requests` carries its
+    own certificates. This one uses only the standard library on
+    purpose, so it has to ask.
+
+    A one-time manual step is a poor thing for an unattended nightly
+    job to depend on -- it will be months before anybody notices it was
+    never done, and those months are the season. So if the default
+    context has no certificates, fall back to certifi's bundle, which
+    is what that installer links anyway.
+
+    Verification is never disabled. If neither source has certificates
+    the call fails, which is the correct outcome: a capture that
+    silently stopped checking who it was talking to would be worse than
+    a missing night.
+    """
+    context = ssl.create_default_context()
+    if context.cert_store_stats().get("x509_ca", 0) > 0:
+        return context
+    try:
+        import certifi
+    except ImportError:
+        return context        # let it fail loudly, verification intact
+    return ssl.create_default_context(cafile=certifi.where())
+
+
 def _get(path, params, api_key):
     """One GET, returning parsed JSON. Raises on anything unexpected."""
     url = f"{BASE_URL}/{path.lstrip('/')}?{urllib.parse.urlencode(params)}"
@@ -111,7 +151,8 @@ def _get(path, params, api_key):
         # the logs at the other end can tell what it is.
         "User-Agent": "boxscore-whisperer-line-capture/1.0",
     })
-    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS,
+                                context=_ssl_context()) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
