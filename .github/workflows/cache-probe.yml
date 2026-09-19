@@ -1,0 +1,60 @@
+# Can a GitHub runner reach the NBA's data?
+#
+# The live app can't: Streamlit Community Cloud is blocked by
+# stats.nba.com, which is why every prediction is served from
+# data_cache/ and why that cache only refreshes when someone runs
+# refresh_cache.py on their own machine and pushes.
+#
+# Automating that needs one fact nobody publishes: whether GitHub's
+# runners are blocked too. This workflow measures it. Run it from the
+# Actions tab ("Run workflow") and read the summary; nothing is written
+# to the repo either way.
+name: Probe data sources
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the two libraries the probe needs
+        run: pip install --quiet requests "nba_api>=1.4" pandas
+
+      - name: Probe
+        id: probe
+        run: |
+          python3 tools/probe_sources.py | tee probe.txt
+          python3 tools/probe_sources.py --json > probe.json || true
+
+      - name: Put the result in the run summary
+        if: always()
+        run: |
+          {
+            echo '## Data source probe'
+            echo
+            echo 'Runner IP is a GitHub-hosted one; this is what it could reach:'
+            echo
+            echo '```'
+            cat probe.txt || echo "the probe produced no output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-result
+          path: |
+            probe.txt
+            probe.json
+          if-no-files-found: warn
