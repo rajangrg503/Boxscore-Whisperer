@@ -152,11 +152,33 @@ app.py adds them from a zero-height component iframe. It is idempotent
 and wrapped in try/catch: if a future Streamlit closes that door the
 cost is a plainer icon, not a broken page.
 
+**The public URL does not serve this app.** On Community Cloud
+`https://<name>.streamlit.app/` serves Streamlit's own wrapper page -- a
+React shell with an empty `<title>`, its own apple-touch-icon and its
+own manifest -- and that shell runs the real app in a same-origin iframe
+at `/~/+/`. A phone therefore reads the *wrapper's* head, not ours,
+which is why the first attempt at this changed nothing visible:
+
+    /                 Streamlit's wrapper   <- what iOS reads
+    /~/+/             this app              <- where a component script runs
+    /~/+/app/static/  static files
+
+So the tags go to `window.top` rather than `window.parent`, and they
+replace the wrapper's icon and manifest instead of politely skipping
+them. The static prefix is derived from `window.parent.location`, which
+is `/~/+/` on Community Cloud and `/` when run locally, rather than
+hardcoded. The wrapper's blank title is filled in too -- that is what a
+bookmark, a shared link and a browser tab all otherwise show a hostname
+for.
+
 The icons are generated, not hand-made, so they cannot drift from the
 wordmark:
 
     python3 tools/make_icons.py     # -> static/
 
-`static/` is served at `/app/static/` via `server.enableStaticServing`
-in `.streamlit/config.toml`; an apple-touch-icon has to be fetchable by
-URL, as iOS will not accept a data: URI for it.
+`static/` is served via `server.enableStaticServing` in
+`.streamlit/config.toml`, which is read at server start -- a git push
+alone will not apply it, the app has to be rebooted. An apple-touch-icon
+has to be fetchable by URL, as iOS will not accept a data: URI for it,
+and the manifest's icon paths are relative so they resolve under
+whichever prefix the app is running on.

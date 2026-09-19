@@ -1423,52 +1423,100 @@ def _freshness_html():
     return f'<span class="bw-freshness {css}">{icon}<span>{html.escape(line)}</span></span>'
 
 
+APP_NAME = "Boxscore Whisperer"
+APP_SHORT_NAME = "Boxscore"
+
+
 def _install_home_screen_tags():
     """Tell iOS what this looks like on a home screen.
 
     Added to a phone's home screen the site came out as a black square
-    with a grey "B" in it, labelled "BoxscoreWhisp...". iOS was inventing
-    both: the page offers a `shortcut icon` (which it ignores for the
-    home screen) and nothing else, so it fell back to the first letter of
-    a too-long title.
+    with a grey "B" in it, labelled "BoxscoreWhisp...". iOS invented both,
+    and the reason took a while to find.
 
-    The tags below are ordinary <head> tags, but Streamlit owns the
-    <head> and exposes no hook into it, and st.markdown strips <script>.
-    A zero-height component iframe is the one place a script does run,
-    and it shares this page's origin, so it can reach up and add them.
-    That is a workaround, so it is written to fail quietly: wrapped in
-    try/catch, idempotent (Streamlit reruns this on every interaction),
-    and worth nothing but a plainer icon if a future Streamlit closes
-    the door.
+    WHICH PAGE iOS IS ACTUALLY LOOKING AT
+    On Streamlit Community Cloud the public URL does not serve this app.
+    It serves Streamlit's own wrapper page -- a React shell with an empty
+    <title>, its own apple-touch-icon and its own manifest -- and that
+    shell runs the real app in a same-origin iframe at /~/+/. So a phone
+    reads the wrapper's <head>, never ours: the empty title is why the
+    label fell back to a chopped-up hostname, and the grey "B" is iOS
+    improvising from it.
+
+    That means writing into window.parent (the app document) is not
+    enough; the tags have to go to window.top, the wrapper. Same origin,
+    so they can. Running locally there is no wrapper and top === parent,
+    which is the same code path.
+
+    Streamlit owns the <head> either way and offers no hook into it, and
+    st.markdown strips <script>, so a zero-height component iframe is the
+    one place a script runs at all. It is a workaround, written to fail
+    quietly: wrapped in try/catch, idempotent across Streamlit's reruns,
+    and worth nothing but a plainer icon if a future Streamlit or a
+    changed wrapper closes the door.
     """
-    icons = "/app/static"
     components.html(
         f"""<script>
 (function () {{
   try {{
-    var d = window.parent.document;
-    if (!d || !d.head) return;
-    function add(selector, tag, attrs) {{
-      if (d.head.querySelector(selector)) return;
-      var el = d.createElement(tag);
+    var app = window.parent;
+    if (!app || !app.document) return;
+
+    // Static files are served relative to the app, which sits at /~/+/
+    // on Community Cloud and at / when this runs locally. Deriving the
+    // prefix beats hardcoding either one.
+    var appPath = app.location.pathname || '/';
+    if (appPath.charAt(appPath.length - 1) !== '/') appPath += '/';
+    var assets = appPath + 'app/static/';
+
+    // The wrapper's head when there is one, this app's head when there
+    // is not. A cross-origin top would throw on .document; the catch
+    // below leaves the app document as the target.
+    var target = app.document;
+    try {{
+      if (window.top && window.top.document && window.top.document.head) {{
+        target = window.top.document;
+      }}
+    }} catch (e) {{ /* cross-origin top: keep the app document */ }}
+
+    var head = target.head;
+    if (!head) return;
+
+    // Streamlit's wrapper ships its own icon and manifest, so these two
+    // have to replace what is there rather than politely skip it.
+    function replace(selector, tag, attrs) {{
+      var existing = head.querySelectorAll(selector);
+      for (var i = 0; i < existing.length; i++) existing[i].remove();
+      var el = target.createElement(tag);
       for (var k in attrs) el.setAttribute(k, attrs[k]);
-      d.head.appendChild(el);
+      head.appendChild(el);
     }}
-    add('link[rel="apple-touch-icon"]', 'link',
-        {{rel: 'apple-touch-icon', sizes: '180x180',
-          href: '{icons}/apple-touch-icon.png'}});
-    add('link[rel="manifest"]', 'link',
-        {{rel: 'manifest', href: '{icons}/manifest.json'}});
-    add('meta[name="apple-mobile-web-app-title"]', 'meta',
-        {{name: 'apple-mobile-web-app-title', content: 'Boxscore'}});
-    add('meta[name="apple-mobile-web-app-capable"]', 'meta',
-        {{name: 'apple-mobile-web-app-capable', content: 'yes'}});
-    add('meta[name="mobile-web-app-capable"]', 'meta',
-        {{name: 'mobile-web-app-capable', content: 'yes'}});
-    add('meta[name="apple-mobile-web-app-status-bar-style"]', 'meta',
-        {{name: 'apple-mobile-web-app-status-bar-style', content: 'black'}});
-    add('meta[name="theme-color"]', 'meta',
-        {{name: 'theme-color', content: '#0a0d12'}});
+    function ensure(selector, tag, attrs) {{
+      if (head.querySelector(selector)) return;
+      replace(selector, tag, attrs);
+    }}
+
+    replace('link[rel="apple-touch-icon"], link[rel="apple-touch-icon-precomposed"]',
+            'link', {{rel: 'apple-touch-icon', sizes: '180x180',
+                     href: assets + 'apple-touch-icon.png'}});
+    replace('link[rel="manifest"]', 'link',
+            {{rel: 'manifest', href: assets + 'manifest.json'}});
+    replace('meta[name="theme-color"]', 'meta',
+            {{name: 'theme-color', content: '#0a0d12'}});
+
+    ensure('meta[name="apple-mobile-web-app-title"]', 'meta',
+           {{name: 'apple-mobile-web-app-title', content: '{APP_SHORT_NAME}'}});
+    ensure('meta[name="apple-mobile-web-app-capable"]', 'meta',
+           {{name: 'apple-mobile-web-app-capable', content: 'yes'}});
+    ensure('meta[name="mobile-web-app-capable"]', 'meta',
+           {{name: 'mobile-web-app-capable', content: 'yes'}});
+    ensure('meta[name="apple-mobile-web-app-status-bar-style"]', 'meta',
+           {{name: 'apple-mobile-web-app-status-bar-style', content: 'black'}});
+
+    // The wrapper's title is empty, which is what a bookmark, a shared
+    // link and a browser tab all fall back to showing a hostname for.
+    // Only filled when blank, so the app's own title is never clobbered.
+    if (!target.title) target.title = '{APP_NAME}';
   }} catch (e) {{
     /* A plainer home-screen icon is not worth breaking the page over. */
   }}
