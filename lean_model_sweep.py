@@ -267,7 +267,11 @@ def cross_check_published(data):
     pub = pd.read_csv(PUBLISHED_BACKTEST_PATH, dtype={"player_id": str, "game_id": str})
     j = data.merge(pub, on=["player_id", "season", "game_id"], how="left")
     missing = int(j["PTS_base"].isna().sum())
-    base_diff = max((j[f"{s}:season_avg"] - j[f"{s}_base"]).abs().max() for s in STATS)
+    # _flat, not _base: the lean models call direction against the flat
+    # season average, while _base is now the minutes-aware projection
+    # (engine/minutes.py). Comparing against _base would flag the
+    # minutes model itself as a divergence.
+    base_diff = max((j[f"{s}:season_avg"] - j[f"{s}_flat"]).abs().max() for s in STATS)
     pts = j["PTS_base"] > 0
     mult_diff = (j.loc[pts, "PTS_predicted"] / j.loc[pts, "PTS_base"] - j.loc[pts, "defense_mult"]).abs().max()
     print(f"  cross-check vs backtest_results.csv: {len(data)} cases, {missing} not in the published set, "
