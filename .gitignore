@@ -29,3 +29,12 @@ prediction_log.csv.tmp.*
 # every Streamlit Cloud deploy.
 backtest_population.csv
 backtest_player_games.csv
+
+# Raw odds API responses. Captured nightly and kept LOCALLY ONLY:
+# SportsGameOdds' terms forbid redistributing their data through
+# "downloadable files, bulk exports" and this repo is public, so the
+# raw responses must never be committed. What travels instead is
+# line_records/ -- our own projections, the outcome, and a SHA-256 of
+# each raw response, so a claim can be audited against a file that is
+# produced on request rather than republished.
+line_snapshots/
