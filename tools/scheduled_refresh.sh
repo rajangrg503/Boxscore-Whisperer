@@ -135,6 +135,21 @@ if [ "$DELETED" -gt 50 ]; then
 fi
 
 if [ "$ADDED" -eq 0 ] && [ "$CHANGED" -eq 0 ] && [ "$DELETED" -eq 0 ]; then
+    # "Nothing changed" means two completely different things depending
+    # on whether anything was actually fetched. On a quiet day it is the
+    # correct, healthy answer. After a fetcher crashed it means the
+    # cache was never touched -- and saying "nothing changed; done" then
+    # is the same quiet lie as a stale cache reporting itself fresh.
+    #
+    # Seen for real on the first launchd run after the TCC fix: both
+    # fetchers died on ModuleNotFoundError, and the run still signed off
+    # with "nothing changed; done" and exit 0. A week of mornings like
+    # that reads as healthy in the log and in launchctl list.
+    if [ $ALL_STATUS -ne 0 ] || [ $CACHE_STATUS -ne 0 ]; then
+        die "nothing changed because nothing was fetched -- refresh_all exited \
+$ALL_STATUS, refresh_cache exited $CACHE_STATUS. The cache was NOT refreshed. \
+Exiting non-zero so 'launchctl list | grep boxscore' shows it."
+    fi
     say "nothing changed; done"
     exit 0
 fi

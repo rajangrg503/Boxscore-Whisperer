@@ -80,6 +80,40 @@ say "not in a macOS-protected folder -- launchd will be able to read it"
 
 [ -f "$REPO_DIR/tools/scheduled_refresh.sh" ] || die "tools/scheduled_refresh.sh is missing"
 
+# ---- which python, decided here and written into the job -------------
+# launchd hands a job a bare environment: PATH is /usr/bin:/bin:
+# /usr/sbin:/sbin and nothing else. So `python3` there resolves to
+# macOS's own /usr/bin/python3, which has no third-party packages, and
+# the first real run of this job died on:
+#
+#     ModuleNotFoundError: No module named 'pandas'
+#
+# after the TCC fix had already got it as far as running. The python
+# that matters is the one on YOUR PATH, which this installer can see
+# because it runs in your shell -- so it is resolved here, checked
+# here, and written into the plist rather than looked up at 08:30.
+PYTHON_BIN="$(command -v python3 2>/dev/null || true)"
+[ -n "$PYTHON_BIN" ] || die "no python3 on PATH -- cannot tell the job which python to use"
+PYTHON_DIR="$(cd "$(dirname "$PYTHON_BIN")" && pwd -P)"
+PYTHON_BIN="$PYTHON_DIR/$(basename "$PYTHON_BIN")"
+
+MISSING=""
+for mod in pandas nba_api requests; do
+    "$PYTHON_BIN" -c "import $mod" >/dev/null 2>&1 || MISSING="$MISSING $mod"
+done
+if [ -n "$MISSING" ]; then
+    die "$PYTHON_BIN cannot import:$MISSING
+
+  The refresh needs these. Install them for that interpreter, or put the
+  one that has them first on your PATH, then run this again:
+
+      $PYTHON_BIN -m pip install pandas nba_api requests
+
+  Checked now rather than at 08:30, because a job that fails then fails
+  to nobody."
+fi
+say "python: $PYTHON_BIN (pandas, nba_api, requests all import)"
+
 mkdir -p "$HOME/Library/LaunchAgents" "$REPO_DIR/logs" || die "could not create directories"
 
 # Errors go next to the refresh log from now on, not into /tmp. The
@@ -104,6 +138,18 @@ cat > "$PLIST" <<PLISTEOF
 
     <key>WorkingDirectory</key>
     <string>$REPO_DIR</string>
+
+    <!-- scheduled_refresh.sh honours \$PYTHON; without this it would
+         fall back to launchd's /usr/bin/python3, which has no pandas.
+         PATH carries the same interpreter's directory so anything the
+         refresh shells out to finds its neighbours too. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHON</key>
+        <string>$PYTHON_BIN</string>
+        <key>PATH</key>
+        <string>$PYTHON_DIR:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
 
     <key>StartCalendarInterval</key>
     <dict>
