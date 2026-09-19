@@ -55,7 +55,7 @@ from engine.game_log import fetch_combined_game_log, resolve_season_gamelog
 # refresh_all.py locally to populate/update data_cache/*.json (each
 # endpoint gated by data_watchdog/ before it's allowed to refresh), then
 # commit and push data_cache/ so the deployed app picks it up.
-from engine.cache import cached_or_live
+from engine.cache import CACHE_DIR, cached_or_live
 from engine.adjustments.missing_players import get_opponent_missing_adjustment
 from engine.adjustments.defender import get_defender_matchup_adjustment
 from engine.adjustments.scheme import get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS, NO_SCHEME
@@ -83,6 +83,7 @@ from engine.team_total import (
     minutes_profile,
 )
 from engine.baseline_stats import stats_from_gamelog
+from engine.freshness import cache_age, describe as describe_cache_age
 from engine.distribution import (
     DISTRIBUTION_META,
     STAT_DISTRIBUTIONS,
@@ -645,6 +646,8 @@ header[data-testid="stHeader"] {
     color: var(--bw-muted);
     font-size: 13px;
 }
+.bw-freshness.aging { color: var(--bw-amber-text); }
+.bw-freshness.stale { color: var(--bw-red-text); }
 .bw-proof span {
     display: inline-flex;
     align-items: center;
@@ -1159,6 +1162,12 @@ _CHECK_ICON = (
     'd="M16.7 5.3a1 1 0 0 1 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.4L8 12.6l7.3-7.3a1 1 0 0 1 1.4 0z" '
     'clip-rule="evenodd"/></svg>'
 )
+_WARN_ICON = (
+    '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" '
+    'd="M8.3 3.4a2 2 0 0 1 3.4 0l5.5 9.4A2 2 0 0 1 15.5 16h-11a2 2 0 0 1-1.7-3.2zM10 7a1 1 0 0 '
+    '1 1 1v3a1 1 0 1 1-2 0V8a1 1 0 0 1 1-1zm0 7.5a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2z" '
+    'clip-rule="evenodd"/></svg>'
+)
 
 
 def section_heading(title, sub=None, first=False):
@@ -1357,6 +1366,28 @@ with st.sidebar:
                     "tracked stats are saved with each prediction."
                 )
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _cache_freshness():
+    """How old the cached stats are. The app can't refresh them itself
+    (stats.nba.com blocks Streamlit Cloud, and GitHub's runners too),
+    so the honest thing is to show the age rather than let a stale cache
+    look current. Cheap: one JSON read plus stat() on the game logs."""
+    try:
+        return cache_age(CACHE_DIR, CURRENT_SEASON)
+    except Exception:
+        return {"level": "unknown", "age_days": None, "in_season": False}
+
+
+def _freshness_html():
+    state = _cache_freshness()
+    line = describe_cache_age(state)
+    if not line:
+        return ""
+    css = {"fresh": "fresh", "aging": "aging", "stale": "stale"}.get(state["level"], "fresh")
+    icon = _CHECK_ICON if state["level"] == "fresh" else _WARN_ICON
+    return f'<span class="bw-freshness {css}">{icon}<span>{html.escape(line)}</span></span>'
+
+
 st.markdown(
     '<div class="bw-hero">'
     '<span class="bw-eyebrow"><span class="dot"></span>NBA statline estimates</span>'
@@ -1367,6 +1398,7 @@ st.markdown(
     f'<span>{_CHECK_ICON}<span><b>70,944</b> player-games backtested</span></span>'
     f'<span>{_CHECK_ICON}No lookahead</span>'
     f'<span>{_CHECK_ICON}Not a black-box model</span>'
+    f'{_freshness_html()}'
     '</div>'
     '<div class="bw-notice">Independent and unofficial. For information and entertainment, '
     'not betting advice. 18+. Full notice at the bottom of the page.</div>'

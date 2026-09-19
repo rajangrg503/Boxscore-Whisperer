@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Runs tools/scheduled_refresh.sh every morning at 08:30 local time.
+
+  EDIT THE TWO PATHS BELOW to match where this repo lives, then:
+      cp tools/com.boxscorewhisperer.refresh.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.boxscorewhisperer.refresh.plist
+
+  To stop it:
+      launchctl unload ~/Library/LaunchAgents/com.boxscorewhisperer.refresh.plist
+
+  If the Mac is asleep at 08:30, launchd runs the job when it next wakes.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.boxscorewhisperer.refresh</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/CHANGE_ME/Boxscore-Whisperer/tools/scheduled_refresh.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/CHANGE_ME/Boxscore-Whisperer</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>8</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/boxscore-refresh.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/boxscore-refresh.err</string>
+</dict>
+</plist>
