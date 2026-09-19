@@ -88,6 +88,7 @@ the threshold rule changes; the JSON and lean.py then stay in sync.
 
 import json
 import os
+import sys
 import time
 
 import numpy as np
@@ -114,6 +115,15 @@ CUTOFFS = np.round(np.arange(0.0, 0.4501, 0.005), 3)
 TARGET_TRAIN_ACC = 0.62
 SHIP_ACC = 0.60
 MIN_COVERAGE = 0.05
+# A stat also has to BEAT THE TRIVIAL RULE by a usable margin, not just
+# beat it significantly. On the full point-in-time population (2.4x the
+# old case count) steals, threes made, turnovers and offensive rebounds
+# all clear a "lift CI above zero" test with lifts of 0.1 to 1.2 points
+# -- statistically real, useless to a reader, and exactly the "low-
+# average stats usually land below average" artefact the old fit
+# excluded for having a CI that touched zero. A lean has to be worth
+# showing, so the lift itself must clear MIN_LIFT.
+MIN_LIFT = 0.02
 L2 = 1.0
 LEVEL_ONLY = ["log_level", "log_games"]
 VERIFY_EVERY = 20
@@ -149,6 +159,48 @@ def season_features(reg):
             f["volume_l10"] = _rel(v10, v_base)
         feats[stat] = f
     return feats
+
+
+def build_population():
+    """The same case table as build(), but over every player-game in
+    build_backtest_population.py's point-in-time population instead of
+    the top-150-by-end-of-season-minutes list. Features come from the
+    same season_features() call, fed the player's played games in date
+    order, so the two case sets differ only in who is in them.
+
+    The opponent-defence multiplier is read from the population file's
+    own PTS column (base -> predicted), which was produced by the same
+    month-end checkpoints this module's build() uses."""
+    games = pd.read_csv(os.path.join(REPO_ROOT, "backtest_player_games.csv"),
+                        dtype={"player_id": str, "game_id": str})
+    pop = pd.read_csv(os.path.join(REPO_ROOT, "backtest_population.csv"),
+                      dtype={"player_id": str, "game_id": str})
+    pop["defense_mult"] = np.where(pop["PTS_base"] > 0,
+                                   pop["PTS_predicted"] / pop["PTS_base"].replace(0, np.nan), 1.0)
+    mult = {(r.player_id, r.season, r.game_id): r.defense_mult for r in pop.itertuples()}
+    eligible = set(mult)
+    games = games.sort_values(["player_id", "season", "game_date"], kind="mergesort")
+    rows = []
+    for (player_id, season), reg in games.groupby(["player_id", "season"], sort=False):
+        if len(reg) <= lean.MIN_GAMES:
+            continue
+        reg = reg.reset_index(drop=True).rename(columns={"minutes": "MIN"})
+        feats = season_features(reg)
+        for i in range(lean.MIN_GAMES, len(reg)):
+            g = reg.iloc[i]
+            key = (player_id, season, g["game_id"])
+            if key not in eligible:
+                continue
+            m = mult[key]
+            row = {"player_id": player_id, "season": season, "game_id": g["game_id"],
+                   "n_games": i, "defense_mult": m}
+            for stat in STATS:
+                for name, arr in feats[stat].items():
+                    row[f"{stat}:{name}"] = float(arr[i])
+                row[f"{stat}:defense"] = m - 1.0
+                row[f"{stat}:actual"] = float(g[stat])
+            rows.append(row)
+    return pd.DataFrame(rows), []
 
 
 def build():
@@ -276,10 +328,16 @@ def balanced_accuracy(p, y, s):
 
 
 def main():
-    print("Building point-in-time cases ...")
-    data, verify = build()
-    verify_features(verify)
-    cross_check_published(data)
+    population = "--population" in sys.argv
+    print("Building point-in-time cases "
+          + ("over the full point-in-time population ..." if population
+             else "over the top-150 list ..."))
+    if population:
+        data, verify = build_population()
+    else:
+        data, verify = build()
+        verify_features(verify)
+        cross_check_published(data)
     seasons = data["season"].values
     season_list = [s for s, _ in SEASONS]
     clusters = (data["player_id"] + "_" + data["season"]).values
@@ -374,7 +432,8 @@ def main():
             called_ship, _, _ = call_stats(p_oos, y, scored, ship_cut)
             out_rows.append(strong_row("shipped_cutoff_on_loso", "pooled", called_ship, ship_cut, everywhere))
         ok = (feasible and pooled.get("accuracy", 0) >= SHIP_ACC and pooled["coverage"] >= MIN_COVERAGE
-              and pooled.get("lift_ci_lo", -1) > 0)
+              and pooled.get("lift_ci_lo", -1) > 0
+              and pooled.get("lift_vs_level_only", 0) >= MIN_LIFT)
         for r in out_rows:
             if r["stat"] == stat:
                 r["shipped"] = bool(ok)
@@ -407,7 +466,7 @@ def main():
                    "rule": (f"LOSO; nested fold cutoff = smallest |p-0.5| with training accuracy >= "
                             f"{TARGET_TRAIN_ACC} and coverage >= {MIN_COVERAGE}; shipped threshold = "
                             f"median of fold cutoffs; coefficients refit on all seasons; ship if pooled "
-                            f"held-out accuracy >= {SHIP_ACC}, coverage >= {MIN_COVERAGE}, lift over "
+                            f"held-out accuracy >= {SHIP_ACC}, coverage >= {MIN_COVERAGE}, lift >= {MIN_LIFT} over "
                             f"level-only CI > 0"),
                    "models": shipped}, f, indent=1, sort_keys=True)
     # engine/lean.py must reproduce the refit models from the file just written
@@ -443,7 +502,7 @@ def main():
         print(f"  {stat}: threshold {m['threshold']}, coef " + ", ".join(
             f"{n}={c:+.3f}" for n, c in zip(m["features"], m["coef"])) + f", intercept {m['intercept']:+.3f}")
     print(f"\nWrote {len(res)} rows to {OUTPUT_PATH} and {len(shipped)} models to {MODELS_PATH}.")
-    print("SCOPE: top-150 players, regular season, >= 10 prior games, features = engine/lean.py's "
+    print(f"SCOPE: {'full point-in-time population' if population else 'top-150 players'}, regular season, >= 10 prior games, features = engine/lean.py's "
           "(no venue/schedule) -- see module docstring.")
 
 

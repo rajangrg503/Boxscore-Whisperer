@@ -49,6 +49,7 @@ Usage:
 
 import json
 import os
+import sys
 
 import numpy as np
 import pandas as pd
@@ -118,8 +119,10 @@ def cluster_ci(df, value, rng):
 
 
 def main():
-    print("Building point-in-time cases (same set as lean_model_sweep.py) ...")
-    data, _verify = lms.build()
+    population = "--population" in sys.argv
+    print("Building point-in-time cases (same set as lean_model_sweep.py) "
+          + ("over the full point-in-time population ..." if population else "..."))
+    data, _verify = lms.build_population() if population else lms.build()
     shipped = sorted(lean.LEAN_MODELS)
     print(f"{len(data)} cases; shipped lean stats: {shipped}\n")
     leans = loso_leans(data, shipped)

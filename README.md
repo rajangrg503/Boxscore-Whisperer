@@ -61,3 +61,23 @@ The sweep fits several candidate distributions, scores them on seasons
 they were never fitted on, and keeps the best per stat. It also records
 what the old fixed band did, for comparison. Rerun it after any change
 that moves the projections themselves.
+
+The backtest population
+-----------------------
+`build_backtest_population.py` builds the case set the published numbers
+use: every player in the three cached seasons, from his 6th played game
+of a season onward, decided as of each game date, from the cached box
+scores (70,944 player-games, 746 players). It writes
+backtest_population.csv and backtest_player_games.csv.
+
+`run_backtest.py` is the older list -- the top 150 players by minutes
+played over the WHOLE season, which is only knowable in April. It is
+kept as a cross-check: on the games the two sets share, the baselines
+and predictions match exactly.
+
+The sweeps take `--population` to fit on the honest set:
+
+    python3 build_backtest_population.py
+    python3 lean_model_sweep.py --population
+    python3 clearest_read_sweep.py --population
+    python3 calibration_sweep.py --population
