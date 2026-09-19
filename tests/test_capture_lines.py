@@ -1,0 +1,237 @@
+"""Tests for tools/capture_lines.py -- the nightly line snapshot.
+
+This job has an unusual property: its failures are unrecoverable. A
+parsing bug can be fixed and re-run over stored snapshots; a capture
+bug means that night's closing line is gone from every free source and
+no amount of later work brings it back.
+
+So what is pinned here is mostly about not losing evidence and not
+producing false evidence:
+
+  * an unauthenticated run refuses rather than returning "no games",
+    which would be indistinguishable from a quiet night
+  * a genuinely quiet night exits 0 and writes nothing, so the
+    off-season does not page anybody every hour
+  * the response is stored verbatim, because the schema is not ours and
+    anything this script "understands" is a guess it could get wrong
+  * captured_at is OUR clock at request time -- the field an accuracy
+    claim rests on
+"""
+
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+import pytest
+
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+
+import capture_lines as cl  # noqa: E402
+
+
+WHEN = datetime(2026, 10, 21, 1, 30, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def snapshots(tmp_path, monkeypatch):
+    monkeypatch.setattr(cl, "SNAPSHOT_DIR", str(tmp_path / "line_snapshots"))
+    monkeypatch.setattr(cl, "RECORD_DIR", str(tmp_path / "line_records"))
+    monkeypatch.setattr(cl, "REPO_ROOT", str(tmp_path))
+    return tmp_path / "line_snapshots"
+
+
+# ---- refusing to produce false evidence ----------------------------------
+def test_without_a_key_it_refuses_rather_than_reporting_a_quiet_night(monkeypatch, capsys):
+    """An unauthenticated request returns nothing, which looks exactly
+    like an off-season night. Exiting 2 makes the difference visible."""
+    monkeypatch.delenv(cl.KEY_ENV, raising=False)
+    assert cl.main([]) == 2
+    assert cl.KEY_ENV in capsys.readouterr().err
+
+
+def test_an_http_error_fails_loudly(monkeypatch, snapshots):
+    """A bad key or a spent quota needs a person. A capture job that
+    fails quietly is a season of missing evidence."""
+    import urllib.error
+
+    def boom(*a, **k):
+        raise urllib.error.HTTPError("u", 401, "Unauthorized", {}, None)
+
+    monkeypatch.setenv(cl.KEY_ENV, "x")
+    monkeypatch.setattr(cl, "fetch_events", boom)
+    assert cl.main([]) == 1
+    assert not snapshots.exists()
+
+
+def test_a_night_with_no_games_is_success_not_failure(monkeypatch, snapshots, capsys):
+    """The season starts in October. Nine months of hourly failures
+    would train everyone to ignore this job."""
+    monkeypatch.setenv(cl.KEY_ENV, "x")
+    monkeypatch.setattr(cl, "fetch_events", lambda *a, **k: ({"data": []}, []))
+    assert cl.main([]) == 0
+    assert "no events" in capsys.readouterr().out
+    assert not snapshots.exists()
+
+
+def test_a_dry_run_writes_nothing(monkeypatch, snapshots):
+    monkeypatch.setenv(cl.KEY_ENV, "x")
+    monkeypatch.setattr(cl, "fetch_events",
+                        lambda *a, **k: ({"data": [{"eventID": "1"}]}, [{"eventID": "1"}]))
+    assert cl.main(["--dry-run"]) == 0
+    assert not snapshots.exists()
+
+
+# ---- what gets written ----------------------------------------------------
+def test_the_response_is_stored_verbatim(snapshots):
+    """The schema belongs to somebody else and will change. Anything
+    this script normalises now is a guess that could be wrong, and a
+    wrong guess is unrecoverable -- unlike a parsing bug, which can be
+    fixed and re-run over these files."""
+    payload = {"data": [{"eventID": "abc", "odds": {"weird": ["shape", 1, None]}}],
+               "nextCursor": "xyz"}
+    path, _ = cl.write_snapshot(payload, payload["data"], WHEN)
+    stored = json.load(open(path))
+    assert stored["response"] == payload
+
+
+def test_it_records_when_we_asked(snapshots):
+    """The field an accuracy claim rests on: the line was captured
+    before the game, and here is when."""
+    path, _ = cl.write_snapshot({"data": []}, [], WHEN)
+    assert json.load(open(path))["captured_at"] == "2026-10-21T01:30:00+00:00"
+
+
+def test_the_event_count_is_recorded_so_summaries_need_no_parsing(snapshots):
+    events = [{"eventID": str(i)} for i in range(7)]
+    path, _ = cl.write_snapshot({"data": events}, events, WHEN)
+    assert json.load(open(path))["event_count"] == 7
+
+
+def test_snapshots_sort_by_filename_into_capture_order(snapshots):
+    """Reading a season back in order should not require parsing every
+    file to find out when it was taken."""
+    early = cl.snapshot_path(datetime(2026, 10, 21, 1, 0, tzinfo=timezone.utc))
+    late = cl.snapshot_path(datetime(2026, 10, 21, 3, 0, tzinfo=timezone.utc))
+    assert os.path.dirname(early) == os.path.dirname(late)   # same night
+    assert os.path.basename(early) < os.path.basename(late)
+
+
+def test_several_captures_a_night_do_not_overwrite_each_other(snapshots):
+    """Five runs a night is the point -- one of them is nearest to tip."""
+    a, _ = cl.write_snapshot({"data": []}, [], datetime(2026, 10, 21, 1, 0, tzinfo=timezone.utc))
+    b, _ = cl.write_snapshot({"data": []}, [], datetime(2026, 10, 21, 2, 0, tzinfo=timezone.utc))
+    assert a != b
+    assert os.path.exists(a) and os.path.exists(b)
+
+
+# ---- reading what is there ------------------------------------------------
+def test_summarise_copes_with_nothing_captured_yet(snapshots, capsys):
+    assert cl.summarise() == 0
+    assert "no snapshots" in capsys.readouterr().out
+
+
+def test_summarise_counts_without_choking_on_a_damaged_file(snapshots, capsys):
+    """One unreadable file must not hide the rest of the season."""
+    events = [{"eventID": "1"}, {"eventID": "2"}]
+    cl.write_snapshot({"data": events}, events, WHEN)
+    bad = os.path.join(os.path.dirname(cl.snapshot_path(WHEN)), "broken.json")
+    open(bad, "w").write("{not json")
+
+    assert cl.summarise() == 0
+    out = capsys.readouterr().out
+    assert "2026-10-21" in out
+    assert "2 event" in out
+
+
+# ---- the quota seatbelt ---------------------------------------------------
+def test_there_is_a_cap_on_events_per_run():
+    """The free tier bills per event and the season's evidence is worth
+    more than any one night: a scheduling mistake must not spend the
+    month's allowance in an afternoon."""
+    assert 0 < cl.MAX_EVENTS_PER_RUN <= 100
+
+
+def test_the_request_asks_only_for_games_with_odds(monkeypatch):
+    """Events without odds cost quota and carry nothing worth storing."""
+    seen = {}
+
+    def fake_get(path, params, api_key):
+        seen.update(path=path, params=params, key=api_key)
+        return {"data": []}
+
+    monkeypatch.setattr(cl, "_get", fake_get)
+    cl.fetch_events("key-123")
+    assert seen["path"] == "events"
+    assert seen["params"]["leagueID"] == "NBA"
+    assert seen["params"]["oddsAvailable"] == "true"
+    assert seen["params"]["limit"] == cl.MAX_EVENTS_PER_RUN
+    assert seen["key"] == "key-123"
+
+
+def test_events_are_found_whatever_the_envelope(monkeypatch):
+    """Three plausible response shapes, because the schema is not
+    documented well enough to bet a season on one reading of it."""
+    for payload, expected in (
+        ({"data": [1, 2]}, 2),
+        ({"events": [1, 2, 3]}, 3),
+        ([1, 2, 3, 4], 4),
+        ({"unexpected": "shape"}, 0),
+    ):
+        monkeypatch.setattr(cl, "_get", lambda *a, **k: payload)
+        _, events = cl.fetch_events("k")
+        assert len(events) == expected
+
+
+# ---- the public half: a commitment, not a copy ---------------------------
+def test_the_record_carries_a_digest_and_no_odds(snapshots, tmp_path):
+    """This repo is public and the provider's terms forbid republishing
+    their data. The record must fix the capture beyond later revision
+    without reproducing a single price."""
+    payload = {"data": [{"eventID": "a", "odds": {"points": 26.5, "price": -115}}]}
+    path, digest = cl.write_snapshot(payload, payload["data"], WHEN)
+    record_path = cl.append_record(WHEN, 1, digest, path)
+
+    row = json.loads(open(record_path).read().strip())
+    assert row["sha256"] == digest
+    assert row["event_count"] == 1
+    assert row["captured_at"] == "2026-10-21T01:30:00+00:00"
+
+    blob = open(record_path).read()
+    for leaked in ("26.5", "-115", "odds", "price"):
+        assert leaked not in blob, f"{leaked!r} must not travel in the public record"
+
+
+def test_the_digest_matches_the_file_on_disk(snapshots):
+    """Verifiable with sha256sum alone -- no Python, no knowledge of
+    this script, no trust in it."""
+    import hashlib
+    payload = {"data": [{"eventID": "a"}]}
+    path, digest = cl.write_snapshot(payload, payload["data"], WHEN)
+    assert hashlib.sha256(open(path, "rb").read()).hexdigest() == digest
+
+
+def test_a_changed_snapshot_no_longer_matches_its_record(snapshots):
+    """The property the whole design rests on: editing the raw file
+    afterwards breaks the digest published at capture time."""
+    path, digest = cl.write_snapshot({"data": [{"eventID": "a"}]}, [{"eventID": "a"}], WHEN)
+    import hashlib
+    open(path, "w").write('{"captured_at":"2026-10-21T01:30:00+00:00","tampered":true}')
+    assert hashlib.sha256(open(path, "rb").read()).hexdigest() != digest
+
+
+def test_records_append_within_a_month_rather_than_overwrite(snapshots):
+    a = cl.append_record(WHEN, 1, "aa", "x.json")
+    b = cl.append_record(datetime(2026, 10, 22, 1, 0, tzinfo=timezone.utc), 2, "bb", "y.json")
+    assert a == b                                  # same month, same file
+    assert len(open(a).read().strip().splitlines()) == 2
+
+
+def test_a_full_run_writes_both_halves(monkeypatch, snapshots, tmp_path):
+    events = [{"eventID": "1"}]
+    monkeypatch.setenv(cl.KEY_ENV, "x")
+    monkeypatch.setattr(cl, "fetch_events", lambda *a, **k: ({"data": events}, events))
+    assert cl.main([]) == 0
+    assert snapshots.exists()                      # raw, gitignored
+    assert (tmp_path / "line_records").exists()    # record, committed
