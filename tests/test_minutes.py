@@ -124,3 +124,27 @@ def test_a_thin_log_falls_back_to_the_flat_average():
     d = log([30] * (m.MIN_PRIOR_GAMES - 1))
     aware, _ = stats_from_gamelog(d, COLS)
     assert aware["PTS"][0] == pytest.approx(d["PTS"].mean())
+
+
+# ---- why the model declined, said out loud ------------------------------
+def test_why_not_is_none_when_the_model_applies():
+    assert m.why_not(log([10, 10, 30, 30, 30]), COLS) is None
+
+
+def test_why_not_names_a_thin_log():
+    assert "played games" in m.why_not(log([30, 30]), COLS)
+
+
+def test_why_not_names_a_missing_stat_column():
+    d = log([30] * 6)
+    reason = m.why_not(d, COLS + [("FG3A", "3PT attempts")])
+    assert "FG3A" in reason
+
+
+def test_why_not_and_means_always_agree():
+    """The page reads why_not to decide whether to explain a per-minute
+    rate; if the two ever disagree it prints prose about a model that
+    didn't run."""
+    for mins in ([10, 10, 30, 30, 30], [30, 30], [0, 0, 0, 0, 0, 0], [30] * 6):
+        d = log(mins)
+        assert (m.why_not(d, COLS) is None) == (m.minutes_aware_means(d, COLS) is not None)
