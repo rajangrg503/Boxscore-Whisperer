@@ -103,15 +103,28 @@ It refuses to push when the tree is dirty, when it isn't on `main`, or
 when the refresh would delete more than 50 cache files, and it says so
 when the watchdog reports an endpoint failing validation.
 
-To run it every morning on a Mac, edit the two paths in
-`tools/com.boxscorewhisperer.refresh.plist`, then:
+To run it every morning on a Mac:
 
-    cp tools/com.boxscorewhisperer.refresh.plist ~/Library/LaunchAgents/
-    launchctl load ~/Library/LaunchAgents/com.boxscorewhisperer.refresh.plist
+    bash tools/install_refresh_job.sh
+
+That writes and loads the launchd plist from this checkout's real path,
+so there is nothing to hand-edit.
+
+**The checkout must not live in `~/Documents`, `~/Desktop` or
+`~/Downloads`.** macOS protects those folders, and the `/bin/bash` that
+launchd spawns has no permission to read them — the job installs
+cleanly, reports exit code 126, and never runs a single line. It failed
+that way here for three days in September 2026 before anyone noticed,
+because launchd cannot raise a consent prompt at 08:30 with nobody at
+the machine. The installer refuses to proceed from a protected folder
+for that reason; `~/Projects` or anything else under the home folder
+needs no permission at all.
 
 The app shows the cache's age in the header during the season
 (engine/freshness.py), so a refresh that stops running is visible rather
-than silent.
+than silent — though as the above shows, "visible" only helps if
+somebody looks. launchd's own stderr now lands in `logs/launchd.err`,
+next to `logs/refresh.log`, instead of in `/tmp`.
 
 
 Hit rates, and not counting the same games twice

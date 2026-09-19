@@ -21,10 +21,15 @@
 # tools/pack_cache.py, which compares the folder against the archive
 # file by file and reports added / changed / removed separately.
 #
-# Install (macOS, runs every morning):
-#   cp tools/com.boxscorewhisperer.refresh.plist ~/Library/LaunchAgents/
-#   # edit the two paths in that file to match this checkout, then:
-#   launchctl load ~/Library/LaunchAgents/com.boxscorewhisperer.refresh.plist
+# Install (macOS, runs every morning at 08:30):
+#   bash tools/install_refresh_job.sh
+#
+# That script writes and loads the launchd plist using this checkout's
+# real path, and refuses to install if the repo sits in ~/Documents,
+# ~/Desktop or ~/Downloads -- macOS protects those, launchd's bash
+# cannot read them, and the job then fails with exit 126 every morning
+# without running a line. That is not hypothetical: it is what happened
+# here for three days in September 2026.
 #
 # Run by hand any time:
 #   bash tools/scheduled_refresh.sh            # refresh, commit, push
