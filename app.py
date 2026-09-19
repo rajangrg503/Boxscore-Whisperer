@@ -1272,6 +1272,20 @@ def section_heading(title, sub=None, first=False):
 # can't be sliced any finer).
 RANGE_NOMINAL = 0.8
 
+# The default "Baseline source" option, and the value four separate
+# branches compare against to decide whether a head-to-head baseline is
+# in play. A constant rather than the literal in four places, because
+# renaming it used to mean finding all four and getting every character
+# right -- a silent `!=` that never matches would quietly put every
+# prediction on the head-to-head path.
+#
+# It was called "Season average (default)" until the baseline stopped
+# being an average: it is a per-minute rate times projected minutes now
+# (engine/minutes.py). What still distinguishes it from the other two
+# options is WHICH GAMES feed it -- all of them, rather than the last
+# few meetings with this opponent -- so that is what it says.
+BASELINE_FULL_SEASON = "Full season (default)"
+
 
 def prediction_entry(col, base_mean, base_std, multiplier, n_games, spread_multiplier=1.0):
     """One stat's entry in `predictions`: the projected number, the
@@ -1968,12 +1982,12 @@ with tab1:
         with base_col:
             baseline_source_input = st.selectbox(
                 "Baseline source",
-                ["Season average (default)", "Last 5 meetings", "Last 10 meetings"],
+                [BASELINE_FULL_SEASON, "Last 5 meetings", "Last 10 meetings"],
                 index=0,
                 help=(
-                    "Head-to-head baselines use real games vs. this specific opponent — more "
-                    "relevant if a player has a real history against this team, but based on a "
-                    "much smaller sample than a full season."
+                    "Which games the baseline is built from. Head-to-head uses real games vs. "
+                    "this specific opponent — more relevant if a player has a real history "
+                    "against this team, but a much smaller sample than a full season."
                 ),
             )
         with blend_col:
@@ -1981,45 +1995,59 @@ with tab1:
                 "Use only this source, no season blending",
                 value=False,
                 help=(
-                    "By default, even a head-to-head baseline is blended with the season "
-                    "average for reliability (a handful of games can't fully override a "
+                    "By default, even a head-to-head baseline is blended with the full-season "
+                    "baseline for reliability (a handful of games can't fully override a "
                     "full season on their own). Check this to use the selected baseline "
                     "source on its own instead — only applies when a head-to-head option "
                     "is selected."
                 ),
             )
 
+        # Said once, here, rather than nine times in nine labels -- and
+        # said accurately. A blank line falls back to
+        # predictions[col]["base"], which stopped being a season average
+        # when the baseline went minutes-aware (engine/minutes.py), and
+        # was never the number on the statline card either: "base" is
+        # taken before the opponent-defense multiplier. You can watch
+        # the two come apart on any player whose adjustment is big
+        # enough to survive rounding -- 3PT attempts showing 4.5 on the
+        # card and 4.4 on the hit-rate row is that gap, not a typo.
+        st.caption(
+            "Leave a line at 0 and that stat's hit rates use his **projected baseline** "
+            "instead — his own minutes-aware number, before the opponent adjustment."
+        )
         line1, line2, line3 = st.columns(3)
         with line1:
             pts_line_input = st.number_input(
-                "Points line (0 = season average)", min_value=0.0, value=0.0, step=0.5
+                "Points line", min_value=0.0, value=0.0, step=0.5
             )
         with line2:
             ast_line_input = st.number_input(
-                "Assists line (0 = season average)", min_value=0.0, value=0.0, step=0.5
+                "Assists line", min_value=0.0, value=0.0, step=0.5
             )
         with line3:
             reb_line_input = st.number_input(
-                "Rebounds line (0 = season average)", min_value=0.0, value=0.0, step=0.5
+                "Rebounds line", min_value=0.0, value=0.0, step=0.5
             )
 
         with st.expander("More stat lines (steals, blocks, 3s, turnovers, offensive boards)"):
+            st.caption("Same here: 0 uses his projected baseline for that stat.")
             line4, line5, line6, line7 = st.columns(4)
             with line4:
                 stl_line_input = st.number_input(
-                    "Steals line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                    "Steals line", min_value=0.0, value=0.0, step=0.5
                 )
             with line5:
                 blk_line_input = st.number_input(
-                    "Blocks line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                    "Blocks line", min_value=0.0, value=0.0, step=0.5
                 )
             with line6:
                 fg3m_line_input = st.number_input(
-                    "3PM line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                    "3PM line", min_value=0.0, value=0.0, step=0.5
                 )
             with line7:
                 tov_line_input = st.number_input(
-                    "Turnovers line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                    "Turnovers line", min_value=0.0, value=0.0, step=0.5
                 )
             # FG3A and OREB were added as tracked stats after hit rates were
             # first removed; every STAT_COLUMNS entry needs a line input,
@@ -2027,11 +2055,11 @@ with tab1:
             line8, line9 = st.columns(2)
             with line8:
                 fg3a_line_input = st.number_input(
-                    "3PA line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                    "3PA line", min_value=0.0, value=0.0, step=0.5
                 )
             with line9:
                 oreb_line_input = st.number_input(
-                    "Off. rebounds line (0 = season avg)", min_value=0.0, value=0.0, step=0.5
+                    "Off. rebounds line", min_value=0.0, value=0.0, step=0.5
                 )
 
         with st.expander("Advanced options (injuries, defender, scheme)"):
@@ -2149,7 +2177,7 @@ with tab1:
 
                 team_h2h_stats, team_h2h_n = None, 0
                 team_h2h_note = None
-                if baseline_source_input != "Season average (default)":
+                if baseline_source_input != BASELINE_FULL_SEASON:
                     num_games = 5 if "Last 5" in baseline_source_input else 10
                     team_h2h_stats, team_h2h_note, team_h2h_n = get_head_to_head_baseline(
                         player_id, opponent_abbr, num_games, cutoff_date=h2h_cutoff
@@ -2224,7 +2252,7 @@ with tab1:
                     parts = [f"season avg {blend_weights['season']:.0%}"]
                     if team_h2h_n > 0:
                         parts.append(f"team h2h {blend_weights['team_h2h']:.0%} ({team_h2h_note})")
-                    elif baseline_source_input != "Season average (default)" and team_h2h_note:
+                    elif baseline_source_input != BASELINE_FULL_SEASON and team_h2h_note:
                         parts.append(f"team h2h unavailable ({team_h2h_note})")
                     for label, stats, n in extra_sources:
                         if n > 0 and stats is not None:
@@ -2430,7 +2458,7 @@ with tab1:
             # opponent and 85% of matchups have fewer than 10. Showing
             # the opponent number alone would read as more relevant and
             # be far less reliable.
-            using_h2h = baseline_source_input != "Season average (default)"
+            using_h2h = baseline_source_input != BASELINE_FULL_SEASON
             opponent_log_for_hitrate = get_head_to_head_log(
                 player_id, opponent_abbr, cutoff_date=h2h_cutoff)
             try:
@@ -2846,8 +2874,9 @@ with tab1:
                     )
 
         # Hit-rate tables, props.cash style, for all three stats. Each
-        # defaults to that stat's season average if the user left the
-        # line at 0, clearly labeled which source is being used.
+        # defaults to that stat's projected baseline -- predictions[col]
+        # ["base"], before the opponent multiplier -- if the user left
+        # the line at 0, clearly labeled which source is being used.
         hit_rate_configs = [
             (label, line_inputs[col], predictions[col]["base"], col)
             for col, label in STAT_COLUMNS

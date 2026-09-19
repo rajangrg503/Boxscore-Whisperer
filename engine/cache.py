@@ -46,9 +46,8 @@ ARCHIVE_PATH = os.path.join(REPO_ROOT, cache_archive.ARCHIVE_NAME)
 # folder the refresh scripts and the watchdog work in, the folder the
 # tests point somewhere else. BW_CACHE_DIR moves it, for a run against
 # a cache kept elsewhere.
-CACHE_DIR = os.environ.get("BW_CACHE_DIR", "").strip() or os.path.join(
-    REPO_ROOT, cache_archive.CACHE_DIR_NAME
-)
+DEFAULT_CACHE_DIR = os.path.join(REPO_ROOT, cache_archive.CACHE_DIR_NAME)
+CACHE_DIR = os.environ.get("BW_CACHE_DIR", "").strip() or DEFAULT_CACHE_DIR
 
 # The archive is consulted only when that folder isn't there, which in
 # practice means only on the deployed app: a development machine has
@@ -80,6 +79,14 @@ def read_payload(key):
     this -- the loaders, the freshness banner -- asks for a key and gets
     a payload, and never learns whether it came off the filesystem or
     out of the archive.
+
+    The archive answers ONLY for the default cache directory. Anyone who
+    has moved CACHE_DIR has said which cache they want, and quietly
+    serving a different one from the archive would be worse than a miss:
+    a test that points CACHE_DIR at an empty directory to prove a
+    missing file raises would instead be handed the real data and pass
+    for the wrong reason, and a backtest isolated the same way would
+    silently read outside its own fixture.
     """
     path = _cache_key_to_path(key)
     if os.path.exists(path):
@@ -88,7 +95,7 @@ def read_payload(key):
                 return json.load(f)
         except (OSError, ValueError):
             return None
-    if ARCHIVE is not None:
+    if ARCHIVE is not None and CACHE_DIR == DEFAULT_CACHE_DIR:
         return ARCHIVE.read_json(_cache_key_to_name(key))
     return None
 
