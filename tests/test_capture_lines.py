@@ -170,6 +170,28 @@ def test_the_request_asks_only_for_games_with_odds(monkeypatch):
     assert seen["key"] == "key-123"
 
 
+def test_it_asks_only_for_games_about_to_start(monkeypatch):
+    """The first real dry run returned 40 events -- the cap, in
+    September, with no NBA being played. The endpoint hands back the
+    whole schedule unless asked otherwise, and at one billed object per
+    event that is the month's allowance in two days."""
+    seen = {}
+    monkeypatch.setattr(cl, "_get",
+                        lambda path, params, key: seen.update(params) or {"data": []})
+    now = datetime(2026, 10, 21, 23, 0, 0, tzinfo=timezone.utc)
+    cl.fetch_events("k", now=now)
+
+    assert seen["startsAfter"] == "2026-10-21T22:00:00Z"    # 1h back
+    assert seen["startsBefore"] == "2026-10-22T11:00:00Z"   # 12h forward
+
+
+def test_the_window_reaches_back_far_enough_to_catch_a_tipped_game(monkeypatch):
+    """A game that has just started still has the most recent line we
+    can honestly call a close."""
+    assert cl.WINDOW_HOURS_BEHIND >= 1
+    assert cl.WINDOW_HOURS_AHEAD >= 8      # a full evening slate
+
+
 def test_events_are_found_whatever_the_envelope(monkeypatch):
     """Three plausible response shapes, because the schema is not
     documented well enough to bet a season on one reading of it."""
