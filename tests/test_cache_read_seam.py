@@ -37,7 +37,15 @@ def loose(tmp_path, files):
 
 
 def point_at(monkeypatch, cache_dir, archive=None):
+    """Stand in for a machine whose default cache dir is this one.
+
+    DEFAULT_CACHE_DIR moves with CACHE_DIR here, because the archive
+    only answers for the default directory -- see
+    test_moving_the_cache_dir_switches_the_archive_off for the reason,
+    and for what happens when the two differ.
+    """
     monkeypatch.setattr(cache_module, "CACHE_DIR", str(cache_dir))
+    monkeypatch.setattr(cache_module, "DEFAULT_CACHE_DIR", str(cache_dir))
     monkeypatch.setattr(cache_module, "ARCHIVE", archive)
 
 
@@ -85,6 +93,33 @@ def test_a_key_in_neither_place_is_a_miss_not_an_error(tmp_path, monkeypatch):
 def test_with_no_archive_at_all_a_miss_is_still_just_a_miss(tmp_path, monkeypatch):
     point_at(monkeypatch, tmp_path / "absent", None)
     assert cache_module._load_df_cache("anything") == (None, None)
+
+
+def test_moving_the_cache_dir_switches_the_archive_off(tmp_path, monkeypatch):
+    """Isolation has to mean isolation.
+
+    A caller who moves CACHE_DIR -- a test proving a missing file
+    raises, a backtest confined to its own fixture, anyone running with
+    BW_CACHE_DIR -- has said which cache they want. Answering from the
+    archive anyway would hand them the real data and let the test pass
+    for the wrong reason, which is worse than a miss because nothing
+    looks wrong.
+    """
+    src = loose(tmp_path, {"gamelog_1_2025-26.json": payload([{"PTS": 41}])})
+    archive_path = str(tmp_path / "c.zip")
+    ca.pack(src, archive_path)
+    reader = ca.open_reader(archive_path)
+
+    # Default dir absent + archive present: the archive answers.
+    monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path / "absent"))
+    monkeypatch.setattr(cache_module, "DEFAULT_CACHE_DIR", str(tmp_path / "absent"))
+    monkeypatch.setattr(cache_module, "ARCHIVE", reader)
+    assert cache_module.read_payload("gamelog_1_2025-26") is not None
+
+    # Same archive, but CACHE_DIR has been moved elsewhere: silence.
+    monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path / "somewhere_else"))
+    assert cache_module.read_payload("gamelog_1_2025-26") is None
+    assert cache_module._load_df_cache("gamelog_1_2025-26") == (None, None)
 
 
 def test_keys_are_sanitised_the_same_way_on_both_paths(tmp_path, monkeypatch):
