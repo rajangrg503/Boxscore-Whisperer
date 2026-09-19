@@ -83,6 +83,11 @@ from engine.team_total import (
     minutes_profile,
 )
 from engine.baseline_stats import stats_from_gamelog
+from engine.distribution import (
+    DISTRIBUTION_META,
+    STAT_DISTRIBUTIONS,
+    distribution_for,
+)
 from engine.lean import (
     LEAN_MODELS,
     LEAN_TIER_SUMMARY,
@@ -975,6 +980,14 @@ div[data-testid="stAlertContentSuccess"] {
 .stat-card-row.compact .stat-value {
     font-size: 22px;
 }
+.stat-card .stat-chance {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--bw-border-soft);
+    color: var(--bw-muted);
+    font-size: 12px;
+}
+.stat-card .stat-chance b { color: var(--bw-accent-text); font-weight: 700; }
 .stat-card .stat-midpoint {
     margin-top: 6px;
     color: var(--bw-faint);
@@ -1030,6 +1043,12 @@ div[data-testid="stAlertContentSuccess"] {
 .hit-rate-green { background: var(--bw-accent-soft); border-color: rgba(34, 197, 94, 0.18); color: var(--bw-accent-text); }
 .hit-rate-red { background: var(--bw-red-soft); border-color: rgba(248, 113, 113, 0.18); color: var(--bw-red-text); }
 .hit-rate-gray { background: rgba(255, 255, 255, 0.025); border-color: var(--bw-border-soft); color: var(--bw-faint); }
+.hit-rate-model {
+    background: linear-gradient(180deg, rgba(34, 197, 94, 0.13) 0%, rgba(34, 197, 94, 0.03) 100%);
+    border-color: var(--bw-accent-line);
+    color: var(--bw-text);
+}
+.hit-rate-model .pct { color: #ffffff; }
 
 /* ---- Methodology tables ---- */
 .methodology-table {
@@ -1153,6 +1172,40 @@ def section_heading(title, sub=None, first=False):
     )
 
 
+# The nominal range shown on every stat card. engine/distribution.py's
+# fitted models put the real coverage within a point or two of this for
+# the big stats; the methodology expander prints the measured number per
+# stat, and Blocks/Off. rebounds knowingly run wide (whole-number stats
+# can't be sliced any finer).
+RANGE_NOMINAL = 0.8
+
+
+def prediction_entry(col, base_mean, base_std, multiplier, n_games, spread_multiplier=1.0):
+    """One stat's entry in `predictions`: the projected number, the
+    calibrated range, and the distribution behind both (None when the
+    player is outside the fitted population -- too few prior games or no
+    usable spread -- in which case the old +/-0.6 x spread band is kept
+    as a clearly-labelled fallback rather than inventing a probability)."""
+    predicted = base_mean * multiplier
+    spread = base_std if pd.notna(base_std) else predicted * 0.2
+    spread *= spread_multiplier
+    dist = distribution_for(col, predicted, spread, n_games)
+    if dist is not None:
+        low, high = dist.interval(RANGE_NOMINAL)
+        nominal = RANGE_NOMINAL
+    else:
+        low, high = max(0.0, predicted - spread * 0.6), predicted + spread * 0.6
+        nominal = None
+    return {
+        "base": base_mean,
+        "predicted": predicted,
+        "low": low,
+        "high": high,
+        "range_nominal": nominal,
+        "dist": dist,
+    }
+
+
 def read_card_html(read, stat_label):
     """The Single Player "Clearest read" card for engine.lean.clearest_read()
     output. Above/below his own season average only -- no lines, odds or
@@ -1271,6 +1324,12 @@ with st.sidebar:
                 if len(pts_hits) > 0:
                     hit_rate = pts_hits.mean() * 100
                     st.metric("Points landed in range", f"{hit_rate:.0f}%", f"{int(pts_hits.sum())}/{len(pts_hits)}")
+                st.caption(
+                    "Saved from now on, the range is the calibrated 80% one, so this should "
+                    "sit near 80%. Predictions saved before that used a much narrower band "
+                    "that only held the result about 40% of the time, so older rows drag "
+                    "this number down."
+                )
 
             with st.expander("View all saved predictions"):
                 display_log = my_log_df[[
@@ -1350,6 +1409,48 @@ with st.expander("Methodology and backtest results"):
     # Strong leans (engine/lean.py) -- numbers come straight from
     # engine/lean_models.json (written by lean_model_sweep.py), so this
     # table can't drift from what the Single Player tab actually shows.
+    if STAT_DISTRIBUTIONS:
+        _cov80 = [e["held_out"]["coverage_80"] for e in STAT_DISTRIBUTIONS.values()]
+        _old80 = [e["held_out"]["baseline_shipped_0.6"]["coverage_80"]
+                  for e in STAT_DISTRIBUTIONS.values() if "baseline_shipped_0.6" in e["held_out"]]
+        st.markdown(
+            "**Ranges and chances.** The range under each projection is the middle "
+            f"{RANGE_NOMINAL:.0%} of a fitted distribution, not a guess. Each stat's "
+            "distribution was picked and measured on seasons it was never fitted on "
+            "(each of the three held out in turn), scored on log loss, Brier score and "
+            "whether the range really holds the result as often as it claims. Measured "
+            f"coverage of the {RANGE_NOMINAL:.0%} range runs {min(_cov80):.0%}-{max(_cov80):.0%} "
+            "across the nine stats"
+            + (f", against {min(_old80):.0%}-{max(_old80):.0%} for the fixed band this "
+               "replaced (which was labelled \"likely range\" while holding the result "
+               "barely two times in five)." if _old80 else ".")
+            + " Enter a line and the app also shows the chance he clears it, from that same "
+            "distribution. That is a chance of clearing a number, measured against past "
+            "games — not a bookmaker's price, and nothing here has been tested against real "
+            "betting lines."
+        )
+        st.markdown(
+            '<table class="methodology-table">'
+            '<tr><th>Stat</th><th>Distribution</th><th>50% Range Holds</th>'
+            '<th>80% Range Holds</th><th>Brier</th><th>Old Band Held</th></tr>'
+            + "".join(
+                f'<tr><td>{col}</td><td>{e["model"].replace("_", " ")}</td>'
+                f'<td>{e["held_out"]["coverage_50"]:.0%}</td>'
+                f'<td>{e["held_out"]["coverage_80"]:.0%}</td>'
+                f'<td>{e["held_out"]["brier"]:.3f}</td>'
+                f'<td>{e["held_out"].get("baseline_shipped_0.6", {}).get("coverage_80", float("nan")):.0%}</td></tr>'
+                for col, _label in STAT_COLUMNS
+                for e in [STAT_DISTRIBUTIONS.get(col)] if e
+            )
+            + '</table>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Brier score: lower is better; 0.25 is what you get by saying 50% every time. "
+            "Blocks and offensive rebounds are whole numbers in a narrow band, so their "
+            "ranges can only be wider than the label, never tighter."
+        )
+
     if LEAN_MODELS and LEAN_TIERS and LEAN_TIER_SUMMARY:
         _sum = LEAN_TIER_SUMMARY
         _lean_names = [label.lower() for col, label in STAT_COLUMNS if col in LEAN_MODELS]
@@ -2050,18 +2151,11 @@ with tab1:
                     * teammate_result.multiplier_for(col)
                     * new_teammate_result.multiplier_for(col)
                 )
-                predicted = base_mean * stat_multiplier
-                spread = base_std if pd.notna(base_std) else predicted * 0.2
-                if post_change_thin_sample:
-                    spread *= THIN_SAMPLE_SPREAD_MULTIPLIER
-                low = max(0, predicted - spread * 0.6)
-                high = predicted + spread * 0.6
-                predictions[col] = {
-                    "base": base_mean,
-                    "predicted": predicted,
-                    "low": low,
-                    "high": high,
-                }
+                predictions[col] = prediction_entry(
+                    col, base_mean, base_std, stat_multiplier, season_n,
+                    spread_multiplier=(THIN_SAMPLE_SPREAD_MULTIPLIER
+                                       if post_change_thin_sample else 1.0),
+                )
 
             # If a head-to-head baseline was chosen, keep hit rates and the
             # trend chart consistent with that same team-specific context
@@ -2198,11 +2292,33 @@ with tab1:
             for col in stat_cols:
                 label = STAT_SHORT_LABELS.get(col, dict(STAT_COLUMNS)[col])
                 p = predictions[col]
+                if p.get("range_nominal"):
+                    range_label = f'{p["range_nominal"]:.0%} range'
+                    range_title = (
+                        f'In backtests on three seasons, the real result landed inside this '
+                        f'range {p["range_nominal"]:.0%} of the time. See the methodology for '
+                        f'the measured number for this stat.'
+                    )
+                else:
+                    range_label = "Rough range"
+                    range_title = (
+                        "Not enough games behind this projection to use the calibrated range, "
+                        "so this is the old rough band — treat it as indicative only."
+                    )
+                chance_html = ""
+                _line = line_inputs.get(col, 0) or 0
+                if p.get("dist") is not None and _line > 0:
+                    chance_html = (
+                        f'<div class="stat-chance">Clears {_line:g} '
+                        f'<b>{p["dist"].sf(_line):.0%}</b></div>'
+                    )
                 row_html += (
                     f'<div class="stat-card{" lead" if col == lead else ""}">'
                     f'<div class="stat-title">{label}</div>'
                     f'<div class="stat-value">{p["predicted"]:.1f}</div>'
-                    f'<div class="stat-midpoint" title="Likely range reflects prediction uncertainty — narrower with more data, wider with thin samples.">Likely range <b>{p["low"]:.0f}–{p["high"]:.0f}</b></div><!-- patch_likely_range_tooltip -->'
+                    f'<div class="stat-midpoint" title="{html.escape(range_title)}">{range_label} '
+                    f'<b>{p["low"]:.0f}–{p["high"]:.0f}</b></div>'
+                    f'{chance_html}'
                     f'</div>'
                 )
             row_html += '</div>'
@@ -2225,8 +2341,10 @@ with tab1:
         st.caption(
             f"This isn't a raw season average — it's the baseline {_applied_phrase}, using "
             "the math shown in \"See how this estimate was built\" below. The unadjusted "
-            "baseline is shown separately there in step [1] for comparison. \"Likely range\" "
-            "reflects this player's real game-to-game variability."
+            "baseline is shown separately there in step [1] for comparison. The range is "
+            "calibrated: in three seasons of backtests the real result landed inside an "
+            "80% range about 80% of the time (see the methodology for each stat). Enter a "
+            "line above to also see the chance he clears it."
         )
 
         # Strong leans (engine/lean.py) -- only from the CURRENT season's
@@ -2465,7 +2583,8 @@ with tab1:
         else:
             section_heading(
                 "Hit rates",
-                "How often he went over each line. L5, L10 and L20 are his last 5, 10 and 20 games.",
+                "Model is this projection's own chance of clearing the line tonight. L5, L10 "
+                "and L20 are how often he actually cleared it in his last 5, 10 and 20 games.",
             )
 
         for stat_label, line_val, base_val, col in hit_rate_configs:
@@ -2478,6 +2597,8 @@ with tab1:
                 line_source_note = "season average"
 
             hit_rates = get_hit_rate_table(game_log_for_hitrate, effective_line, col)
+            _dist = predictions[col].get("dist")
+            model_pct = 100.0 * _dist.sf(effective_line) if _dist is not None else None
             if using_h2h:
                 # "Season" doesn't mean much for a head-to-head-only log --
                 # relabel it to reflect what it actually represents here.
@@ -2489,6 +2610,14 @@ with tab1:
                 f'<div class="hr-line">Line {effective_line} · {html.escape(line_source_note)}</div>'
                 f'</div><div class="hit-rate-row">'
             )
+            if model_pct is not None:
+                badges_html += (
+                    f'<div class="hit-rate-badge hit-rate-model" '
+                    f'title="This projection\'s own chance of clearing the line tonight — '
+                    f'from the fitted distribution, not from past games.">'
+                    f'<div class="label">Model</div>'
+                    f'<div class="pct">{model_pct:.0f}%</div></div>'
+                )
             for label, (pct, n) in hit_rates.items():
                 if pct is None or n == 0:
                     css_class = "hit-rate-gray"
@@ -2716,7 +2845,7 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
     just the note strings tab2's table already showed.
     """
     try:
-        season_stats, season_source, _season_n = get_season_baseline(player_id, player_name)
+        season_stats, season_source, season_n = get_season_baseline(player_id, player_name)
     except Exception:
         return None
     if not season_stats:
@@ -2762,11 +2891,7 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
             multiplier *= redistribution_result.multiplier_for(col)
         if opponent_missing_result is not None and opponent_missing_result.applied:
             multiplier *= opponent_missing_result.multiplier_for(col)
-        predicted = base_mean * multiplier
-        spread = base_std if pd.notna(base_std) else predicted * 0.2
-        low = max(0, predicted - spread * 0.6)
-        high = predicted + spread * 0.6
-        predictions[col] = {"base": base_mean, "predicted": predicted, "low": low, "high": high}
+        predictions[col] = prediction_entry(col, base_mean, base_std, multiplier, season_n)
 
     layer_results = {"opponent_defense": defense_result}
     if opponent_missing_result is not None:
