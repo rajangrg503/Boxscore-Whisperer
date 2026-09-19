@@ -171,6 +171,17 @@ hardcoded. The wrapper's blank title is filled in too -- that is what a
 bookmark, a shared link and a browser tab all otherwise show a hostname
 for.
 
+The wrapper also gets its root background painted. Launched from a home
+screen, iOS colours the status bar strip from the page behind it, and
+the wrapper sets no background at all, so a white band sat above a black
+app.
+
+Streamlit's own toolbar (Share, Fork, the GitHub mark) is hidden at
+phone widths. There is no room for it in a phone header, and on a public
+app it invites a reader to go fork the repo from inside the product; on
+a desktop it stays, where the space exists and it is a fair signal for a
+tool whose pitch is that you can check the working.
+
 The icons are generated, not hand-made, so they cannot drift from the
 wordmark:
 

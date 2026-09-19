@@ -1032,6 +1032,12 @@ div[data-testid="stAlertContentSuccess"] {
     font-weight: 600;
     letter-spacing: 0.04em;
     opacity: 0.85;
+    /* Streamlit breaks long words by default, which turned "Season" into
+       "Seaso / n" in a phone-width tile. These labels are short enough
+       to always fit on one line. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .hit-rate-badge .pct {
     font-size: 16px;
@@ -1160,6 +1166,15 @@ div[data-testid="stAlertContentSuccess"] {
         border-color: transparent;
         backdrop-filter: none;
         -webkit-backdrop-filter: none;
+    }
+    /* Streamlit's own toolbar -- "Fork", the GitHub mark, Share. On a
+       phone header there is no room for it, and on a public app it
+       invites a reader to go fork the repo from inside the product.
+       Hidden here only; on a desktop there is space for it, and it is
+       a fair signal for a tool whose pitch is that you can check the
+       working. */
+    [data-testid="stToolbar"] {
+        display: none !important;
     }
     [data-testid="stMainBlockContainer"], .block-container {
         padding-top: 4.25rem;
@@ -1517,6 +1532,16 @@ def _install_home_screen_tags():
     // link and a browser tab all fall back to showing a hostname for.
     // Only filled when blank, so the app's own title is never clobbered.
     if (!target.title) target.title = '{APP_NAME}';
+
+    // Launched from a home screen, iOS paints the status bar strip from
+    // the page behind it -- which is the wrapper, and the wrapper sets no
+    // background at all, so the strip came out white above a black app.
+    // Painting the wrapper's root carries the app's colour into the
+    // safe area and the overscroll.
+    if (target.documentElement) {{
+      target.documentElement.style.backgroundColor = '#0a0d12';
+    }}
+    if (target.body) target.body.style.backgroundColor = '#0a0d12';
   }} catch (e) {{
     /* A plainer home-screen icon is not worth breaking the page over. */
   }}
