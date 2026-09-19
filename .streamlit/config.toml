@@ -32,3 +32,9 @@ borderColor = "#1d2230"
 [client]
 # Hide Streamlit's developer menu and toolbar for visitors.
 toolbarMode = "minimal"
+
+[server]
+# Serves static/ at /app/static/<file>. The home-screen icon has to be
+# fetchable by URL -- iOS will not take an apple-touch-icon as a data:
+# URI -- and this is the only directory Streamlit will serve.
+enableStaticServing = true
