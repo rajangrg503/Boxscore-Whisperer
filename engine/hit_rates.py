@@ -80,6 +80,34 @@ def hit_rates(game_log_df, line, stat_col="PTS", h2h=False):
     return rows
 
 
+def against_opponent(opponent_log, season_log, line, stat_col="PTS"):
+    """Rows for one stat, opponent first and the season alongside it.
+
+    WHY BOTH
+    Leading with the opponent is what a reader is actually asking: the
+    head-to-head table sits directly above this row, and reading "he has
+    cleared this every time against Denver" three inches above a row
+    saying 40% is the kind of contradiction that makes a page useless.
+    That 40% was his last five games against ANYONE.
+
+    But the opponent number cannot stand alone. Across 136 players and
+    ~4,000 player-opponent pairs in the cache, the median player has SIX
+    games against a given opponent, 85% of matchups have fewer than ten,
+    and none have twenty. Shown by itself it would read as the more
+    relevant number while being far the less reliable one.
+
+    So the season rate travels with it, carrying its own game count, and
+    the windows collapse exactly as everywhere else -- six games produce
+    one badge, not four.
+    """
+    rows = hit_rates(opponent_log, line, stat_col, h2h=True) if opponent_log is not None else []
+    season = hit_rates(season_log, line, stat_col) if season_log is not None else []
+    if season:
+        widest = season[-1]
+        rows = rows + [HitRate("Season", widest.pct, widest.games)]
+    return rows
+
+
 def sample_caveat(total_games, h2h=False):
     """One short line when the sample is too thin to lean on, else None.
 

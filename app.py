@@ -85,7 +85,10 @@ from engine.team_total import (
 )
 from engine.baseline_stats import stats_from_gamelog
 from engine.freshness import cache_age, describe as describe_cache_age
-from engine.hit_rates import hit_rates as build_hit_rates, sample_caveat
+from engine.hit_rates import (
+    against_opponent as hit_rates_against_opponent,
+    sample_caveat,
+)
 from engine.minutes import describe as minutes_describe, why_not as minutes_why_not
 from engine.distribution import (
     DISTRIBUTION_META,
@@ -2419,23 +2422,32 @@ with tab1:
                                        if post_change_thin_sample else 1.0),
                 )
 
-            # If a head-to-head baseline was chosen, keep hit rates and the
-            # trend chart consistent with that same team-specific context
-            # instead of mixing a head-to-head baseline with season-wide
-            # hit rates. Falls back to season-wide if no h2h games exist.
+            # BOTH logs, always. The hit rates lead with this opponent --
+            # "has he cleared this against THEM" is the question a reader
+            # is actually asking, and the head-to-head table sits right
+            # above the row -- but the season-wide rate travels with it,
+            # because the median player has only 6 games against a given
+            # opponent and 85% of matchups have fewer than 10. Showing
+            # the opponent number alone would read as more relevant and
+            # be far less reliable.
             using_h2h = baseline_source_input != "Season average (default)"
-            if using_h2h:
-                game_log_for_hitrate = get_head_to_head_log(player_id, opponent_abbr, cutoff_date=h2h_cutoff)
-                if game_log_for_hitrate.empty:
-                    using_h2h = False  # nothing to show -- fall back below
+            opponent_log_for_hitrate = get_head_to_head_log(
+                player_id, opponent_abbr, cutoff_date=h2h_cutoff)
+            try:
+                current_season_check = fetch_combined_game_log(player_id, CURRENT_SEASON)
+            except Exception:
+                current_season_check = pd.DataFrame()
+            hitrate_season = CURRENT_SEASON if len(current_season_check) >= 5 else PREVIOUS_SEASON
+            season_log_for_hitrate = get_full_game_log(player_id, hitrate_season)
 
-            if not using_h2h:
-                try:
-                    current_season_check = fetch_combined_game_log(player_id, CURRENT_SEASON)
-                except Exception:
-                    current_season_check = pd.DataFrame()
-                hitrate_season = CURRENT_SEASON if len(current_season_check) >= 5 else PREVIOUS_SEASON
-                game_log_for_hitrate = get_full_game_log(player_id, hitrate_season)
+            # The trend chart still follows the chosen baseline's context.
+            game_log_for_hitrate = (
+                opponent_log_for_hitrate
+                if using_h2h and not opponent_log_for_hitrate.empty
+                else season_log_for_hitrate
+            )
+            if using_h2h and opponent_log_for_hitrate.empty:
+                using_h2h = False
 
         # Stash everything needed to render results into session_state.
         # This matters because the trend-chart stat picker below is a
@@ -2475,6 +2487,8 @@ with tab1:
             "scheme_note": scheme_note,
             "scheme_executor_input": scheme_executor_input,
             "game_log": game_log_for_hitrate,
+            "opponent_log": opponent_log_for_hitrate,
+            "season_log": season_log_for_hitrate,
             "minutes_note": get_projected_minutes_note(player_id),
             "using_h2h": using_h2h,
             "h2h_cutoff": h2h_cutoff,
@@ -2505,6 +2519,8 @@ with tab1:
         scheme_note = r["scheme_note"]
         scheme_executor_input = r["scheme_executor_input"]
         game_log_for_hitrate = r["game_log"]
+        opponent_log_for_hitrate = r.get("opponent_log")
+        season_log_for_hitrate = r.get("season_log")
         minutes_note, minutes_reason = r.get("minutes_note") or (None, None)
         using_h2h = r["using_h2h"]
         h2h_cutoff = r["h2h_cutoff"]
@@ -2837,20 +2853,27 @@ with tab1:
             for col, label in STAT_COLUMNS
         ]
 
-        if using_h2h:
+        _opp_n = 0 if opponent_log_for_hitrate is None else len(opponent_log_for_hitrate)
+        _opp_name = html.escape(opponent_full_name)
+        if _opp_n:
             section_heading(
                 "Hit rates",
-                f"How often he went over each line. Team-specific here: based on "
-                f"{len(game_log_for_hitrate)} game(s) vs. {html.escape(opponent_full_name)} only, "
-                f"not the full season.",
+                f"<b>Model</b> is this projection's own chance of clearing the line tonight. "
+                f"The green and red badges are how often he really cleared it — the L5, L10 "
+                f"and L20 windows count his games <b>against {_opp_name} only</b> "
+                f"({_opp_n} of them, across the seasons in the table above), and "
+                f"<b>Season</b> is the same line against everyone. Every badge carries the "
+                f"number of games behind it, because a rate over six games and a rate over "
+                f"eighty are not the same claim.",
             )
         else:
             section_heading(
                 "Hit rates",
-                "Model is this projection's own chance of clearing the line tonight. The rest "
-                "are how often he actually cleared it, over the number of games shown on each. "
-                "Windows covering the same games are shown once, not repeated. With no line "
-                "entered, each row uses his projected baseline — not his season average.",
+                f"Model is this projection's own chance of clearing the line tonight. The rest "
+                f"are how often he actually cleared it, over the number of games shown on each. "
+                f"No games on record against {_opp_name}, so these are all opponents. "
+                f"With no line entered, each row uses his projected baseline — not his "
+                f"season average.",
             )
 
         for stat_label, line_val, base_val, col in hit_rate_configs:
@@ -2866,8 +2889,8 @@ with tab1:
                 # it is (engine/minutes.py).
                 line_source_note = "projected baseline"
 
-            rate_rows = build_hit_rates(
-                game_log_for_hitrate, effective_line, col, h2h=using_h2h
+            rate_rows = hit_rates_against_opponent(
+                opponent_log_for_hitrate, season_log_for_hitrate, effective_line, col
             )
             _dist = predictions[col].get("dist")
             model_pct = 100.0 * _dist.sf(effective_line) if _dist is not None else None
@@ -2906,7 +2929,7 @@ with tab1:
             badges_html += '</div></div>'
             st.markdown(badges_html, unsafe_allow_html=True)
 
-        thin_sample = sample_caveat(len(game_log_for_hitrate), h2h=using_h2h)
+        thin_sample = sample_caveat(_opp_n, h2h=True) if _opp_n else None
         if thin_sample:
             st.caption(thin_sample)
 
