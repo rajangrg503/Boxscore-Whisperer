@@ -137,6 +137,27 @@ count on every badge:
 Under ten games the page adds a line saying how far a single game moves
 the number (`sample_caveat`).
 
+**The windows count games against the selected opponent.** That is the
+question a reader is asking, and the head-to-head table sits directly
+above the row -- reading "he has cleared this every time against Denver"
+three inches above a row saying 40% is a contradiction that makes the
+page useless. (The 40% was his last five games against anyone; against
+Denver it was five from five.)
+
+The opponent number cannot stand alone, though. Across 136 players and
+~4,000 player-opponent pairs in the cache:
+
+| games vs ONE opponent | |
+|---|---|
+| median | 6 |
+| fewer than 5 | 31% of matchups |
+| fewer than 10 | 85% of matchups |
+| 20 or more | 0% |
+
+So `against_opponent()` leads with the opponent windows and carries the
+season rate alongside, each with its own game count. A six-game matchup
+collapses to one badge plus the season, never four windows.
+
 
 On a phone's home screen
 ------------------------

@@ -86,3 +86,43 @@ def test_caveat_states_the_count_and_what_one_game_is_worth():
     assert "5 head-to-head games" in line
     assert "20 points" in line                  # 100/5
     assert "head-to-head" not in hr.sample_caveat(4)
+
+
+# ---- opponent first, season alongside -------------------------------------
+def opp_and_season(opp_points, season_points, line=20.0):
+    return hr.against_opponent(log(opp_points), log(season_points), line, "PTS")
+
+
+def test_opponent_windows_lead_and_the_season_follows():
+    """The question a reader is asking is "against THEM", so those windows
+    come first; the season rate travels with them for weight."""
+    rows = opp_and_season([30] * 18, [10] * 80)
+    assert [r.label for r in rows] == ["L5", "L10", "All H2H", "Season"]
+    assert [r.games for r in rows] == [5, 10, 18, 80]
+    assert rows[0].pct == 100.0        # crushes them
+    assert rows[-1].pct == 0.0         # but not everyone else
+
+
+def test_a_thin_matchup_collapses_instead_of_faking_windows():
+    """The median player has six games against a given opponent. Six games
+    must not appear as L5/L10/L20."""
+    rows = opp_and_season([30] * 6, [10] * 80)
+    assert [(r.label, r.games) for r in rows] == [("L5", 5), ("All H2H", 6), ("Season", 80)]
+
+
+def test_the_two_samples_are_never_mixed():
+    """The bug this replaced: the row showed last-5-vs-anyone next to a
+    head-to-head table, so 100% against one team read as 40%."""
+    rows = opp_and_season([35, 36, 34, 35, 32], [35, 15, 32, 19, 26], line=31.2)
+    by = {r.label: r for r in rows}
+    assert by["All H2H"].pct == 100.0 and by["All H2H"].games == 5
+    assert by["Season"].pct == 40.0 and by["Season"].games == 5
+
+
+def test_no_history_against_this_opponent_still_shows_the_season():
+    rows = opp_and_season([], [30] * 40)
+    assert [(r.label, r.games) for r in rows] == [("Season", 40)]
+
+
+def test_no_games_at_all_shows_nothing():
+    assert opp_and_season([], []) == []
