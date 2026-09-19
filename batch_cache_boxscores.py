@@ -164,7 +164,7 @@ def main(season=None):
     print(f"\nDone. {counts['cached']} newly cached, {counts['skipped']} already had data, {counts['failed']} failed.")
     if counts["failed"] > 0:
         print("Some games failed -- re-run this script (same args) to retry just those (already-cached ones are skipped).")
-    print("Now commit and push the data_cache/ folder to GitHub so the deployed app picks it up.")
+    print("Now run tools/pack_cache.py and commit data_cache.zip so the deployed app picks it up.")
     print("\nNote: this will add many files to data_cache/. If git add is slow, that's expected -- let it finish.")
 
 

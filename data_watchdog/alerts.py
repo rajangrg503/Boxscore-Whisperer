@@ -9,9 +9,13 @@ import datetime
 import json
 import os
 
-from engine.cache import CACHE_DIR
+from engine.cache import REPO_ROOT
 
-LOG_DIR = os.path.join(os.path.dirname(CACHE_DIR), "logs")
+# Anchored to the repo, not to CACHE_DIR: since the cache can now
+# resolve to an unpacked archive under /tmp (engine/cache.py), deriving
+# the log directory from its parent would quietly scatter alert logs
+# into the temp directory on any machine reading the archive form.
+LOG_DIR = os.path.join(REPO_ROOT, "logs")
 ALERTS_PATH = os.path.join(LOG_DIR, "watchdog_alerts.jsonl")
 
 

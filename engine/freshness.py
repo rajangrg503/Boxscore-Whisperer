@@ -44,23 +44,43 @@ def _parse(value):
         return None
 
 
-def _team_stats_state(cache_dir, season):
+def _team_stats_state(cache_dir, season, archive=None):
     """(cached_at, games_played_max) for the current season's team stats
     file, or (None, 0) when it isn't there."""
-    path = os.path.join(cache_dir, f"team_stats_advanced_{season}.json")
+    name = f"team_stats_advanced_{season}.json"
+    payload = None
+    path = os.path.join(cache_dir, name)
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                payload = json.load(f)
+        except (OSError, ValueError):
+            payload = None
+    elif archive is not None:
+        payload = archive.read_json(name)
     try:
-        with open(path) as f:
-            payload = json.load(f)
         rows = payload.get("data") or []
         gp = max((int(r.get("GP") or 0) for r in rows), default=0)
         return _parse(payload.get("cached_at")), gp
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (ValueError, TypeError, AttributeError):
         return None, 0
 
 
-def _newest_gamelog(cache_dir, season):
-    """Modification time of the most recently written game log for this
-    season -- stat() only, since there are over a thousand files."""
+def _newest_gamelog(cache_dir, season, archive=None):
+    """When the game logs were last written.
+
+    From the archive, that is when it was packed -- which is when the
+    refresh job finished, the only honest answer available on the
+    deployed app. Modification times there record when git checked the
+    repository out, so a stale cache deployed this morning would
+    otherwise report itself as written this morning, which is the exact
+    lie this module exists to prevent.
+
+    From a folder, it is the newest game log's mtime -- stat() only,
+    since there are over a thousand files.
+    """
+    if archive is not None and not os.path.isdir(cache_dir):
+        return archive.packed_at()
     newest = None
     for path in glob.glob(os.path.join(cache_dir, f"gamelog_*_{season}.json")):
         try:
@@ -72,7 +92,7 @@ def _newest_gamelog(cache_dir, season):
     return newest
 
 
-def cache_age(cache_dir, season, now=None):
+def cache_age(cache_dir, season, now=None, archive=None):
     """{"age_days", "level", "in_season", "team_stats_at", "gamelogs_at"}.
 
     age_days is the age of the OLDER of the two things a prediction
@@ -81,8 +101,8 @@ def cache_age(cache_dir, season, now=None):
     and is always "off_season" quiet when the season hasn't started:
     out of season the numbers aren't meant to move."""
     now = now or datetime.datetime.now()
-    team_at, games_played = _team_stats_state(cache_dir, season)
-    logs_at = _newest_gamelog(cache_dir, season)
+    team_at, games_played = _team_stats_state(cache_dir, season, archive)
+    logs_at = _newest_gamelog(cache_dir, season, archive)
     in_season = games_played > 0
 
     known = [t for t in (team_at, logs_at) if t is not None]

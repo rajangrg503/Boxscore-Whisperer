@@ -140,5 +140,5 @@ if __name__ == "__main__":
     refresh_synergy_scheme_data()
     print()
     refresh_player_game_logs()
-    print("\nDone. Now commit and push the data_cache/ folder to GitHub "
-          "(via GitHub Desktop) so the deployed app picks up this data.")
+    print("\nDone. Now run tools/pack_cache.py and commit data_cache.zip "
+          "so the deployed app picks up this data.")

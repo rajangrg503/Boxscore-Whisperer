@@ -56,7 +56,7 @@ from engine.game_log import fetch_combined_game_log, resolve_season_gamelog
 # refresh_all.py locally to populate/update data_cache/*.json (each
 # endpoint gated by data_watchdog/ before it's allowed to refresh), then
 # commit and push data_cache/ so the deployed app picks it up.
-from engine.cache import CACHE_DIR, cached_or_live
+from engine.cache import ARCHIVE as CACHE_ARCHIVE, CACHE_DIR, cached_or_live
 from engine.adjustments.missing_players import get_opponent_missing_adjustment
 from engine.adjustments.defender import get_defender_matchup_adjustment
 from engine.adjustments.scheme import get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS, NO_SCHEME
@@ -1457,7 +1457,7 @@ def _cache_freshness():
     so the honest thing is to show the age rather than let a stale cache
     look current. Cheap: one JSON read plus stat() on the game logs."""
     try:
-        return cache_age(CACHE_DIR, CURRENT_SEASON)
+        return cache_age(CACHE_DIR, CURRENT_SEASON, archive=CACHE_ARCHIVE)
     except Exception:
         return {"level": "unknown", "age_days": None, "in_season": False}
 
