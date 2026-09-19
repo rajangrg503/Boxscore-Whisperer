@@ -1,6 +1,13 @@
 __pycache__/
 *.pyc
 
+# Finder writes one of these into every folder it has ever displayed.
+# Nine were tracked, including one at the repo root, so they arrived in
+# the deploy and turned up in every `git status` after browsing the
+# project. The pattern is unanchored on purpose: it has to catch a
+# nested one as well as the root.
+.DS_Store
+
 # The cache travels as data_cache.zip, not as 148,684 loose files.
 # Tracking them made Streamlit Cloud's checkout unreliable -- twice it
 # deployed a new app.py beside a stale engine/ -- so the folder is a
