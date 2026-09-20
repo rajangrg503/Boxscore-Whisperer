@@ -1,3 +1,27 @@
+Boxscore Whisperer
+==================
+
+NBA player statline projections, built from real games, with every
+adjustment shown so a reader can judge it themselves.
+
+LICENCE, AND WHY THIS REPOSITORY IS PUBLIC
+------------------------------------------
+This code is **source-available, not open-source**: PolyForm
+Noncommercial 1.0.0 (see LICENSE). Read it, run it, check the maths,
+reproduce the numbers, learn from it, build on it for anything
+noncommercial. Running it as a commercial service is not granted.
+
+It is public on purpose. The product's whole claim is that its numbers
+can be checked rather than trusted, and a claim like that is worth
+very little from a repository nobody can read. In particular the
+coverage figure the app publishes is reproducible from this repository
+alone -- see the header of tools/score_forward_test.py.
+
+What is deliberately NOT here: the raw odds snapshots. SportsGameOdds'
+terms forbid redistributing their data, so line_snapshots/ is
+gitignored and only our own derived figures, plus a SHA-256 of each
+snapshot, are committed. The raw response is produced on request.
+
 This folder holds cached NBA data as JSON files, one per (player,
 season) or (team-stats, season) lookup. It's read by app.py's
 cached_or_live() function as a fallback when a live nba_api call fails
