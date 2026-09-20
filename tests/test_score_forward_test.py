@@ -310,3 +310,149 @@ def test_catch_up_scores_coverage_with_no_snapshot_at_all(catchup, monkeypatch, 
 def test_catch_up_says_so_when_there_is_nothing_to_do(catchup, capsys):
     assert sc.score_unscored() == 0
     assert "nothing new to score" in capsys.readouterr().out
+
+
+# ---- the money ------------------------------------------------------------
+# A hit rate is not a profit claim: 55% at -140 loses and 48% at +130
+# wins. These pin the ways the money figure flatters itself, which is
+# the only direction anybody would ever ship by accident.
+def priced_leg(over="-110", under="-110", line=19.5, player="1", stat="PTS"):
+    prices = {}
+    if over is not None:
+        prices["over"] = over
+    if under is not None:
+        prices["under"] = under
+    return {"player_id": player, "stat": stat, "line": line, "prices": prices}
+
+
+def many(n, **kwargs):
+    """n identical priced legs, spread over n players, so a night can
+    clear the disclosure threshold without repeating a player."""
+    return [priced_leg(player=str(i), **kwargs) for i in range(n)]
+
+
+def many_projections(n, projected=25.0):
+    return projections({str(i): claim(projected=projected) for i in range(n)})
+
+
+def test_the_price_of_the_side_we_took_is_the_one_that_pays():
+    # Over at -300 and under at +240 is the same leg and two very
+    # different bets. We took the over and won it.
+    legs = [priced_leg(over="-300", under="+240")]
+    players, _totals = sc.score(projections(), legs, "2026-10-21",
+                                read=lambda key: log(pts=30))
+    pot = sc.money(players, legs)
+    assert pot["all"]["legs"] == 1
+    assert round(pot["all"]["profit"], 4) == round(100 / 300, 4)
+
+
+def test_a_loser_costs_one_unit_whatever_the_price_was():
+    legs = [priced_leg(over="+900")]
+    players, _totals = sc.score(projections(), legs, "2026-10-21",
+                                read=lambda key: log(pts=5))
+    assert sc.money(players, legs)["all"]["profit"] == -1.0
+
+
+def test_a_push_is_not_a_bet_that_lost():
+    legs = [priced_leg()]
+    players, _t = sc.score(projections({"1": claim(projected=19.5)}), legs,
+                           "2026-10-21", read=lambda key: log(pts=30))
+    assert sc.money(players, legs)["all"]["legs"] == 0
+
+
+def test_an_unpriced_leg_still_counts_for_accuracy_and_not_for_money():
+    legs = [{"player_id": "1", "stat": "PTS", "line": 19.5}]   # no prices
+    players, totals = sc.score(projections(), legs, "2026-10-21",
+                               read=lambda key: log(pts=30))
+    assert totals["legs"] == 1 and totals["legs_correct"] == 1
+    assert "priced_legs" not in totals
+    assert players["1"]["stats"]["PTS"]["priced"] is False
+    assert sc.money(players, legs)["all"]["legs"] == 0
+
+
+def test_the_strong_legs_are_counted_apart_from_every_leg():
+    # 25.0 projected against a 19.5 line is a real disagreement; the
+    # same projection against its own number is not one, and belongs in
+    # "all" only. Nobody's plan is to bet every prop in the feed.
+    legs = [priced_leg(player="1", line=19.5),
+            priced_leg(player="2", line=24.5)]
+    body = projections({"1": claim(projected=25.0), "2": claim(projected=25.0)})
+    players, totals = sc.score(body, legs, "2026-10-21",
+                               read=lambda key: log(pts=30))
+    assert players["1"]["stats"]["PTS"]["strong"] is True
+    assert players["2"]["stats"]["PTS"]["strong"] is False
+    assert totals["legs"] == 2 and totals["strong_legs"] == 1
+
+
+def test_a_thin_night_withholds_its_units_rather_than_publishing_a_price():
+    # One winning leg's profit IS its price. This is a licence rule.
+    legs = [priced_leg()]
+    players, _t = sc.score(projections(), legs, "2026-10-21",
+                           read=lambda key: log(pts=30))
+    block = sc.publishable_money(sc.money(players, legs))
+    assert block["all"]["legs"] == 1
+    assert "profit" not in block["all"]
+    assert "withheld" in block["all"]
+
+
+def test_a_full_night_publishes_its_units():
+    n = 12
+    legs = many(n)
+    players, _t = sc.score(many_projections(n), legs, "2026-10-21",
+                           read=lambda key: log(pts=30))
+    block = sc.publishable_money(sc.money(players, legs))
+    assert block["all"]["legs"] == n
+    assert block["all"]["profit"] > 0
+    assert "withheld" not in block["all"]
+
+
+def test_no_price_ever_reaches_the_written_record(workspace):
+    """The licence line again, for the money. A per-leg profit is the
+    price in plain sight: 0.909 units won says -110 out loud."""
+    n = 12
+    legs = many(n, over="-137", under="+113")
+    path = str(workspace / "p.json")
+    open(path, "w").write(json.dumps(many_projections(n)))
+    body = sc.build_record(json.loads(open(path).read()), path, legs, None,
+                           "2026-10-21", WHEN, read=lambda key: log(pts=30))
+    blob = json.dumps(body)
+    assert "-137" not in blob and "113" not in blob
+    for player in body["players"].values():
+        for entry in player["stats"].values():
+            assert set(entry) & {"price", "prices", "units", "profit"} == set()
+            if "priced" in entry:
+                assert entry["priced"] in (True, False)
+
+
+def test_the_published_money_is_an_aggregate_and_nothing_else():
+    n = 12
+    legs = many(n)
+    players, _t = sc.score(many_projections(n), legs, "2026-10-21",
+                           read=lambda key: log(pts=30))
+    block = sc.publishable_money(sc.money(players, legs))
+    assert set(block["all"]) == {"legs", "staked", "profit", "roi",
+                                 "break_even"}
+
+
+def test_the_bar_the_legs_had_to_clear_travels_with_the_result():
+    # A strike rate published against an invented break-even is the
+    # dishonesty this whole apparatus exists to avoid. The real feed
+    # is not -110: measured, its typical prop bar is 53.3%.
+    n = 12
+    legs = many(n, over="-130", under="+108")
+    players, _t = sc.score(many_projections(n), legs, "2026-10-21",
+                           read=lambda key: log(pts=30))
+    tallied = sc.money(players, legs)["all"]
+    assert tallied["break_even"] == pytest.approx(130 / 230, abs=1e-4)
+
+
+def test_the_sentence_quotes_the_measured_bar_not_the_assumed_one():
+    n = 12
+    legs = many(n, over="-130", under="+108")
+    players, _t = sc.score(many_projections(n), legs, "2026-10-21",
+                           read=lambda key: log(pts=30))
+    from engine import pricing
+    line = pricing.summary_sentence(sc.money(players, legs)["all"],
+                                    hit_rate=0.6)
+    assert "56.5%" in line and "prices taken" in line
+    assert "-110" not in line

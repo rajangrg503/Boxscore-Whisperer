@@ -13,9 +13,9 @@ step, and it is the one that produces the number the whole product is
 pitched on: a measured accuracy figure that nobody else in this market
 publishes.
 
-TWO CLAIMS, NOT ONE
-They are worth keeping apart, because one is much stronger evidence
-than the other and they fail in different ways.
+THREE CLAIMS, NOT ONE
+They are worth keeping apart, because they are not equally strong
+evidence and they fail in different ways.
 
   COVERAGE -- did our 80% range contain the actual result? This needs
   our projection and the box score. Both are ours or public, so the
@@ -25,6 +25,18 @@ than the other and they fail in different ways.
   THE LINE -- when our number disagreed with the market, were we on
   the right side? This is the claim a reader cares about more, and it
   is the one that needs somebody else's data.
+
+  THE MONEY -- would following us have been profitable? A hit rate is
+  not an answer to that: 55% at -140 loses and 48% at +130 wins. So
+  every settled leg is also weighted by the price on the side we took,
+  flat stakes, and reported in units and ROI. engine/pricing.py has
+  the arithmetic and the licence reasoning.
+
+The money figure is reported twice -- across every leg, and across
+only the legs engine/disagreement.py would have put on a list. Those
+are different products. "Bet all 300 props in tonight's feed" is
+nobody's plan; "here are the four we think are wrong" is the thing
+being sold, and it is the second number that says whether it works.
 
 A snapshot is optional here. Without one, every projection is still
 scored for coverage. That matters: the stronger, fully-public claim
@@ -42,6 +54,14 @@ was right -- plus the SHA-256 of the exact snapshot the lean was
 computed from. The lean is a fact about our model. The digest fixes
 the evidence behind it beyond revision without republishing a single
 price, and the raw response is produced on request.
+
+Money needs one more rule, because a per-leg profit IS a price: 0.909
+units won says -110 out loud. So per-leg records carry only a boolean
+-- was this leg priced -- and the money itself appears once, as a
+night-level aggregate, and only when it covers enough legs that no
+single price can be read back out of it. Below that it is withheld and
+the record says so, with its leg count, so a season total can report
+what it is missing rather than quietly averaging over a hole.
 
 A reader who wants to check the coverage figure can do it from this
 repository alone. A reader who wants to check the line figure has to
@@ -67,8 +87,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.actuals import (                                   # noqa: E402
     actual_stats, covered, side_settled, side_taken)
 from engine.cache import read_payload                          # noqa: E402
+from engine.disagreement import for_leg, prior_games           # noqa: E402
 from engine.odds_snapshot import read as read_snapshot         # noqa: E402
 from engine.line_input import interpret as interpret_line      # noqa: E402
+from engine import pricing                                     # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULT_DIR = os.path.join(REPO_ROOT, "results")
@@ -112,6 +134,27 @@ def print_snapshot_report(report):
         print(f"  UNRESOLVED player '{name}' x{count} -- no NBA id matched")
     for name, note in (report.get("ambiguous_players") or {}).items():
         print(f"  AMBIGUOUS player '{name}': {note}")
+
+
+def money_lines(block, indent="  "):
+    """What the money block says, as lines a person can read.
+
+    Empty when there is nothing to say, so a coverage-only night does
+    not print two blank headings about units it never had.
+    """
+    out = []
+    for key, label in (("strong", "on the legs we'd have listed"),
+                       ("all", "on every leg in the feed")):
+        tallied = (block or {}).get(key) or {}
+        if tallied.get("withheld"):
+            if tallied.get("legs"):
+                out.append(f"{indent}{label}: {tallied['legs']} priced leg(s), "
+                           f"units withheld ({tallied['withheld']})")
+            continue
+        sentence = pricing.summary_sentence(tallied)
+        if sentence:
+            out.append(f"{indent}{label}: {sentence}")
+    return out
 
 
 def digest_of(path):
@@ -180,12 +223,104 @@ def score(projections, legs, game_date, read=None):
                         entry["side_correct"] = (took == went)
                         totals["legs"] += 1
                         totals["legs_correct"] += 1 if took == went else 0
+
+                    # Was this one of the legs the app would actually
+                    # have put in front of somebody? "Right 55% of the
+                    # time across every line in the feed" and "right
+                    # 55% on the handful we flagged" are different
+                    # claims, and only the second is the product.
+                    claim_for_gap = dict(claim)
+                    claim_for_gap.setdefault(
+                        "n_prior_games", prior_games(projection))
+                    entry["strong"] = for_leg(leg, claim_for_gap) is not None
+
+                    # Whether the side we took had a price, not what it
+                    # was. The flag makes the denominator of the money
+                    # figures auditable without republishing a cent of
+                    # somebody else's data.
+                    entry["priced"] = (took is not None and
+                                       took in (leg.get("prices") or {}))
+
+                    # Counted on settled legs only, so every total in
+                    # this record has the same denominator rule: a push
+                    # is not a leg we got right or wrong, here or
+                    # anywhere else in the file.
+                    if entry["side_correct"] is not None:
+                        if entry["strong"]:
+                            totals["strong_legs"] += 1
+                            totals["strong_correct"] += 1 if entry["side_correct"] else 0
+                        if entry["priced"]:
+                            totals["priced_legs"] += 1
+                            if entry["strong"]:
+                                totals["strong_priced_legs"] += 1
             scored[stat] = entry
 
         players[player_id] = {"status": "scored", "stats": scored}
         totals["scored_players"] += 1
 
     return players, dict(totals)
+
+
+def money(players, legs):
+    """What the night's legs paid, in units, at one unit a leg.
+
+    Reads the already-scored players dict, so the accuracy figures and
+    the money figures cannot come from two different passes and quietly
+    disagree about which legs counted.
+
+    Returns {"all": tally, "strong": tally} -- the second restricted to
+    the legs engine/disagreement.py would have put on a list. The gap
+    between those two numbers is the whole question of whether picking
+    the props matters, which is what he said the customer is actually
+    paying for: they expect to be in profit, not to win every night.
+
+    NOTHING HERE IS PUBLISHABLE UNTIL publishable_money() HAS SEEN IT.
+    See engine/pricing.py's licence note: a thin aggregate is a price.
+    """
+    by_key = {(leg["player_id"], leg["stat"]): leg for leg in legs or []}
+    everything, strong = [], []
+    for player_id, player in (players or {}).items():
+        for stat, entry in (player.get("stats") or {}).items():
+            correct = entry.get("side_correct")
+            if correct is None:
+                continue
+            leg = by_key.get((player_id, stat))
+            if leg is None:
+                continue
+            price = (leg.get("prices") or {}).get(entry.get("side_taken"))
+            units = pricing.settle(price, correct)
+            if units is None:
+                continue
+            # The bar as well as the result. A strike rate published
+            # without the break-even it had to clear is not an answer,
+            # and this feed's props are not -110: the one real capture
+            # puts the typical bar at 53.3%.
+            row = (units, pricing.break_even(price))
+            everything.append(row)
+            if entry.get("strong"):
+                strong.append(row)
+    return {"all": pricing.tally([u for u, _b in everything],
+                                 [b for _u, b in everything]),
+            "strong": pricing.tally([u for u, _b in strong],
+                                    [b for _u, b in strong])}
+
+
+def publishable_money(tallies):
+    """The money block as it may be written to a public file.
+
+    A tally that clears the disclosure threshold travels whole. One
+    that does not keeps its leg count -- so a season total can say how
+    much it is missing -- and loses every figure derived from a price.
+    """
+    out = {"basis": "one unit a leg, flat, at the book price on the side taken"}
+    for key, tallied in (tallies or {}).items():
+        if pricing.publishable(tallied):
+            out[key] = tallied
+        else:
+            out[key] = {"legs": tallied.get("legs", 0), "withheld": (
+                f"fewer than {pricing.MIN_PRICED_LEGS_TO_PUBLISH} priced "
+                f"legs; the aggregate would republish the prices")}
+    return out
 
 
 def build_record(projections, projections_path, legs, snapshot_path,
@@ -208,6 +343,7 @@ def build_record(projections, projections_path, legs, snapshot_path,
         "sources": sources,
         "players": players,
         "totals": totals,
+        "money": publishable_money(money(players, legs)),
     }
 
 
@@ -365,7 +501,12 @@ def score_unscored(now=None):
         if totals.get("legs"):
             line += (f"; {totals['legs_correct']}/{totals['legs']} right "
                      f"against the line")
+        if totals.get("strong_legs"):
+            line += (f", {totals['strong_correct']}/{totals['strong_legs']} "
+                     f"on the strong ones")
         print(line)
+        for extra in money_lines(record.get("money")):
+            print(extra)
         print(f"  {os.path.relpath(result_path, REPO_ROOT)}  "
               f"sha256 {digest[:16]}...")
     return 0
@@ -380,6 +521,10 @@ def summarise():
         print("nothing scored yet")
         return 0
     run = Counter()
+    # Money is summed rather than re-derived: the records are what was
+    # published, and a season figure that disagreed with the nights it
+    # is made of would be the worse number to trust.
+    purse = {"all": Counter(), "strong": Counter()}
     for name in files:
         try:
             with open(os.path.join(RESULT_DIR, name)) as handle:
@@ -389,6 +534,20 @@ def summarise():
             print(f"  {name}  unreadable")
             continue
         run.update(totals)
+        for key, pot in purse.items():
+            tallied = (body.get("money") or {}).get(key) or {}
+            if tallied.get("withheld"):
+                pot["withheld_legs"] += tallied.get("legs", 0)
+                pot["withheld_nights"] += 1
+            elif tallied.get("legs"):
+                pot["legs"] += tallied["legs"]
+                pot["staked"] += tallied.get("staked", 0)
+                pot["profit"] += tallied.get("profit", 0)
+                if tallied.get("break_even") is not None:
+                    # Weighted by legs, so a twelve-leg Tuesday does not
+                    # count the same as a ninety-leg Saturday.
+                    pot["bar_weighted"] += tallied["break_even"] * tallied["legs"]
+                    pot["bar_legs"] += tallied["legs"]
         print(f"  {name}  {totals.get('scored', 0)} scored, "
               f"{totals.get('covered', 0)} in range, "
               f"{totals.get('void_players', 0)} void")
@@ -400,8 +559,38 @@ def summarise():
     if run["legs"]:
         print(f"  against the line: {run['legs_correct']}/{run['legs']} "
               f"= {100.0 * run['legs_correct'] / run['legs']:.1f}%")
+    if run["strong_legs"]:
+        print(f"  on the legs we'd have listed: {run['strong_correct']}/"
+              f"{run['strong_legs']} = "
+              f"{100.0 * run['strong_correct'] / run['strong_legs']:.1f}%")
     if run["legs_push"]:
         print(f"  {run['legs_push']} leg(s) landed on the line, not counted")
+
+    for key, label in (("strong", "the legs we'd have listed"),
+                       ("all", "every leg in the feed")):
+        pot = purse[key]
+        if pot["legs"]:
+            hit = None
+            if key == "strong" and run["strong_legs"]:
+                hit = run["strong_correct"] / run["strong_legs"]
+            elif key == "all" and run["legs"]:
+                hit = run["legs_correct"] / run["legs"]
+            sentence = pricing.summary_sentence(
+                {"legs": pot["legs"], "staked": pot["staked"],
+                 "profit": pot["profit"],
+                 "roi": (100.0 * pot["profit"] / pot["staked"]
+                         if pot["staked"] else None),
+                 "break_even": (pot["bar_weighted"] / pot["bar_legs"]
+                                if pot["bar_legs"] else None)},
+                hit_rate=hit)
+            print(f"  money, {label}: {sentence}")
+        if pot["withheld_legs"]:
+            # Said out loud, every time. A profit figure that silently
+            # skipped a third of the season is the kind of number this
+            # whole apparatus exists not to publish.
+            print(f"    plus {pot['withheld_legs']} priced leg(s) over "
+                  f"{pot['withheld_nights']} night(s) withheld, not counted "
+                  f"above")
     return 0
 
 
@@ -456,13 +645,22 @@ def main(argv=None):
     if totals.get("legs"):
         line += (f"; {totals['legs_correct']}/{totals['legs']} right "
                  f"against the line")
+    if totals.get("strong_legs"):
+        line += (f", {totals['strong_correct']}/{totals['strong_legs']} "
+                 f"on the strong ones")
+    extras = money_lines(body.get("money"))
 
     if args.dry_run:
         print(line + "  -- dry run, nothing written")
+        for extra in extras:
+            print(extra)
         return 0
 
     path, digest = write_record(body, game_date)
-    print(line + f"\n  {os.path.relpath(path, REPO_ROOT)}  sha256 {digest[:16]}...")
+    print(line)
+    for extra in extras:
+        print(extra)
+    print(f"  {os.path.relpath(path, REPO_ROOT)}  sha256 {digest[:16]}...")
     return 0
 
 

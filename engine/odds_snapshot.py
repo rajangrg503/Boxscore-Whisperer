@@ -162,6 +162,28 @@ def _line_from(odd):
     return None, None
 
 
+def _price_from(odd):
+    """The price a reader could actually have taken, or None.
+
+    bookOdds ONLY. fairOdds is the feed's de-vigged consensus, and for
+    the line it is a defensible fallback -- see _line_from -- but for
+    money it is not. A fair price has the bookmaker's margin removed,
+    so settling our legs at fair prices would pay us roughly 4.5% a bet
+    that nobody was ever offering, and every ROI figure we published
+    would be inflated by about the size of the edge we are claiming.
+
+    bookOddsAvailable false means the book is not standing behind that
+    number right now. An unpriced leg is still scored for accuracy; it
+    is only dropped from the money.
+    """
+    if odd.get("bookOddsAvailable") is False:
+        return None
+    raw = odd.get("bookOdds")
+    if raw in (None, ""):
+        return None
+    return str(raw).strip() or None
+
+
 def load(path_or_blob):
     """The snapshot's event list, whether given a path or a parsed blob."""
     blob = path_or_blob
@@ -180,7 +202,15 @@ def read(path_or_blob):
     """Every game-long player over/under in the snapshot, in our terms.
 
     Returns (legs, report). A leg is a dict of player_id (NBA), stat,
-    line, line_source and name. The report counts everything that did
+    line, line_source, name, and prices -- {"over": ..., "under": ...},
+    American, as the book wrote them, and possibly empty.
+
+    The prices are here for engine/pricing.py, so a settled leg can be
+    weighted by what it paid. They are the feed's data exactly like the
+    line and get exactly the same treatment: read locally, used to
+    compute our own figures, never written to a file that is committed.
+
+    The report counts everything that did
     NOT become a leg, by reason -- unknown stats, unresolved players,
     and the markets we deliberately skip -- because a thin night and a
     broken parser look identical in a leg count alone.
@@ -254,13 +284,25 @@ def read(path_or_blob):
             # and a feed carries the same prop from several books. One
             # leg per player and stat, or one popular prop is weighted
             # several times in the published figure.
-            legs.setdefault((str(player_id), stat), {
-                "player_id": str(player_id),
-                "stat": stat,
-                "line": line,
-                "line_source": source,
-                "name": names.get(feed_id),
-            })
+            leg = legs.get((str(player_id), stat))
+            if leg is None:
+                leg = legs[(str(player_id), stat)] = {
+                    "player_id": str(player_id),
+                    "stat": stat,
+                    "line": line,
+                    "line_source": source,
+                    "name": names.get(feed_id),
+                    # Per side, because they are different bets at
+                    # different prices: we only ever take one of them,
+                    # and settling the wrong side's price would report
+                    # a profit nobody could have collected.
+                    "prices": {},
+                }
+            side = odd.get("sideID")
+            if side in ("over", "under") and side not in leg["prices"]:
+                price = _price_from(odd)
+                if price is not None:
+                    leg["prices"][side] = price
 
     report = {key: value for key, value in report.items() if value}
     return list(legs.values()), report

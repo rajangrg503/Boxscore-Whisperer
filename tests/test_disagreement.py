@@ -162,3 +162,62 @@ def test_the_sentence_names_the_player_and_the_stat():
 
 def test_no_entry_means_no_sentence():
     assert dis.sentence(None) is None
+
+
+# ---- the two files agreeing about the same record -------------------------
+# This module was written reading "n_prior"; tools/capture_projections.py
+# writes "n_prior_games". Nothing failed. distribution_for declines
+# below five prior games, so probability_over returned None on every
+# leg and rank() returned an EMPTY LIST for every night of the season
+# -- while these tests passed, because they built the record by hand in
+# this module's spelling instead of through the writer.
+#
+# So the fixture below is built by tools/capture_projections.py itself.
+# If the two files ever disagree about a key again, this is what fails.
+import os                                                      # noqa: E402
+import sys                                                     # noqa: E402
+from datetime import datetime, timezone                        # noqa: E402
+
+import pandas as pd                                            # noqa: E402
+
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+
+import capture_projections as cp                               # noqa: E402
+
+
+def written_record(monkeypatch, n=40, projected=25.0):
+    """A projections record as the capture tool actually writes one."""
+    dates = pd.date_range("2026-01-01", periods=n)[::-1]
+    payload = {"cached_at": "x", "data": [
+        {"GAME_DATE": day.strftime("%Y-%m-%d"), "MIN": 34,
+         "PTS": projected + (i % 7) - 3, "REB": 5 + (i % 3),
+         "AST": 6 + (i % 4), "STL": 1, "BLK": 1, "FG3M": 2, "FG3A": 6,
+         "TOV": 3, "OREB": 1} for i, day in enumerate(dates)]}
+    monkeypatch.setattr(cp, "read_payload", lambda key: payload)
+    body, _skipped = cp.build_record(
+        ["2544"], "2026-27", datetime(2026, 10, 21, tzinfo=timezone.utc))
+    return body
+
+
+def test_a_record_written_by_the_capture_tool_produces_a_list(monkeypatch):
+    record = written_record(monkeypatch)
+    legs = [{"player_id": "2544", "stat": "PTS", "line": 15.5,
+             "name": "LeBron James"}]
+    rows = dis.rank(legs, record)
+    assert rows, "rank() found nothing in a record the capture tool wrote"
+    assert rows[0]["n_prior"] == 40
+    assert rows[0]["side"] == "over"
+
+
+def test_the_prior_game_count_survives_the_trip_from_the_writer(monkeypatch):
+    record = written_record(monkeypatch)
+    assert dis.prior_games(record["players"]["2544"]) == 40
+
+
+def test_either_spelling_of_the_prior_count_is_read():
+    assert dis.prior_games({"n_prior_games": 12}) == 12
+    assert dis.prior_games({"n_prior": 12}) == 12
+    assert dis.prior_games({}) == 0
+    assert dis.prior_games(None) == 0
+    assert dis.prior_games({"n_prior_games": "x"}) == 0
