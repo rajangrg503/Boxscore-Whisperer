@@ -362,7 +362,31 @@ def get_out_redistribution_adjustment(player_id, out_player_id, season, player_d
     never a fabricated adjustment."""
     neutral = {col: 1.0 for col, _ in STAT_COLUMNS}
 
-    out_df = fetch_combined_game_log(out_player_id, season)
+    try:
+        out_df = fetch_combined_game_log(out_player_id, season)
+    except Exception:
+        # The only call in this file that was not wrapped, and the one
+        # that could take the whole page down. Both other fetches here
+        # already degrade to a neutral applied=False result; this one
+        # let a ConnectionError out of the adjustment layer, up through
+        # predict_player_vs_opponent, build_team_projection and
+        # render_team_projection, to the top of app.py. One marked-out
+        # player with no cached log and Full Matchup showed a traceback
+        # instead of a projection.
+        #
+        # It is not a rare corner either. On Streamlit Cloud
+        # stats.nba.com is blocked, so the first lookup of any session
+        # sets _live_nba_api_blocked and every later fetch is
+        # cache-or-raise. Anyone signed, traded or called up since the
+        # last refresh has no cached log, and marking them out crashed
+        # the page rather than saying so.
+        return AdjustmentResult(
+            layer=OUT_REDISTRIBUTION_LAYER, value=neutral,
+            note=(f"No game log available for the marked-out player in {season} "
+                  f"(live fetch failed, not yet cached) -- cannot tell which games "
+                  f"they missed, so skipping this adjustment."),
+            data_quality="unavailable", sample_n=0, applied=False,
+        )
     out_game_ids = set(out_df["Game_ID"]) if not out_df.empty else set()
     prior = out_prior(out_df)
 

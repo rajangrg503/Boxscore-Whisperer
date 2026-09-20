@@ -160,3 +160,80 @@ def test_thin_sample_falls_back_to_pooled_prior(monkeypatch):
     assert result.value["PTS"] == 1 + teammates_module.OUT_PRIOR_BETA["PTS"] * 30 / teammates_module.LEAGUE_TEAM_PER_GAME["PTS"]
     assert result.value["BLK"] == 1.0
     assert "league-wide pickup" in result.note
+
+
+# ---- when the out player's log cannot be fetched at all -------------------
+# THE CRASH, 21 Sep 2026. This was the only fetch in teammates.py that
+# was not wrapped. A ConnectionError from it escaped the adjustment
+# layer entirely -- up through predict_player_vs_opponent,
+# build_team_projection and render_team_projection to the top of
+# app.py -- and Full Matchup showed a traceback instead of a
+# projection.
+#
+# Not a rare corner. On Streamlit Cloud stats.nba.com is blocked, so
+# the first lookup of any session sets _live_nba_api_blocked and every
+# later fetch becomes cache-or-raise. Anyone signed, traded or called
+# up since the last cache refresh has no cached log, and marking them
+# out took the page down rather than saying so.
+def _raising_fetch(exc):
+    def _fetch(player_id, season):
+        raise exc
+    return _fetch
+
+
+def test_an_unfetchable_out_player_skips_the_layer_rather_than_raising(
+        monkeypatch):
+    monkeypatch.setattr(
+        teammates_module, "fetch_combined_game_log",
+        _raising_fetch(ConnectionError(
+            "Live NBA data fetch skipped -- already confirmed unreachable "
+            "this session.")))
+    player_df = pd.DataFrame([_row(f"g{i}") for i in range(20)])
+
+    result = get_out_redistribution_adjustment(1, 999, "2026-27", player_df)
+
+    assert result.applied is False
+    assert result.data_quality == "unavailable"
+    assert all(v == 1.0 for v in result.value.values()), "invented an adjustment"
+    assert "not yet cached" in result.note
+
+
+def test_it_survives_any_failure_not_just_a_connection_error(monkeypatch):
+    """The live path can fail in more ways than one -- a timeout, a
+    malformed payload, a cache read that throws. None of them should
+    be the difference between a page and a traceback."""
+    for exc in (ConnectionError("blocked"), TimeoutError("slow"),
+                ValueError("malformed"), KeyError("Game_ID")):
+        monkeypatch.setattr(teammates_module, "fetch_combined_game_log",
+                            _raising_fetch(exc))
+        player_df = pd.DataFrame([_row(f"g{i}") for i in range(20)])
+        result = get_out_redistribution_adjustment(1, 999, "2026-27", player_df)
+        assert result.applied is False, exc
+
+
+def test_the_note_says_which_player_could_not_be_read(monkeypatch):
+    """A reader who marked somebody out needs to know the answer is
+    missing for that reason, not that the marking did nothing."""
+    monkeypatch.setattr(teammates_module, "fetch_combined_game_log",
+                        _raising_fetch(ConnectionError("blocked")))
+    player_df = pd.DataFrame([_row(f"g{i}") for i in range(20)])
+    note = get_out_redistribution_adjustment(1, 999, "2026-27", player_df).note
+    assert "marked-out player" in note and "2026-27" in note
+
+
+def test_every_fetch_in_this_module_is_guarded():
+    """The fix is one try/except; the lesson is that it was the only
+    one missing. Pins that, so a fourth fetch added later cannot
+    quietly reintroduce the same crash."""
+    import inspect
+    source = inspect.getsource(teammates_module)
+    lines = source.splitlines()
+    for index, line in enumerate(lines):
+        if "fetch_combined_game_log(" not in line or "import" in line:
+            continue
+        if "def " in line:
+            continue
+        window = "\n".join(lines[max(0, index - 6):index])
+        assert "try:" in window, (
+            f"unguarded fetch_combined_game_log at line {index + 1}: "
+            f"{line.strip()}")
