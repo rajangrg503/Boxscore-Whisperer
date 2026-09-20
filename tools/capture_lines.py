@@ -177,7 +177,8 @@ def _iso(when):
     return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def fetch_events(api_key, league=LEAGUE, limit=MAX_EVENTS_PER_RUN, now=None):
+def fetch_events(api_key, league=LEAGUE, limit=MAX_EVENTS_PER_RUN, now=None,
+                 ahead_hours=None, behind_hours=None):
     """Games starting around now, with odds, as the API returned them.
 
     Deliberately not normalised. See CAPTURE RAW, PARSE LATER above.
@@ -185,13 +186,22 @@ def fetch_events(api_key, league=LEAGUE, limit=MAX_EVENTS_PER_RUN, now=None):
     The window is the whole reason this is affordable: see the note on
     WINDOW_HOURS_AHEAD. Without it the endpoint hands back the schedule
     and every call bills for all of it.
+
+    The window is widenable for one call, and that is not a convenience
+    -- out of season nothing tips within twelve hours, so the nightly
+    settings return nothing at all and there is no way to look at the
+    feed until opening night. Which is exactly when you least want to
+    be discovering what its responses look like. The cap still applies,
+    so a wide window costs at most MAX_EVENTS_PER_RUN.
     """
     now = now or datetime.now(timezone.utc)
+    ahead = WINDOW_HOURS_AHEAD if ahead_hours is None else ahead_hours
+    behind = WINDOW_HOURS_BEHIND if behind_hours is None else behind_hours
     payload = _get("events", {
         "leagueID": league,
         "oddsAvailable": "true",
-        "startsAfter": _iso(now - timedelta(hours=WINDOW_HOURS_BEHIND)),
-        "startsBefore": _iso(now + timedelta(hours=WINDOW_HOURS_AHEAD)),
+        "startsAfter": _iso(now - timedelta(hours=behind)),
+        "startsBefore": _iso(now + timedelta(hours=ahead)),
         "limit": limit,
     }, api_key)
     if isinstance(payload, dict):
@@ -287,6 +297,11 @@ def main(argv=None):
                         help="fetch and report, write nothing")
     parser.add_argument("--summarise", action="store_true",
                         help="report what has already been captured, fetch nothing")
+    parser.add_argument("--ahead-hours", type=float, default=None,
+                        help=f"how far ahead to look (default {WINDOW_HOURS_AHEAD}); "
+                             "widen it out of season, when nothing tips tonight")
+    parser.add_argument("--behind-hours", type=float, default=None,
+                        help=f"how far back to look (default {WINDOW_HOURS_BEHIND})")
     args = parser.parse_args(argv)
 
     if args.summarise:
@@ -302,8 +317,17 @@ def main(argv=None):
         return 2
 
     captured_at = datetime.now(timezone.utc)
+    if args.ahead_hours is not None or args.behind_hours is not None:
+        # Said out loud: a snapshot taken over a wide window is not a
+        # close-to-tip-off line, and a record of one must not be
+        # mistaken for one later.
+        ahead = WINDOW_HOURS_AHEAD if args.ahead_hours is None else args.ahead_hours
+        behind = WINDOW_HOURS_BEHIND if args.behind_hours is None else args.behind_hours
+        print(f"window widened: {behind}h back, {ahead}h ahead "
+              f"(capped at {MAX_EVENTS_PER_RUN} events)")
     try:
-        payload, events = fetch_events(api_key)
+        payload, events = fetch_events(api_key, ahead_hours=args.ahead_hours,
+                                       behind_hours=args.behind_hours)
     except urllib.error.HTTPError as e:
         # 401 is a bad key, 429 is the quota. Both need a person, and
         # both must be loud: a capture job that fails quietly is a
