@@ -151,41 +151,15 @@ def test_the_bookmakers_number_never_reaches_the_record(workspace):
 
 
 # ---- reading a snapshot ---------------------------------------------------
-def test_legs_are_found_wherever_they_sit(tmp_path):
-    snapshot = tmp_path / "s.json"
-    snapshot.write_text(json.dumps({"response": {"data": [
-        {"eventID": "a", "odds": [
-            {"playerID": "1628983", "statID": "points", "overUnder": 25.5},
-            {"playerID": "1628983", "statID": "rebounds", "overUnder": 7.5},
-        ]},
-        {"eventID": "b", "players": {"x": {
-            "statEntityID": "203999",
-            "markets": [{"market": "assists", "line": 6.5}]}}},
-    ]}}))
-    legs, unknown = sc.legs_from_snapshot(str(snapshot))
-    assert not unknown
-    assert sorted((leg["player_id"], leg["stat"], leg["line"]) for leg in legs) == [
-        ("1628983", "PTS", 25.5), ("1628983", "REB", 7.5), ("203999", "AST", 6.5)]
-
-
-def test_the_same_prop_from_nine_books_is_one_leg(tmp_path):
-    """Otherwise one popular prop is weighted nine times in the figure."""
-    snapshot = tmp_path / "s.json"
-    snapshot.write_text(json.dumps({"response": [
-        {"playerID": "1", "statID": "points", "overUnder": 25.5, "book": b}
-        for b in ("a", "b", "c")]}))
-    legs, _unknown = sc.legs_from_snapshot(str(snapshot))
-    assert len(legs) == 1
-
-
-def test_a_stat_we_do_not_recognise_is_reported_not_dropped(tmp_path):
-    """Every one of these is a bet we captured and failed to score."""
-    snapshot = tmp_path / "s.json"
-    snapshot.write_text(json.dumps({"response": [
-        {"playerID": "1", "statID": "double_double", "overUnder": 0.5}]}))
-    legs, unknown = sc.legs_from_snapshot(str(snapshot))
-    assert legs == []
-    assert unknown["double_double"] == 1
+# The parser itself lives in engine/odds_snapshot.py and is tested in
+# tests/test_odds_snapshot.py, against the real schema rather than the
+# one this file used to guess at. What is checked here is only that the
+# scorer reads its legs through that shared module -- if the scorer and
+# the projection capture ever read a snapshot differently, the app
+# projects one set of players and scores another.
+def test_the_scorer_reads_snapshots_through_the_shared_parser():
+    from engine.odds_snapshot import read as shared_read
+    assert sc.legs_from_snapshot is shared_read
 
 
 def test_a_spread_style_negative_line_is_skipped():

@@ -147,21 +147,22 @@ def test_the_record_says_which_interval_it_used(workspace):
 
 
 # ---- reading player ids out of a line snapshot ---------------------------
-def test_player_ids_are_found_wherever_they_sit(tmp_path):
-    """The odds schema is not documented well enough to assume a shape,
-    so this walks for anything that names a player."""
-    snapshot = tmp_path / "s.json"
-    snapshot.write_text(json.dumps({"response": {"data": [
-        {"eventID": "a", "odds": [{"playerID": "1628983", "line": 25.5}]},
-        {"eventID": "b", "players": {"x": {"statEntityID": "203999"}}},
-    ]}}))
-    assert cp.player_ids_from_snapshot(str(snapshot)) == ["1628983", "203999"]
+def test_player_ids_come_back_as_nba_ids_not_the_feeds_slugs():
+    """This walked the snapshot for anything that looked like a player
+    id, which in the real schema returns CADE_CUNNINGHAM_1_NBA. A slug
+    finds no cached game log, so every player would have been skipped
+    as having too little history -- indistinguishable, in a job nobody
+    watches, from the off-season."""
+    blob = {"response": {"data": [{
+        "players": {"LEBRON_JAMES_1_NBA": {"name": "LeBron James"}},
+        "odds": {"k": {"statID": "points", "playerID": "LEBRON_JAMES_1_NBA",
+                       "betTypeID": "ou", "periodID": "game",
+                       "sideID": "over", "bookOverUnder": "25.5"}}}]}}
+    assert cp.player_ids_from_snapshot(blob) == ["2544"]
 
 
-def test_a_snapshot_with_no_players_yields_none(tmp_path):
-    snapshot = tmp_path / "s.json"
-    snapshot.write_text(json.dumps({"response": {"data": [{"eventID": "a"}]}}))
-    assert cp.player_ids_from_snapshot(str(snapshot)) == []
+def test_a_snapshot_with_no_players_yields_none():
+    assert cp.player_ids_from_snapshot({"response": {"data": []}}) == []
 
 
 # ---- summarising ----------------------------------------------------------
