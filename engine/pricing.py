@@ -117,6 +117,33 @@ def break_even(price):
     return 1.0 / (1.0 + profit)
 
 
+def implied_probability(over_price, under_price):
+    """The market's own chance of the OVER, with the margin removed.
+
+    A book posts a line and then prices the two sides. When it prices
+    them evenly the line is the market's midpoint, which is the
+    assumption engine/disagreement.py was built on. When it does not --
+    -300 one way and +240 the other -- the line is nowhere near the
+    midpoint and the market's real opinion is in the price.
+
+    Both raw break-evens add to more than 1 because both carry the
+    bookmaker's margin; dividing each by the total removes it. That is
+    the standard proportional de-vig, and it assumes the margin is
+    split evenly between the sides. It is not always, on a heavy
+    favourite, but it is far closer than pretending the answer is 50%.
+
+    Returns None unless BOTH sides are priced: de-vigging needs the
+    pair, and a one-sided estimate would carry the whole margin.
+    """
+    over, under = break_even(over_price), break_even(under_price)
+    if over is None or under is None:
+        return None
+    overround = over + under
+    if overround <= 0:
+        return None
+    return over / overround
+
+
 def settle(price, correct):
     """Units won or lost on one leg, or None when it does not count.
 

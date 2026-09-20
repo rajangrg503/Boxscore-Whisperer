@@ -221,3 +221,95 @@ def test_either_spelling_of_the_prior_count_is_read():
     assert dis.prior_games({}) == 0
     assert dis.prior_games(None) == 0
     assert dis.prior_games({"n_prior_games": "x"}) == 0
+
+
+# ---- the market's side, taken from the prices ----------------------------
+# This module ranked by distance from 50%, on the stated assumption that
+# a line is where a book balances its action. A dress rehearsal against
+# the one real capture showed the assumption was not merely imprecise,
+# it selected for the wrong legs:
+#
+#     strong legs, median break-even   60.2%
+#     every other side, median         51.1%
+#
+# Six of the eight biggest "disagreements" were priced PAST us. The
+# ranking was finding props where the book had already moved the price
+# to say what we were about to say.
+def priced_leg(over, under, line=19.5, player="2544", stat="PTS",
+               name="LeBron James"):
+    return {"player_id": player, "stat": stat, "line": line, "name": name,
+            "prices": {"over": over, "under": under}}
+
+
+def test_an_evenly_priced_prop_behaves_exactly_as_before():
+    # -110 both ways de-vigs to 50%, so the old assumption was right
+    # here and the change must not move this case at all.
+    assert dis.market_probability(priced_leg("-110", "-110")) == (0.5, True)
+
+
+def test_a_juiced_prop_takes_its_probability_from_the_price():
+    market, priced = dis.market_probability(priced_leg("-300", "+240"))
+    assert priced is True
+    assert 0.70 < market < 0.74, market
+
+
+def test_an_unpriced_leg_falls_back_and_says_so():
+    market, priced = dis.market_probability(
+        {"player_id": "2544", "stat": "PTS", "line": 19.5})
+    assert (market, priced) == (0.5, False)
+
+
+def test_a_leg_the_market_has_priced_past_us_is_not_a_disagreement():
+    """THE REGRESSION. We make him 59%; the price needs 68%. Under the
+    old rule that was a nine-point 'disagreement' and went top of the
+    list. It is the opposite of one -- the market is more confident
+    than us, in our own direction."""
+    projection = {"projected": 25.0, "low": 17.0, "high": 42.0,
+                  "n_prior_games": 40}
+    # -650/+450 puts the market around 85% on the over; our number is
+    # nowhere near that, so the only honest answer is "no disagreement".
+    leg = priced_leg("-650", "+450", line=15.5)
+    assert dis.for_leg(leg, projection) is None
+
+    # The identical leg, evenly priced, IS a disagreement.
+    assert dis.for_leg(priced_leg("-110", "-110", line=15.5),
+                       projection) is not None
+
+
+def test_the_side_follows_the_price_not_the_line():
+    # Our number sits above the line, so the old rule always said
+    # "over". Against a market that is higher still, the disagreement
+    # is on the under.
+    projection = {"projected": 25.0, "low": 17.0, "high": 42.0,
+                  "n_prior_games": 40}
+    entry = dis.for_leg(priced_leg("-900", "+600", line=18.5), projection)
+    assert entry is not None and entry["side"] == "under"
+
+
+def test_every_row_says_whether_the_market_was_priced_or_assumed():
+    projection = {"projected": 25.0, "low": 17.0, "high": 42.0,
+                  "n_prior_games": 40}
+    priced = dis.for_leg(priced_leg("-110", "-110"), projection)
+    assumed = dis.for_leg({"player_id": "2544", "stat": "PTS",
+                           "line": 19.5, "name": "x"}, projection)
+    assert priced["market_priced"] is True
+    assert assumed["market_priced"] is False
+
+
+def test_the_sentence_still_carries_no_price_and_no_line():
+    projection = {"projected": 25.0, "low": 17.0, "high": 42.0,
+                  "n_prior_games": 40}
+    entry = dis.for_leg(priced_leg("-137", "+113"), projection)
+    text = dis.sentence(entry)
+    for forbidden in ("-137", "113", "19.5"):
+        assert forbidden not in text
+
+
+def test_the_gap_is_not_published_by_the_sentence():
+    """our_probability minus gap is the market's implied probability,
+    which is the price in different clothes."""
+    projection = {"projected": 25.0, "low": 17.0, "high": 42.0,
+                  "n_prior_games": 40}
+    entry = dis.for_leg(priced_leg("-300", "+240", line=12.5), projection)
+    if entry:
+        assert f"{entry['gap']:.0%}" not in dis.sentence(entry)
