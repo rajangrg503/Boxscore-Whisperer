@@ -232,11 +232,37 @@ def test_a_prior_season_baseline_costs_points():
     assert early.score == plain.score - PRIOR_SEASON_PENALTY
 
 
-def test_which_is_enough_to_move_a_plain_projection_off_high():
+def test_a_plain_early_season_projection_still_says_high():
+    """Measured, not assumed. early_season_sweep.py scored 3,801 real
+    first-five-games projections against the same players' later
+    in-season ones: paired within player-season, last season's
+    baseline was a median 3.0% worse, CI [0.998, 1.059], worse for
+    only 53.2% of 742 players.
+
+    An effect that small does not cost a projection its label. An
+    earlier version of this deducted 15 -- the file's charge for an
+    untested estimate -- and moved every opening-fortnight projection
+    to Medium on the strength of a guess."""
     from engine.confidence import score_prediction
-    assert score_prediction({}, baseline_sample_n=70).label == "High"
-    assert score_prediction({}, baseline_sample_n=70,
-                            baseline_is_prior_season=True).label == "Medium"
+    result = score_prediction({}, baseline_sample_n=70,
+                              baseline_is_prior_season=True)
+    assert result.label == "High"
+
+
+def test_but_it_still_says_where_the_number_came_from():
+    """The disclosure is the honest part and does not depend on the
+    penalty being large."""
+    from engine.confidence import score_prediction
+    result = score_prediction({}, baseline_sample_n=70,
+                              baseline_is_prior_season=True)
+    assert any("last season" in reason.lower() for reason in result.reasons)
+
+
+def test_the_penalty_matches_the_one_for_last_seasons_defence_ratings():
+    """Five, anchored on the closest comparable already in this file,
+    rather than picked."""
+    from engine.confidence import PRIOR_SEASON_PENALTY, DEFENSE_FALLBACK_PENALTY
+    assert PRIOR_SEASON_PENALTY == DEFENSE_FALLBACK_PENALTY
 
 
 def test_the_label_always_follows_the_score_nothing_overrides_it():
