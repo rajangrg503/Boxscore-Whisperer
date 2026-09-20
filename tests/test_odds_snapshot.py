@@ -184,3 +184,92 @@ def test_a_team_market_is_not_reported_as_an_unmatched_player():
     assert legs == []
     assert "unresolved_players" not in report
     assert sum(report["team_markets"].values()) == 3
+
+
+# ---- game context: the spread, which the first parser threw away --------
+def event(odds, home="DETROIT_PISTONS_NBA", away="BOSTON_CELTICS_NBA", eid="e1"):
+    return {"response": {"data": [{
+        "eventID": eid,
+        "teams": {"home": {"teamID": home, "names": {"medium": "Pistons"}},
+                  "away": {"teamID": away, "names": {"medium": "Celtics"}}},
+        "players": {}, "odds": {f"k{i}": o for i, o in enumerate(odds)}}]}}
+
+
+def spread(value="-5.5", side="home", period="game", fair=None):
+    body = {"betTypeID": "sp", "statID": "points", "sideID": side,
+            "statEntityID": side, "periodID": period, "bookOdds": "-110"}
+    if value is not None:
+        body["bookSpread"] = value
+    if fair is not None:
+        body["fairSpread"] = fair
+    return body
+
+
+def total(value="221.5", side="over"):
+    return {"betTypeID": "ou", "statID": "points", "sideID": side,
+            "statEntityID": "all", "periodID": "game",
+            "bookOverUnder": value, "bookOdds": "-110"}
+
+
+def test_the_spread_is_read_from_the_home_side():
+    ctx = osnap.game_context(event([spread("-5.5")]))["e1"]
+    assert ctx["spread"] == -5.5
+    assert ctx["spread_source"] == "book"
+
+
+def test_a_negative_spread_means_the_home_team_is_favoured():
+    """The convention the books print, and the one least likely to be
+    misread later."""
+    assert osnap.game_context(event([spread("-5.5")]))["e1"]["favourite"] == "home"
+    assert osnap.game_context(event([spread("+5.5")]))["e1"]["favourite"] == "away"
+
+
+def test_expected_margin_is_the_size_regardless_of_side():
+    for value in ("-9.5", "+9.5"):
+        ctx = osnap.game_context(event([spread(value)]))["e1"]
+        assert ctx["expected_margin"] == 9.5
+
+
+def test_a_pick_em_has_no_favourite():
+    """Saying "home" at 0.0 would put every coin-flip game in the
+    favourite bucket, which is exactly the bucket the blowout work
+    cares about keeping clean."""
+    ctx = osnap.game_context(event([spread("0")]))["e1"]
+    assert ctx["favourite"] is None
+    assert ctx["expected_margin"] == 0.0
+
+
+def test_the_game_total_is_read_too():
+    ctx = osnap.game_context(event([total("221.5")]))["e1"]
+    assert ctx["total"] == 221.5 and ctx["total_source"] == "book"
+
+
+def test_a_player_over_under_is_not_mistaken_for_the_game_total():
+    """Player props and the game total are both betTypeID "ou". Only
+    the one whose entity is the whole game is the total."""
+    player_ou = {"betTypeID": "ou", "statID": "points", "sideID": "over",
+                 "statEntityID": "LEBRON_JAMES_1_NBA", "periodID": "game",
+                 "bookOverUnder": "25.5"}
+    assert osnap.game_context(event([player_ou]))["e1"]["total"] is None
+
+
+def test_a_quarter_spread_is_not_the_game_spread():
+    assert osnap.game_context(event([spread("-2.5", period="1q")]))["e1"]["spread"] is None
+
+
+def test_the_consensus_spread_is_used_when_no_book_offered_one():
+    ctx = osnap.game_context(event([spread(None, fair="-4.5")]))["e1"]
+    assert ctx["spread"] == -4.5 and ctx["spread_source"] == "fair"
+
+
+def test_the_teams_come_back_with_it():
+    ctx = osnap.game_context(event([spread()]))["e1"]
+    assert ctx["home_team"] == "DETROIT_PISTONS_NBA"
+    assert ctx["away_name"] == "Celtics"
+
+
+def test_an_event_with_no_spread_is_still_listed():
+    """A game we have no market view on is a game we know nothing about,
+    not a game that vanishes."""
+    ctx = osnap.game_context(event([]))["e1"]
+    assert ctx["spread"] is None and ctx["expected_margin"] is None

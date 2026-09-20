@@ -266,6 +266,101 @@ def read(path_or_blob):
     return list(legs.values()), report
 
 
+# ---------------------------------------------------------------------
+# GAME CONTEXT
+#
+# The spread is the market's forecast of the final margin, and the
+# margin is the single largest driver of a player's minutes that we
+# have measured: in a 21-point game the losing side's starters lose 7%
+# of their minutes and 13% of their scoring, while a heavy favourite's
+# star sits the fourth having already banked his. SGA's 2025-26 splits
+# put 8.1 minutes and 5.9 points between a close game and a blowout
+# win, on a third of his season.
+#
+# The first version of this parser threw all of that away. Spreads,
+# moneylines and totals were filtered out as "not player props" and
+# counted under skipped_bet_types -- 152 discarded entries on a
+# 16-event snapshot -- without noticing that the spread is the only
+# advance signal we have for game script.
+#
+# Nothing new has to be captured. The raw snapshots already contain
+# this; it was only ever the reading that dropped it.
+#
+# LICENCE: the spread and the total are the feed's numbers, exactly
+# like the line, and get exactly the same treatment. They are read
+# locally, used to compute OUR derived outputs, and never committed.
+# ---------------------------------------------------------------------
+SPREAD_FIELDS = (("bookSpread", "book"), ("fairSpread", "fair"))
+TOTAL_FIELDS = (("bookOverUnder", "book"), ("fairOverUnder", "fair"))
+
+
+def _number_from(odd, fields):
+    for field, source in fields:
+        raw = odd.get(field)
+        if raw in (None, ""):
+            continue
+        try:
+            return float(raw), source
+        except (TypeError, ValueError):
+            continue
+    return None, None
+
+
+def _team_name(event, side):
+    team = ((event.get("teams") or {}).get(side) or {})
+    names = team.get("names") or {}
+    return (names.get("medium") or names.get("long") or names.get("short")
+            or team.get("teamID"))
+
+
+def game_context(path_or_blob):
+    """What the market expects of each GAME: venue, spread, total.
+
+    Returns {event_id: {...}}. The spread is given from the HOME side,
+    so a negative number means the home team is favoured -- the same
+    convention the books print and the one least likely to be misread
+    at two in the morning.
+
+    expected_margin is its absolute value: the market's forecast of how
+    lopsided this gets, which is the quantity the blowout work needs.
+    """
+    out = {}
+    for event in load(path_or_blob):
+        event_id = event.get("eventID")
+        if not event_id:
+            continue
+        row = {
+            "event_id": event_id,
+            "home_team": ((event.get("teams") or {}).get("home") or {}).get("teamID"),
+            "away_team": ((event.get("teams") or {}).get("away") or {}).get("teamID"),
+            "home_name": _team_name(event, "home"),
+            "away_name": _team_name(event, "away"),
+            "spread": None, "spread_source": None,
+            "total": None, "total_source": None,
+            "favourite": None, "expected_margin": None,
+        }
+        for odd in (event.get("odds") or {}).values():
+            if not isinstance(odd, dict) or odd.get("periodID") != WANTED_PERIOD:
+                continue
+            bet_type, side = odd.get("betTypeID"), odd.get("sideID")
+            if bet_type == "sp" and side == "home" and row["spread"] is None:
+                row["spread"], row["spread_source"] = _number_from(odd, SPREAD_FIELDS)
+            elif (bet_type == WANTED_BET_TYPE and odd.get("statEntityID") == "all"
+                  and side == "over" and row["total"] is None):
+                row["total"], row["total_source"] = _number_from(odd, TOTAL_FIELDS)
+
+        if row["spread"] is not None:
+            row["expected_margin"] = abs(row["spread"])
+            # A pick'em is not a favourite. Saying "home" at 0.0 would
+            # put every coin-flip game in the favourite bucket.
+            if row["spread"] < 0:
+                row["favourite"] = "home"
+            elif row["spread"] > 0:
+                row["favourite"] = "away"
+        out[event_id] = row
+    return out
+
+
 def nba_player_ids(path_or_blob):
     """Who to project tonight: NBA ids, resolved from the feed's names.
 
