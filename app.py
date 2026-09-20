@@ -94,6 +94,10 @@ from engine.line_input import (
     interpret as entered_line,
 )
 from engine.minutes import describe as minutes_describe, why_not as minutes_why_not
+from engine.short_night import (
+    risk as short_night_risk,
+    sentence as short_night_sentence,
+)
 from engine.distribution import (
     DISTRIBUTION_META,
     STAT_DISTRIBUTIONS,
@@ -2622,6 +2626,19 @@ with tab1:
         )
         if confidence_result.label != "High" and confidence_result.reasons:
             st.caption(" • ".join(confidence_result.reasons[:2]))
+
+        # A measured base rate, not an adjustment. engine/short_night.py
+        # has the full reasoning; the short version is that this signal
+        # was tested as a projection layer and as an interval widener
+        # and does nothing for either -- the range already covers these
+        # players correctly. What it does do is separate hard: 62% of
+        # players who went under ten minutes twice in three games did it
+        # again, against a 14% base rate. Somebody deciding whether to
+        # take a prop wants to know that, and every number in the
+        # sentence comes from the backtest rather than from judgment.
+        _short_night = short_night_risk(r.get("season_log"))
+        if _short_night:
+            st.warning(short_night_sentence(_short_night), icon="⏱️")
 
         def render_stat_card_row(stat_cols, compact=False, lead=None):
             row_html = (

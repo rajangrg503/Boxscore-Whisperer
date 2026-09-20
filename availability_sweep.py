@@ -302,6 +302,15 @@ def report(frame, feature, label):
 
 def main():
     frame = load()
+    if "--write-rates" in sys.argv:
+        path, rates = write_rates(frame)
+        print(f"wrote {path}")
+        print(f"  overall {100 * rates['overall']['rate']:.1f}% "
+              f"(n={rates['overall']['n']:,})")
+        for bucket, row in rates["by_short_stints"].items():
+            print(f"  {bucket:12s} {100 * row['rate']:5.1f}% "
+                  f"[{100 * row['low']:.1f}, {100 * row['high']:.1f}]  n={row['n']:,}")
+        return 0
     print(f"{len(frame):,} player-games")
     for feature, label in (("missed_bucket", f"GAMES MISSED out of the team's last {RECENT_TEAM_GAMES}"),
                            ("form_bucket", f"MINUTES FORM (last {RECENT_APPEARANCES} appearances / season MPG)"),
@@ -320,6 +329,78 @@ def main():
     for name, value in results.items():
         print(f"  {name:8s} pooled rel-MAE {value:.4f}  -> "
               f"{'ships' if value < 0.999 else 'does NOT ship'}")
+
+
+
+
+# ---------------------------------------------------------------------
+# The table the app reads.
+#
+# The sweep above is the evidence that these rates are real and that no
+# projection layer should be built on them. This writes the rates
+# themselves, so the page can state a measured base rate instead of a
+# number somebody typed.
+#
+# Descriptive, not predictive: these are historical frequencies with
+# their sample sizes and a Wilson interval, and the app presents them
+# as exactly that.
+# ---------------------------------------------------------------------
+RATES_PATH = "engine/availability_rates.json"
+
+
+def wilson(successes, total, z=1.96):
+    """A confidence interval that behaves at the edges.
+
+    The normal approximation gives nonsense near 0 and 1 -- negative
+    lower bounds on rare buckets -- and a rate published without an
+    interval invites being read as more precise than it is.
+    """
+    if total == 0:
+        return (float("nan"), float("nan"))
+    p = successes / total
+    denominator = 1 + z * z / total
+    centre = (p + z * z / (2 * total)) / denominator
+    margin = (z * np.sqrt(p * (1 - p) / total + z * z / (4 * total * total))
+              / denominator)
+    return (max(0.0, centre - margin), min(1.0, centre + margin))
+
+
+def build_rates(frame):
+    rates = {"short_stint_minutes": SHORT_STINT_MINUTES,
+             "recent_appearances": RECENT_APPEARANCES,
+             "seasons": sorted(frame["season"].unique().tolist()),
+             "player_games": int(len(frame)),
+             "overall": {}, "by_short_stints": {}, "by_minutes_form": {}}
+
+    overall_rows = frame.dropna(subset=["is_short"])
+    successes = int(overall_rows["is_short"].sum())
+    total = int(len(overall_rows))
+    low, high = wilson(successes, total)
+    rates["overall"] = {"rate": successes / total, "n": total,
+                        "low": low, "high": high}
+
+    for feature, key in (("stint_bucket", "by_short_stints"),
+                         ("form_bucket", "by_minutes_form")):
+        for bucket, group in frame.dropna(subset=[feature]).groupby(feature,
+                                                                   observed=True):
+            successes = int(group["is_short"].sum())
+            total = int(len(group))
+            low, high = wilson(successes, total)
+            rates[key][str(bucket)] = {
+                "rate": successes / total, "n": total,
+                "low": low, "high": high,
+                "lift": (successes / total) / rates["overall"]["rate"],
+            }
+    return rates
+
+
+def write_rates(frame, path=RATES_PATH):
+    import json
+    rates = build_rates(frame)
+    with open(path, "w") as handle:
+        json.dump(rates, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    return path, rates
 
 
 if __name__ == "__main__":
