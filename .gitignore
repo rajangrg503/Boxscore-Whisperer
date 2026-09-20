@@ -38,3 +38,8 @@ backtest_player_games.csv
 # each raw response, so a claim can be audited against a file that is
 # produced on request rather than republished.
 line_snapshots/
+
+# Our own projections travel WITH the repo -- unlike the raw odds, they
+# are ours and they are the claim. Only the scratch output of a dry run
+# is ignored.
+projections/*.tmp
