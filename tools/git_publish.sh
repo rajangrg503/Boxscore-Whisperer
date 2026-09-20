@@ -87,6 +87,27 @@ bw_publish() {
 
 _bw_publish_locked() {
     local message="$1"; shift
+    local path existing=()
+
+    # A path that is neither on disk nor known to git makes `git add`
+    # fail outright -- "fatal: pathspec 'projections' did not match any
+    # files" -- and takes the whole publish down with it. That is not
+    # hypothetical: the capture job's first run died exactly there,
+    # because projections/ does not exist until the first night that
+    # has something to project, and the off-season has none.
+    #
+    # A missing path means nothing to publish from it, which is a quiet
+    # night and not a failure. A DELETED path still counts, so this
+    # asks git as well as the filesystem.
+    for path in "$@"; do
+        if [ -e "$path" ] || git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+            existing+=("$path")
+        fi
+    done
+    if [ ${#existing[@]} -eq 0 ]; then
+        return 0
+    fi
+    set -- "${existing[@]}"
 
     git add -- "$@" || return 1
 

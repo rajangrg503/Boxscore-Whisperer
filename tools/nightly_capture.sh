@@ -95,6 +95,7 @@ if [ -f "$PROJECTED_MARKER" ]; then
     say "projections already captured for $TODAY -- lines only this run"
 else
     say "projecting the players in $(basename "$SNAPSHOT")"
+    BEFORE="$(ls -1 projections/*.json 2>/dev/null | wc -l | tr -d ' ')"
     if [ $DRY_RUN -eq 1 ]; then
         "$PYTHON" tools/capture_projections.py --from-snapshot "$SNAPSHOT" \
             --dry-run 2>&1 | tee -a "$LOG"
@@ -102,9 +103,18 @@ else
         "$PYTHON" tools/capture_projections.py --from-snapshot "$SNAPSHOT" \
             2>&1 | tee -a "$LOG"
         PROJ_STATUS=${PIPESTATUS[0]}
-        # Marked only on success, so a failed projection run is retried
-        # by the next capture rather than skipped for the evening.
-        [ $PROJ_STATUS -eq 0 ] && touch "$PROJECTED_MARKER"
+        AFTER="$(ls -1 projections/*.json 2>/dev/null | wc -l | tr -d ' ')"
+        # Marked only when a file actually appeared -- not merely when
+        # the command exited 0. It exits 0 and writes nothing when no
+        # player has enough history yet, which is the normal answer on
+        # the first nights of a season. Marking the evening done on
+        # that would skip every later run, on exactly the nights the
+        # cache is still filling in.
+        if [ $PROJ_STATUS -eq 0 ] && [ "$AFTER" -gt "$BEFORE" ]; then
+            touch "$PROJECTED_MARKER"
+        elif [ $PROJ_STATUS -eq 0 ]; then
+            say "nothing projectable yet -- will try again on the next run"
+        fi
     fi
     PROJ_STATUS=${PROJ_STATUS:-0}
     [ $PROJ_STATUS -eq 0 ] || say "WARNING: capture_projections.py exited $PROJ_STATUS"
