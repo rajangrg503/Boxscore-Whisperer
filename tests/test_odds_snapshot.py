@@ -19,12 +19,19 @@ from engine import odds_snapshot as osnap
 
 
 def odd(stat="points", player="LEBRON_JAMES_1_NBA", side="over",
-        bet_type="ou", period="game", book="25.5", fair=None):
+        bet_type="ou", period="game", book="25.5", fair=None,
+        price="-110", fair_price=None, available=None):
     body = {
         "statID": stat, "playerID": player, "statEntityID": player,
         "betTypeID": bet_type, "periodID": period, "sideID": side,
-        "marketName": "whatever", "bookOdds": "-110",
+        "marketName": "whatever",
     }
+    if price is not None:
+        body["bookOdds"] = price
+    if fair_price is not None:
+        body["fairOdds"] = fair_price
+    if available is not None:
+        body["bookOddsAvailable"] = available
     if book is not None:
         body["bookOverUnder"] = book
     if fair is not None:
@@ -273,3 +280,63 @@ def test_an_event_with_no_spread_is_still_listed():
     not a game that vanishes."""
     ctx = osnap.game_context(event([]))["e1"]
     assert ctx["spread"] is None and ctx["expected_margin"] is None
+
+
+# ---- prices, for engine/pricing.py ---------------------------------------
+# A hit rate does not say whether following us made money, so a settled
+# leg has to be weighted by what it paid. These pin the two ways that
+# goes quietly wrong: paying out at a de-vigged price nobody offered,
+# and settling the side we did not take.
+def test_both_sides_carry_their_own_price():
+    legs, _report = osnap.read(snapshot([
+        odd(side="over", price="-130"),
+        odd(side="under", price="+108"),
+    ]))
+    assert len(legs) == 1
+    assert legs[0]["prices"] == {"over": "-130", "under": "+108"}
+
+
+def test_the_two_sides_are_not_interchangeable():
+    # Over at -300 and under at +240 is the same leg and two very
+    # different bets. Settling the wrong one reports a profit nobody
+    # could have collected.
+    legs, _report = osnap.read(snapshot([
+        odd(side="over", price="-300"), odd(side="under", price="+240")]))
+    assert legs[0]["prices"]["over"] != legs[0]["prices"]["under"]
+
+
+def test_a_de_vigged_price_is_never_used_as_a_real_one():
+    # fairOdds is a defensible fallback for the LINE and an indefensible
+    # one for money: it has the bookmaker's margin removed, so settling
+    # at it pays about 4.5% a bet that was never on offer -- roughly
+    # the size of the edge we would be claiming.
+    legs, _report = osnap.read(snapshot([
+        odd(side="over", price=None, fair_price="+104")]))
+    assert legs[0]["prices"] == {}
+
+
+def test_a_price_the_book_is_not_standing_behind_is_dropped():
+    legs, _report = osnap.read(snapshot([
+        odd(side="over", price="-110", available=False),
+        odd(side="under", price="-110", available=True),
+    ]))
+    assert "over" not in legs[0]["prices"]
+    assert legs[0]["prices"]["under"] == "-110"
+
+
+def test_a_leg_with_no_price_is_still_a_leg():
+    # Coverage and the against-the-line record do not need a price, and
+    # must not be hostage to one being missing.
+    legs, _report = osnap.read(snapshot([odd(price=None)]))
+    assert len(legs) == 1
+    assert legs[0]["line"] == 25.5
+    assert legs[0]["prices"] == {}
+
+
+def test_the_first_price_seen_wins_like_the_line_does():
+    # A feed carries the same prop from several books. One leg per
+    # player and stat, one price per side, or a popular prop is
+    # weighted several times in the published figure.
+    legs, _report = osnap.read(snapshot([
+        odd(side="over", price="-110"), odd(side="over", price="+120")]))
+    assert legs[0]["prices"]["over"] == "-110"

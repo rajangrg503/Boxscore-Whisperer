@@ -72,6 +72,31 @@ STAT_LABELS = dict(STAT_COLUMNS)
 # that are actually interesting.
 MIN_PROBABILITY_GAP = 0.08
 
+# tools/capture_projections.py writes "n_prior_games"; this module was
+# written reading "n_prior", and its tests were written to match the
+# module rather than the writer. So every real record produced exactly
+# nothing: n_prior came back None, distribution_for declines below five
+# prior games, probability_over returned None, and rank() returned an
+# empty list on every night of the season while the tests passed.
+#
+# That is the whole failure mode this codebase keeps meeting -- a green
+# test suite measuring the wrong shape -- so both spellings are read
+# here, and tests/test_disagreement.py now builds its record through
+# tools/capture_projections.py instead of by hand.
+PRIOR_GAME_KEYS = ("n_prior_games", "n_prior")
+
+
+def prior_games(projection):
+    """Games behind this projection, under either spelling, as an int."""
+    for key in PRIOR_GAME_KEYS:
+        value = (projection or {}).get(key)
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
 
 def probability_over(stat, projection, cutoff):
     """Our chance the player finishes at or above the cutoff.
@@ -96,7 +121,7 @@ def probability_over(stat, projection, cutoff):
         if low is None or high is None:
             return None
         spread = max((float(high) - float(low)) / 2.56, 1e-6)
-    n_prior = int(projection.get("n_prior") or 0)
+    n_prior = prior_games(projection)
     dist = distribution_for(stat, float(mean), float(spread), n_prior)
     if dist is None:
         return None
@@ -131,7 +156,7 @@ def for_leg(leg, projection):
         "projected": projection.get("projected"),
         "low": projection.get("low"),
         "high": projection.get("high"),
-        "n_prior": projection.get("n_prior"),
+        "n_prior": prior_games(projection),
         "side": "over" if gap > 0 else "under",
         # Our probability for the side we are on, which is the number a
         # reader can act on. The complement is on the other side.
@@ -145,7 +170,7 @@ def rank(legs, projections, limit=None):
     """Tonight's legs, biggest disagreement first.
 
     projections is the record written by tools/capture_projections.py:
-    {player_id: {"n_prior": int, "stats": {stat: {...}}}}.
+    {player_id: {"n_prior_games": int, "stats": {stat: {...}}}}.
     """
     players = (projections or {}).get("players") or projections or {}
     out = []
@@ -157,7 +182,9 @@ def rank(legs, projections, limit=None):
         if not projection:
             continue
         projection = dict(projection)
-        projection.setdefault("n_prior", player.get("n_prior"))
+        # The count lives on the player, not the stat. Carried down
+        # under the writer's own spelling -- see PRIOR_GAME_KEYS.
+        projection.setdefault("n_prior_games", prior_games(player))
         entry = for_leg(leg, projection)
         if entry:
             out.append(entry)
