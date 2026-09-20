@@ -18,6 +18,7 @@ points away, with the reason named.
 
 Rubric:
   baseline sample   >= 20 games: 80    5-19: 55    < 5: 20
+  baseline itself  drawn from last season (early season):   -15
   opponent defense  last season's ratings (early season):   -5
   missing teammates applied from < 10 games without them:  -15
                     applied from 10-19 games:                -5
@@ -53,9 +54,10 @@ WEAK_DATA_QUALITY = {"real_thin_sample", "manual_estimate", "unavailable"}
 HIGH_THRESHOLD = 70
 MEDIUM_THRESHOLD = 40
 
-# The best label a projection built from a finished season may carry.
-# See the note in score_prediction: a cap, not a scored penalty.
-PRIOR_SEASON_CAP = "Medium"
+# The whole baseline resting on a season that has finished. Sized with
+# the file's other untested-input deductions rather than measured --
+# see the note in score_prediction.
+PRIOR_SEASON_PENALTY = 15
 
 
 @dataclass
@@ -100,7 +102,7 @@ def score_prediction(layer_results: dict, baseline_sample_n: int,
 
     baseline_is_prior_season: the baseline is drawn from a season that
     has finished, because this one has not given the player five games
-    yet. See PRIOR_SEASON_CAP.
+    yet. See PRIOR_SEASON_PENALTY.
     """
     reasons = []
 
@@ -124,30 +126,33 @@ def score_prediction(layer_results: dict, baseline_sample_n: int,
         if reason:
             reasons.append(reason)
 
+    # The baseline itself is last season's. Until a player has five
+    # games this season, the rubric above is counting seventy games
+    # from a season that has ended exactly as it would count seventy
+    # from this one.
+    #
+    # This is a deduction and not a cap on the label, and the
+    # difference matters: the bands at the top of this file are the
+    # documented meaning of High and Medium, and a rule that overrode
+    # them from outside would make the published label stop meaning
+    # what the rubric says. If a projection still scores 70 after this,
+    # it says High, and that is correct.
+    #
+    # The size is a judgment, like every other number in this file --
+    # it is a transparent rubric, not a calibrated model. Fifteen
+    # matches the other untested-input deductions (scheme, an untested
+    # estimate) rather than the five for the defence layer alone,
+    # because this is the entire baseline rather than one adjustment on
+    # top of it. It cannot be measured today: the backtest population
+    # requires prior in-season games by construction, so it contains
+    # none of these cases. Closing that gap would let this number be
+    # replaced by a measured one.
+    if baseline_is_prior_season:
+        score -= PRIOR_SEASON_PENALTY
+        reasons.append("Built from last season — not enough games this season yet")
+
     score = max(score, 0)
     label = _label_for_score(score)
-
-    # A baseline from a finished season is capped below High, and the
-    # cap is a refusal rather than a measurement.
-    #
-    # Until a player has five games this season the baseline is last
-    # season's whole log -- seventy games, say -- and the rubric above
-    # counts those exactly as it would count seventy from this season.
-    # That is an unmeasured claim: nobody has checked whether they are
-    # as good, and nobody can with what exists, because the backtest
-    # population requires prior in-season games by construction and so
-    # contains none of these cases at all.
-    #
-    # So there are two unmeasured options here and the app takes the
-    # one that claims less. This is not a penalty with a number behind
-    # it; it is declining to say "High confidence" about a projection
-    # built entirely from a season that has ended. It matters most in
-    # the opening fortnight of a season, which is also when the largest
-    # number of people see this page for the first time.
-    if baseline_is_prior_season:
-        reasons.append("Built from last season — not enough games this season yet")
-        if label == "High":
-            label = PRIOR_SEASON_CAP
 
     return PredictionConfidence(label=label, score=score, reasons=reasons)
 
