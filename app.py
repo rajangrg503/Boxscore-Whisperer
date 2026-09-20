@@ -77,6 +77,7 @@ from engine.adjustments.defense import (
 from analytics.layer_accuracy import build_layer_lines
 from engine.confidence import score_prediction
 from engine import forward_record
+from engine import source_guard
 from engine.adjustments.registry import LAYER_DISPLAY
 from engine.team_total import (
     REGULAR_SEASON_GAMES,
@@ -559,6 +560,21 @@ st.set_page_config(
     page_icon=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "favicon.png"),
     layout="wide",
 )
+
+# ---------------------------- Deploy skew ------------------------------
+# Streamlit Cloud pulls new code and re-runs THIS file without
+# restarting Python, so every module under engine/ can be hours behind
+# the script calling it. On 20 Sep 2026 that produced a TypeError from
+# two files that were never inconsistent in git -- and a TypeError was
+# the lucky outcome. A change that keeps its signature makes no noise
+# and serves yesterday's numbers instead.
+#
+# Checked here, before anything is drawn, so a stale page is never
+# half-rendered. engine/source_guard.py has the full reasoning.
+_stale_modules = source_guard.check()
+if _stale_modules:
+    st.error(source_guard.message(_stale_modules))
+    st.stop()
 
 # ---------------------------- Design system ----------------------------
 # One set of tokens for every custom element below. Streamlit's own
