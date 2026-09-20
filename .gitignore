@@ -43,3 +43,9 @@ line_snapshots/
 # are ours and they are the claim. Only the scratch output of a dry run
 # is ignored.
 projections/*.tmp
+
+# Other projects that must not live in this repository. They were
+# committed here by accident and the repo is public; see LICENSE for
+# what this repository is and is not offering.
+Graphic designer/
+pod-design-engine/
