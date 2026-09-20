@@ -185,6 +185,31 @@ def test_it_asks_only_for_games_about_to_start(monkeypatch):
     assert seen["startsBefore"] == "2026-10-22T11:00:00Z"   # 12h forward
 
 
+def test_the_window_can_be_widened_for_one_call(monkeypatch):
+    """Out of season nothing tips within twelve hours, so the nightly
+    settings return nothing at all -- which leaves no way to look at
+    the feed's shape until opening night, the worst possible time to
+    be finding out what its responses look like."""
+    seen = {}
+    monkeypatch.setattr(cl, "_get",
+                        lambda path, params, key: seen.update(params) or {"data": []})
+    now = datetime(2026, 9, 20, 1, 0, 0, tzinfo=timezone.utc)
+    cl.fetch_events("k", now=now, ahead_hours=24 * 40)
+
+    assert seen["startsAfter"] == "2026-09-20T00:00:00Z"    # still 1h back
+    assert seen["startsBefore"] == "2026-10-30T01:00:00Z"   # 40 days forward
+
+
+def test_a_widened_window_still_cannot_outspend_the_cap(monkeypatch):
+    """The seatbelt is the point: a wide window must cost no more than
+    a narrow one."""
+    seen = {}
+    monkeypatch.setattr(cl, "_get",
+                        lambda path, params, key: seen.update(params) or {"data": []})
+    cl.fetch_events("k", ahead_hours=24 * 365)
+    assert seen["limit"] == cl.MAX_EVENTS_PER_RUN
+
+
 def test_the_window_reaches_back_far_enough_to_catch_a_tipped_game(monkeypatch):
     """A game that has just started still has the most recent line we
     can honestly call a close."""
