@@ -1220,8 +1220,10 @@ div[data-testid="stAlertContentSuccess"] {
     }
     /* Streamlit ellipsises a checkbox label that does not fit on one
        line, so "no season blending" arrived as "no season blen…" --
-       the clause carrying the actual meaning. Wrapping costs one line
-       and says the whole thing. */
+       the clause carrying the actual meaning. The labels themselves now
+       get the full column width, which is the real fix; this stays as
+       the backstop, so a label that grows later wraps instead of
+       silently losing its ending. */
     [data-testid="stCheckbox"] label,
     [data-testid="stCheckbox"] label p,
     [data-testid="stCheckbox"] label div {
@@ -2004,30 +2006,33 @@ with tab1:
             opponent_input = opponent_label_to_name.get(opponent_label_input) if opponent_label_input else None
         st.markdown('</div>', unsafe_allow_html=True)
 
-        base_col, blend_col = st.columns([1, 1], vertical_alignment="bottom")
-        with base_col:
-            baseline_source_input = st.selectbox(
-                "Baseline source",
-                [BASELINE_FULL_SEASON, "Last 5 meetings", "Last 10 meetings"],
-                index=0,
-                help=(
-                    "Which games the baseline is built from. Head-to-head uses real games vs. "
-                    "this specific opponent — more relevant if a player has a real history "
-                    "against this team, but a much smaller sample than a full season."
-                ),
-            )
-        with blend_col:
-            raw_baseline_input = st.checkbox(
-                "Use only this source, no season blending",
-                value=False,
-                help=(
-                    "By default, even a head-to-head baseline is blended with the full-season "
-                    "baseline for reliability (a handful of games can't fully override a "
-                    "full season on their own). Check this to use the selected baseline "
-                    "source on its own instead — only applies when a head-to-head option "
-                    "is selected."
-                ),
-            )
+        # These two used to share a 1:1 row. On a phone that gave the
+        # checkbox about 180 points of width, and Streamlit ellipsises a
+        # label that does not fit on one line -- so the clause carrying
+        # the meaning arrived as "no season blend…". Stacking them costs
+        # one row on a desktop and gives the label the full column width
+        # everywhere, which is the only width at which it reads.
+        baseline_source_input = st.selectbox(
+            "Baseline source",
+            [BASELINE_FULL_SEASON, "Last 5 meetings", "Last 10 meetings"],
+            index=0,
+            help=(
+                "Which games the baseline is built from. Head-to-head uses real games vs. "
+                "this specific opponent — more relevant if a player has a real history "
+                "against this team, but a much smaller sample than a full season."
+            ),
+        )
+        raw_baseline_input = st.checkbox(
+            "Use this source only, no season blending",
+            value=False,
+            help=(
+                "By default, even a head-to-head baseline is blended with the full-season "
+                "baseline for reliability (a handful of games can't fully override a "
+                "full season on their own). Check this to use the selected baseline "
+                "source on its own instead — only applies when a head-to-head option "
+                "is selected."
+            ),
+        )
 
         # Said once, here, rather than nine times in nine labels -- and
         # said accurately. A blank line falls back to
