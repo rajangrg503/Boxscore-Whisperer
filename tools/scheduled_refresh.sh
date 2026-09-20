@@ -168,6 +168,22 @@ git -c user.name="Boxscore Whisperer refresh" -c user.email="noreply@boxscorewhi
     commit -q -m "Refresh data_cache ($(date '+%Y-%m-%d'))${FAILED:+ [partial: $FAILED failed validation]}" \
     >>"$LOG" 2>&1 || die "commit failed (see $LOG)"
 
-git push >>"$LOG" 2>&1 || die "push failed (see $LOG) -- the commit is here, push it by hand"
+# The pull at the top of this script was ninety minutes ago. A PR
+# merged in the browser in the meantime -- which is how this repo is
+# normally merged -- leaves main ahead of us, and the push is rejected
+# with the whole refresh sitting in a local commit nobody sees. That
+# happened on the job's first complete run.
+#
+# Rebasing is safe here in a way it would not be in general: the only
+# local commit is the one made four lines up, and it touches exactly
+# one file, data_cache.zip, which nothing else in the repo writes. So
+# there is no content to conflict over -- only an ordering to fix.
+if ! git push >>"$LOG" 2>&1; then
+    say "push rejected -- main moved while this ran; rebasing onto it"
+    git pull --rebase >>"$LOG" 2>&1 \
+        || die "rebase onto main failed (see $LOG) -- the commit is here, push it by hand"
+    git push >>"$LOG" 2>&1 \
+        || die "push failed after rebase (see $LOG) -- the commit is here, push it by hand"
+fi
 say "pushed; Streamlit will redeploy in a minute or two"
 say "=== refresh done ==="
