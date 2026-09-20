@@ -456,3 +456,24 @@ def test_the_sentence_quotes_the_measured_bar_not_the_assumed_one():
                                     hit_rate=0.6)
     assert "56.5%" in line and "prices taken" in line
     assert "-110" not in line
+
+
+# ---- a night that settled nothing --------------------------------------
+def test_a_night_with_no_box_scores_is_marked_as_no_evidence(workspace):
+    """Preseason, or a morning the refresh failed. Either way the record
+    is permanent once written, so it has to say what it is."""
+    path = str(workspace / "p.json")
+    open(path, "w").write(json.dumps(projections()))
+    body = sc.build_record(json.loads(open(path).read()), path, [], None,
+                           "2026-10-06", WHEN, read=lambda key: None)
+    assert body["evidence"] is False
+    assert body["totals"]["void_players"] == 1
+    assert "scored" not in body["totals"]
+
+
+def test_a_night_that_settled_something_is_marked_as_evidence(workspace):
+    path = str(workspace / "p.json")
+    open(path, "w").write(json.dumps(projections()))
+    body = sc.build_record(json.loads(open(path).read()), path, [], None,
+                           "2026-10-21", WHEN, read=lambda key: log(pts=30))
+    assert body["evidence"] is True

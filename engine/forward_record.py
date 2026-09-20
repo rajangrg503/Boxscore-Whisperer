@@ -78,6 +78,29 @@ import os
 # where the nights are unusually thin.
 MIN_NIGHTS_TO_STATE = 20
 
+# A NIGHT WITH NOTHING IN IT IS NOT A NIGHT
+#
+# The NBA plays preseason from 3 to 16 October 2026, and
+# engine/game_log.py asks the API for "Regular Season" and "Playoffs"
+# only -- there is not one preseason row in the cache. So a preseason
+# night scores every player as VOID, writes that record, and publishes
+# it. Ten of those in a fortnight, and this page would believe it was
+# halfway to its twenty-night gate on nothing at all.
+#
+# The same shape arrives without preseason: a morning when the refresh
+# failed leaves the cache with no box scores, and every player voids
+# for that reason instead. Both are "we have no evidence from this
+# night", and neither should advance a counter whose whole job is to
+# say how much evidence there is.
+#
+# So the gate counts nights that SETTLED SOMETHING. Structural rather
+# than a calendar check, because it catches the failed-refresh case
+# too, and because a date in a constant rots every October.
+def has_evidence(night):
+    """Did this night settle anything at all?"""
+    totals = (night or {}).get("totals") or {}
+    return bool(totals.get("scored") or totals.get("legs"))
+
 # Below this many settled legs, no rate is published either. Chosen so
 # that a Wilson interval on a coin-flip has a half-width under about
 # five points -- the width at which a 55% and a 50% record stop being
@@ -162,7 +185,9 @@ def summarise(result_dir):
     the thin-sample state can say "6 nights, 231 legs, too early" rather
     than an empty panel that looks broken.
     """
-    nights, unreadable = read_nights(result_dir)
+    all_nights, unreadable = read_nights(result_dir)
+    nights = [n for n in all_nights if has_evidence(n)]
+    empty = len(all_nights) - len(nights)
     totals = {"scored": 0, "covered": 0, "void_players": 0,
               "legs": 0, "legs_correct": 0, "legs_push": 0,
               "strong_legs": 0, "strong_correct": 0}
@@ -204,6 +229,9 @@ def summarise(result_dir):
 
     return {
         "nights": len(nights),
+        # Recorded and reported, never counted. Preseason and
+        # failed-refresh mornings both land here.
+        "empty_nights": empty,
         "unreadable": unreadable,
         "first_date": min(dates) if dates else None,
         "last_date": max(dates) if dates else None,
@@ -373,6 +401,13 @@ def caveats(summary):
                 f"{pot['withheld_nights']} night(s) are excluded from the "
                 f"units figure for {label}: those nights were too thin to "
                 f"aggregate without republishing the bookmaker's prices.")
+    if summary.get("empty_nights"):
+        out.append(
+            f"{summary['empty_nights']} night(s) settled nothing — every "
+            f"player void — and are not counted above. Preseason games are "
+            f"the usual reason: they are exhibition matches, the app does "
+            f"not hold box scores for them, and they are not evidence "
+            f"about anything.")
     if summary["unreadable"]:
         out.append(f"{summary['unreadable']} scored night(s) could not be "
                    f"read and are missing from these totals.")
