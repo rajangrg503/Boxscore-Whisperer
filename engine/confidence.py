@@ -53,6 +53,10 @@ WEAK_DATA_QUALITY = {"real_thin_sample", "manual_estimate", "unavailable"}
 HIGH_THRESHOLD = 70
 MEDIUM_THRESHOLD = 40
 
+# The best label a projection built from a finished season may carry.
+# See the note in score_prediction: a cap, not a scored penalty.
+PRIOR_SEASON_CAP = "Medium"
+
 
 @dataclass
 class PredictionConfidence:
@@ -87,11 +91,17 @@ def _layer_penalty(layer_key, label, result):
     return 0, None
 
 
-def score_prediction(layer_results: dict, baseline_sample_n: int) -> PredictionConfidence:
+def score_prediction(layer_results: dict, baseline_sample_n: int,
+                     baseline_is_prior_season: bool = False) -> PredictionConfidence:
     """layer_results: {layer_key: AdjustmentResult} -- the same dict
     app.py builds for tracker.py's layers_json. A layer that wasn't
     applied (nothing selected, or context-only) is neutral. Layers
-    flagged NEVER_APPLIED_BY_DESIGN are skipped entirely."""
+    flagged NEVER_APPLIED_BY_DESIGN are skipped entirely.
+
+    baseline_is_prior_season: the baseline is drawn from a season that
+    has finished, because this one has not given the player five games
+    yet. See PRIOR_SEASON_CAP.
+    """
     reasons = []
 
     if baseline_sample_n >= BASELINE_HIGH_GAMES:
@@ -115,7 +125,31 @@ def score_prediction(layer_results: dict, baseline_sample_n: int) -> PredictionC
             reasons.append(reason)
 
     score = max(score, 0)
-    return PredictionConfidence(label=_label_for_score(score), score=score, reasons=reasons)
+    label = _label_for_score(score)
+
+    # A baseline from a finished season is capped below High, and the
+    # cap is a refusal rather than a measurement.
+    #
+    # Until a player has five games this season the baseline is last
+    # season's whole log -- seventy games, say -- and the rubric above
+    # counts those exactly as it would count seventy from this season.
+    # That is an unmeasured claim: nobody has checked whether they are
+    # as good, and nobody can with what exists, because the backtest
+    # population requires prior in-season games by construction and so
+    # contains none of these cases at all.
+    #
+    # So there are two unmeasured options here and the app takes the
+    # one that claims less. This is not a penalty with a number behind
+    # it; it is declining to say "High confidence" about a projection
+    # built entirely from a season that has ended. It matters most in
+    # the opening fortnight of a season, which is also when the largest
+    # number of people see this page for the first time.
+    if baseline_is_prior_season:
+        reasons.append("Built from last season — not enough games this season yet")
+        if label == "High":
+            label = PRIOR_SEASON_CAP
+
+    return PredictionConfidence(label=label, score=score, reasons=reasons)
 
 
 def _label_for_score(score: int) -> str:

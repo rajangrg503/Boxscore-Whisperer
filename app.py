@@ -382,10 +382,15 @@ def get_season_baseline(player_id, player_name):
     adjustment can share the exact same season-resolution rule instead
     of re-deriving it. This function's own return shape and behavior
     are unchanged by that move."""
-    df, _season, source = resolve_season_gamelog(player_id)
+    df, season, source = resolve_season_gamelog(player_id)
     stats_dict, n_games = stats_from_gamelog(df)
 
-    return stats_dict, source, n_games
+    # The season comes back too, because "which season is this built
+    # from" is a different question from "how many games", and the page
+    # was answering only the second one. Early in a season those
+    # seventy games are last season's, and nothing on the surface said
+    # so -- the source string lived in a collapsed expander.
+    return stats_dict, source, n_games, season
 
 
 def get_projected_minutes_note(player_id):
@@ -2208,7 +2213,7 @@ with tab1:
             h2h_cutoff = roster_change_date if roster_change_active else None
 
             try:
-                season_stats, season_source, season_n = get_season_baseline(player_id, player_full_name)
+                season_stats, season_source, season_n, season_used = get_season_baseline(player_id, player_full_name)
 
                 team_h2h_stats, team_h2h_n = None, 0
                 team_h2h_note = None
@@ -2541,6 +2546,11 @@ with tab1:
             # save time (see the "Real games actually behind..." comment
             # near blend_baseline_stats' call sites).
             "baseline_sample_n": baseline_sample_n,
+            # Which season those games came from, not just how many.
+            # In the opening fortnight they are last season's, and the
+            # page used to say so only inside a collapsed expander.
+            "baseline_season": season_used,
+            "baseline_is_prior_season": season_used != CURRENT_SEASON,
             "lean_defense_multiplier": lean_defense_multiplier,
             "def_note": def_note,
             "teammate_note": teammate_note,
@@ -2603,7 +2613,9 @@ with tab1:
             if _avatar_jersey not in (None, "", "-") else ""
         )
 
-        confidence_result = score_prediction(layer_results, baseline_sample_n)
+        confidence_result = score_prediction(
+            layer_results, baseline_sample_n,
+            baseline_is_prior_season=bool(r.get("baseline_is_prior_season")))
         _confidence_css_class = {
             "High": "confidence-high",
             "Medium": "confidence-medium",
@@ -2636,6 +2648,18 @@ with tab1:
         # again, against a 14% base rate. Somebody deciding whether to
         # take a prop wants to know that, and every number in the
         # sentence comes from the backtest rather than from judgment.
+        # Said on the card, not buried in the expander. For the first
+        # weeks of a season every projection on this site is built from
+        # last season's games, and that is exactly when the most people
+        # are seeing the page for the first time.
+        if r.get("baseline_is_prior_season"):
+            st.info(
+                f"This projection is built from {html.escape(str(r.get('baseline_season')))} "
+                f"— {player_full_name.split()[-1]} has not played five games this season yet, "
+                "so there is not enough of it to project from.",
+                icon="📅",
+            )
+
         _short_night = short_night_risk(r.get("season_log"))
         if _short_night:
             st.warning(short_night_sentence(_short_night), icon="⏱️")
@@ -3259,7 +3283,7 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
     just the note strings tab2's table already showed.
     """
     try:
-        season_stats, season_source, season_n = get_season_baseline(player_id, player_name)
+        season_stats, season_source, season_n, _season_used = get_season_baseline(player_id, player_name)
     except Exception:
         return None
     if not season_stats:
