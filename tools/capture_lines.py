@@ -63,21 +63,24 @@ Australian eastern time, which is the middle of a waking day rather
 than the middle of the night.
 
 THE KEY
-Read from SGO_API_KEY. It is never written to a file, never printed,
-and never committed -- the workflow takes it from a repository secret.
-If the variable is missing the script says so and exits, rather than
-making an unauthenticated request that would quietly return nothing.
+Read from SGO_API_KEY. It is never written to a file, never printed
+and never committed; keep it somewhere outside the repo, such as a
+chmod 600 file in the home directory that the job sources. If the
+variable is missing the script says so and exits, rather than making
+an unauthenticated request that would quietly return nothing and be
+indistinguishable from a night with no games.
 """
 
 import argparse
 import hashlib
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 BASE_URL = "https://api.sportsgameodds.com/v2"
 LEAGUE = "NBA"
@@ -91,14 +94,67 @@ SNAPSHOT_DIR = os.path.join(REPO_ROOT, "line_snapshots")
 # the raw bytes and nothing that belongs to anybody else.
 RECORD_DIR = os.path.join(REPO_ROOT, "line_records")
 
-# The free tier allows 2,500 objects a month and bills one object per
-# EVENT, not per market or per bookmaker. An NBA night is about 7.5
-# games, so one snapshot a night is roughly 225 a month. This cap is a
-# seatbelt against a scheduling mistake turning into a spent quota:
-# the season's evidence is worth more than any single night's.
+# Only games about to start. Without this the endpoint returns every
+# upcoming event that has odds, which on the first real dry run was 40
+# -- the cap, so at least 40, and probably the rest of the schedule.
+#
+# That matters because the free tier bills one object per EVENT and
+# allows 2,500 a month. Forty objects a call is 62 calls a month, about
+# two a day, for a job that wants several captures a night as tip-off
+# approaches. Asking for a window instead bills for the slate in front
+# of us: about 7.5 games, so five captures a night is roughly 1,125 a
+# month and fits comfortably.
+#
+# Twelve hours forward covers a full evening slate from before the
+# first tip. An hour back catches a game that has just started, whose
+# line is still the most recent one we can honestly call a close.
+WINDOW_HOURS_AHEAD = 12
+WINDOW_HOURS_BEHIND = 1
+
+# A seatbelt, not a target: whatever the window returns, never bill
+# more than this in one call. The season's evidence is worth more than
+# any single night's, and a scheduling mistake must not spend the
+# month's allowance in an afternoon.
 MAX_EVENTS_PER_RUN = 40
 
 TIMEOUT_SECONDS = 30
+
+
+def _ssl_context():
+    """A context that can actually verify the odds API's certificate.
+
+    The python.org framework build for macOS -- which is the one the
+    refresh job uses -- does not read the system keychain. It ships a
+    CA bundle that a separate "Install Certificates.command" has to
+    link into place, and until somebody runs it every stdlib HTTPS call
+    fails with:
+
+        [SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer
+        certificate
+
+    The refresh scripts never hit this because `requests` carries its
+    own certificates. This one uses only the standard library on
+    purpose, so it has to ask.
+
+    A one-time manual step is a poor thing for an unattended nightly
+    job to depend on -- it will be months before anybody notices it was
+    never done, and those months are the season. So if the default
+    context has no certificates, fall back to certifi's bundle, which
+    is what that installer links anyway.
+
+    Verification is never disabled. If neither source has certificates
+    the call fails, which is the correct outcome: a capture that
+    silently stopped checking who it was talking to would be worse than
+    a missing night.
+    """
+    context = ssl.create_default_context()
+    if context.cert_store_stats().get("x509_ca", 0) > 0:
+        return context
+    try:
+        import certifi
+    except ImportError:
+        return context        # let it fail loudly, verification intact
+    return ssl.create_default_context(cafile=certifi.where())
 
 
 def _get(path, params, api_key):
@@ -111,18 +167,31 @@ def _get(path, params, api_key):
         # the logs at the other end can tell what it is.
         "User-Agent": "boxscore-whisperer-line-capture/1.0",
     })
-    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS,
+                                context=_ssl_context()) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def fetch_events(api_key, league=LEAGUE, limit=MAX_EVENTS_PER_RUN):
-    """Upcoming games with odds attached, as the API returned them.
+def _iso(when):
+    """The wire format: UTC, seconds, trailing Z."""
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def fetch_events(api_key, league=LEAGUE, limit=MAX_EVENTS_PER_RUN, now=None):
+    """Games starting around now, with odds, as the API returned them.
 
     Deliberately not normalised. See CAPTURE RAW, PARSE LATER above.
+
+    The window is the whole reason this is affordable: see the note on
+    WINDOW_HOURS_AHEAD. Without it the endpoint hands back the schedule
+    and every call bills for all of it.
     """
+    now = now or datetime.now(timezone.utc)
     payload = _get("events", {
         "leagueID": league,
         "oddsAvailable": "true",
+        "startsAfter": _iso(now - timedelta(hours=WINDOW_HOURS_BEHIND)),
+        "startsBefore": _iso(now + timedelta(hours=WINDOW_HOURS_AHEAD)),
         "limit": limit,
     }, api_key)
     if isinstance(payload, dict):

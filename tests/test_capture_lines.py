@@ -170,6 +170,28 @@ def test_the_request_asks_only_for_games_with_odds(monkeypatch):
     assert seen["key"] == "key-123"
 
 
+def test_it_asks_only_for_games_about_to_start(monkeypatch):
+    """The first real dry run returned 40 events -- the cap, in
+    September, with no NBA being played. The endpoint hands back the
+    whole schedule unless asked otherwise, and at one billed object per
+    event that is the month's allowance in two days."""
+    seen = {}
+    monkeypatch.setattr(cl, "_get",
+                        lambda path, params, key: seen.update(params) or {"data": []})
+    now = datetime(2026, 10, 21, 23, 0, 0, tzinfo=timezone.utc)
+    cl.fetch_events("k", now=now)
+
+    assert seen["startsAfter"] == "2026-10-21T22:00:00Z"    # 1h back
+    assert seen["startsBefore"] == "2026-10-22T11:00:00Z"   # 12h forward
+
+
+def test_the_window_reaches_back_far_enough_to_catch_a_tipped_game(monkeypatch):
+    """A game that has just started still has the most recent line we
+    can honestly call a close."""
+    assert cl.WINDOW_HOURS_BEHIND >= 1
+    assert cl.WINDOW_HOURS_AHEAD >= 8      # a full evening slate
+
+
 def test_events_are_found_whatever_the_envelope(monkeypatch):
     """Three plausible response shapes, because the schema is not
     documented well enough to bet a season on one reading of it."""
@@ -235,3 +257,57 @@ def test_a_full_run_writes_both_halves(monkeypatch, snapshots, tmp_path):
     assert cl.main([]) == 0
     assert snapshots.exists()                      # raw, gitignored
     assert (tmp_path / "line_records").exists()    # record, committed
+
+
+# ---- talking to the right server -----------------------------------------
+def test_the_context_always_verifies(monkeypatch):
+    """The fallback exists so an unattended job does not depend on a
+    manual step run months earlier. It must never become a way to stop
+    checking who we are talking to."""
+    import ssl
+    for ca_count in (0, 150):
+        monkeypatch.setattr(
+            ssl.SSLContext, "cert_store_stats",
+            lambda self, n=ca_count: {"x509_ca": n, "x509": n, "crl": 0})
+        context = cl._ssl_context()
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+
+
+def test_an_empty_system_store_falls_back_to_certifi(monkeypatch):
+    """macOS' python.org build ships no usable store until somebody
+    runs Install Certificates.command; certifi carries the same bundle
+    that installer links."""
+    import ssl
+    monkeypatch.setattr(ssl.SSLContext, "cert_store_stats",
+                        lambda self: {"x509_ca": 0, "x509": 0, "crl": 0})
+    called = {}
+    real = ssl.create_default_context
+
+    def spy(*a, **k):
+        called.update(k)
+        return real()
+
+    monkeypatch.setattr(ssl, "create_default_context", spy)
+    cl._ssl_context()
+    assert "cafile" in called, "should have reached for certifi's bundle"
+
+
+def test_with_no_certificates_anywhere_it_fails_rather_than_skipping_checks(monkeypatch):
+    """A capture that silently stopped verifying would be worse than a
+    missing night."""
+    import builtins
+    import ssl
+    monkeypatch.setattr(ssl.SSLContext, "cert_store_stats",
+                        lambda self: {"x509_ca": 0, "x509": 0, "crl": 0})
+    real_import = builtins.__import__
+
+    def no_certifi(name, *a, **k):
+        if name == "certifi":
+            raise ImportError("no certifi")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_certifi)
+    context = cl._ssl_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
