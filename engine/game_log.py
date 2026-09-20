@@ -24,6 +24,37 @@ def fetch_combined_game_log(player_id, season):
     missing playoff log is normal (most players didn't make the
     playoffs that year) and isn't treated as an error.
 
+    THE BLEND IS DELIBERATE AND MEASURED -- DO NOT "FIX" IT
+    build_backtest_population.py is built from regular-season box
+    scores only, so for months every number this project published was
+    measured on a baseline the app does not compute. Nobody decided
+    that; the two files were written apart and nothing compared them.
+
+    It only reaches a projection in the fallback window -- below five
+    current-season games, resolve_season_gamelog() hands back LAST
+    season's whole log, playoffs and all -- which is opening night and
+    the fortnight after it.
+
+    playoff_blending_sweep.py measured it: 373 player-seasons that had
+    a playoff run behind them, each one's first five games of the next
+    season projected twice from the same log, once with the playoff
+    rows and once without.
+
+        blended / clean MAE   0.9976   95% CI [0.9914, 1.0028]
+        30+ mpg players       0.9967   95% CI [0.9909, 1.0091]
+        deep runs (17+ games) 1.0058   95% CI [0.9887, 1.0351]
+
+    No effect, including in the subgroup where a shortened rotation
+    should bite hardest. The only two intervals that exclude 1.0 (STL
+    0.9889, BLK 0.9945) favour KEEPING the playoff games.
+
+    The blended baseline also simply has more games behind it -- a
+    median of six more -- and that is not a confound to correct for,
+    it is the actual choice: use every row you have, or throw the
+    playoff ones away. Measured, keeping them is free or slightly
+    better. So they stay, and the seam is now a decision rather than
+    an accident.
+
     A failure on the Regular Season call specifically is a different
     story -- every rostered player has some current/recent regular
     season log, so that failing means the live API call itself broke
