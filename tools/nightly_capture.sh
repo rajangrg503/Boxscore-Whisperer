@@ -62,6 +62,44 @@ export SGO_API_KEY
 TODAY="$(date '+%Y-%m-%d')"
 say "=== capture starting (dry-run=$DRY_RUN) ==="
 
+# ---- preseason: rehearse once, do not stockpile ----------------------
+# The NBA plays exhibition games from 3 to 16 October. They are
+# friendlies -- rotations are meaningless, stars play fifteen minutes,
+# and no result from them is evidence about anything. There is also no
+# box score for them anywhere in our cache, because engine/game_log.py
+# asks the API for "Regular Season" and "Playoffs" only, so every
+# preseason night scores as all-void.
+#
+# But capturing NOTHING in preseason would waste the one chance to run
+# this whole chain against real data before it matters. The preseason
+# feed has real players, real prices, and the stat types no capture has
+# ever seen -- steals, turnovers, 3PA, offensive rebounds. Finding out
+# on 20 October that the parser chokes on one of them is the situation
+# this job exists to avoid.
+#
+# So: one run a night instead of five. About 50 objects across the
+# fortnight rather than 250, out of a 2,500 monthly allowance, and a
+# real rehearsal either way.
+#
+# UPDATE THIS EACH SEASON. If it is left stale the date simply passes
+# and the throttle stops applying -- the job degrades to its normal
+# behaviour rather than silently skipping a real slate.
+SEASON_OPENS="${SEASON_OPENS:-2026-10-20}"
+PRESEASON_MARKER="logs/.preseason-captured-$TODAY"
+PRESEASON=0
+if [[ "$TODAY" < "$SEASON_OPENS" ]]; then
+    PRESEASON=1
+    if [ -f "$PRESEASON_MARKER" ]; then
+        say "preseason ($TODAY; the season opens $SEASON_OPENS) -- already \
+captured once tonight, and one rehearsal a night is the whole point. Skipping."
+        say "=== capture done ==="
+        exit 0
+    fi
+    say "preseason ($TODAY) -- capturing ONCE tonight as a live rehearsal of \
+the chain, not five times. These games are exhibitions and their results are \
+not evidence; the point is to find out now whether the parser copes."
+fi
+
 # ---- the lines -------------------------------------------------------
 if [ $DRY_RUN -eq 1 ]; then
     "$PYTHON" tools/capture_lines.py --dry-run 2>&1 | tee -a "$LOG"
@@ -70,6 +108,12 @@ else
 fi
 LINE_STATUS=${PIPESTATUS[0]}
 [ $LINE_STATUS -eq 0 ] || die "capture_lines.py exited $LINE_STATUS"
+
+# Marked only after the capture actually succeeded. A failed preseason
+# run should be retried by the next one, not written off for the night.
+if [ $PRESEASON -eq 1 ] && [ $DRY_RUN -eq 0 ]; then
+    touch "$PRESEASON_MARKER"
+fi
 
 # ---- our projections, once a night -----------------------------------
 # The newest snapshot written in the last six hours. Deliberately not

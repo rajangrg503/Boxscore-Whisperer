@@ -344,6 +344,22 @@ def build_record(projections, projections_path, legs, snapshot_path,
         "players": players,
         "totals": totals,
         "money": publishable_money(money(players, legs)),
+        # Did this night settle anything? A night where every player
+        # voided is not evidence and must never advance a counter that
+        # claims to measure how much evidence there is.
+        #
+        # Preseason is the case that forces this. The NBA plays
+        # exhibition games from 3 to 16 October, engine/game_log.py
+        # fetches "Regular Season" and "Playoffs" only, and so not one
+        # preseason box score reaches the cache: every player voids,
+        # the record is written, and it is permanent. Ten of those
+        # would have taken engine/forward_record.py halfway to its
+        # twenty-night gate on nothing.
+        #
+        # A failed morning refresh produces the identical record for a
+        # completely different reason, which is why the flag says what
+        # is true of the file rather than naming preseason.
+        "evidence": bool(totals.get("scored") or totals.get("legs")),
     }
 
 
@@ -495,6 +511,15 @@ def score_unscored(now=None):
                               now or datetime.now(timezone.utc))
         result_path, digest = write_record(record, game_date)
         totals = record["totals"]
+        if not record["evidence"]:
+            # Said loudly, because the two causes want opposite
+            # responses: an exhibition night is fine and expected, a
+            # regular-season night like this means the cache never got
+            # the box scores and somebody should look.
+            print(f"{game_date}: NOTHING SETTLED — all "
+                  f"{totals.get('void_players', 0)} player(s) void. "
+                  f"Expected for a preseason date; on a regular-season "
+                  f"night it means the cache has no box scores yet.")
         line = (f"  {totals.get('scored', 0)} claim(s) scored, "
                 f"{totals.get('covered', 0)} inside the range, "
                 f"{totals.get('void_players', 0)} player(s) void")

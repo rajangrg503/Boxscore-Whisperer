@@ -319,3 +319,58 @@ def test_a_fully_published_record_has_nothing_pending(tmp_path):
     summary = fr.summarise(workspace(tmp_path, nights))
     assert summary["strong"] is not None
     assert fr.pending(summary) == []
+
+
+# ---- a night with nothing in it is not a night ---------------------------
+# The NBA plays exhibition games 3-16 October. engine/game_log.py asks
+# the API for "Regular Season" and "Playoffs" only, so not one preseason
+# box score is in the cache: every player voids, the record is written,
+# and it is permanent. Ten of those in a fortnight would have taken this
+# page halfway to its twenty-night gate on nothing at all.
+#
+# A failed morning refresh produces the identical record for a totally
+# different reason, which is why the guard is structural rather than a
+# calendar check.
+def empty_night(game_date="2026-10-06", voids=30):
+    return {"game_date": game_date,
+            "totals": {"scored": 0, "covered": 0, "void_players": voids,
+                       "legs": 0, "legs_correct": 0, "legs_push": 0,
+                       "strong_legs": 0, "strong_correct": 0},
+            "evidence": False}
+
+
+def test_a_preseason_fortnight_does_not_advance_the_gate(tmp_path):
+    nights = [empty_night(f"2026-10-{6 + d:02d}") for d in range(10)]
+    summary = fr.summarise(workspace(tmp_path, nights))
+    assert summary["nights"] == 0, "empty nights advanced the night counter"
+    assert summary["empty_nights"] == 10
+    assert "Nothing scored yet" in fr.headline(summary)
+
+
+def test_empty_nights_are_named_rather_than_disappearing(tmp_path):
+    summary = fr.summarise(workspace(tmp_path, [empty_night(), empty_night(
+        "2026-10-07")]))
+    assert any("settled nothing" in line and "Preseason" in line
+               for line in fr.caveats(summary))
+
+
+def test_a_real_night_still_counts_beside_empty_ones(tmp_path):
+    nights = [empty_night(f"2026-10-{6 + d:02d}") for d in range(5)]
+    nights += [night(game_date=f"2026-10-{21 + d:02d}") for d in range(3)]
+    summary = fr.summarise(workspace(tmp_path, nights))
+    assert summary["nights"] == 3 and summary["empty_nights"] == 5
+    assert summary["totals"]["scored"] == 300
+
+
+def test_the_guard_reads_the_totals_not_a_flag(tmp_path):
+    """Structural on purpose. A record written before the flag existed,
+    or one whose flag is wrong, must still be judged by what it holds."""
+    stale = empty_night()
+    del stale["evidence"]
+    summary = fr.summarise(workspace(tmp_path, [stale]))
+    assert summary["nights"] == 0 and summary["empty_nights"] == 1
+
+    lying = night()                     # has real totals, flag says no
+    lying["evidence"] = False
+    summary = fr.summarise(workspace(tmp_path, [lying], name="lying"))
+    assert summary["nights"] == 1
