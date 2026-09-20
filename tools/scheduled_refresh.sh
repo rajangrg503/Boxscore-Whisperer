@@ -50,6 +50,9 @@ die() { say "STOPPED: $*"; exit 1; }
 
 PYTHON="${PYTHON:-python3}"
 
+# shellcheck source=tools/git_publish.sh
+source "$REPO_DIR/tools/git_publish.sh"
+
 say "=== refresh starting (dry-run=$DRY_RUN) ==="
 
 # The swap to the archive is a one-time commit that has to be made by
@@ -163,27 +166,35 @@ fi
 say "packing data_cache/ into data_cache.zip"
 "$PYTHON" tools/pack_cache.py >>"$LOG" 2>&1 || die "pack failed (see $LOG)"
 
-git add data_cache.zip
-git -c user.name="Boxscore Whisperer refresh" -c user.email="noreply@boxscorewhisperer.com" \
-    commit -q -m "Refresh data_cache ($(date '+%Y-%m-%d'))${FAILED:+ [partial: $FAILED failed validation]}" \
-    >>"$LOG" 2>&1 || die "commit failed (see $LOG)"
-
-# The pull at the top of this script was ninety minutes ago. A PR
-# merged in the browser in the meantime -- which is how this repo is
-# normally merged -- leaves main ahead of us, and the push is rejected
-# with the whole refresh sitting in a local commit nobody sees. That
-# happened on the job's first complete run.
-#
-# Rebasing is safe here in a way it would not be in general: the only
-# local commit is the one made four lines up, and it touches exactly
-# one file, data_cache.zip, which nothing else in the repo writes. So
-# there is no content to conflict over -- only an ordering to fix.
-if ! git push >>"$LOG" 2>&1; then
-    say "push rejected -- main moved while this ran; rebasing onto it"
-    git pull --rebase >>"$LOG" 2>&1 \
-        || die "rebase onto main failed (see $LOG) -- the commit is here, push it by hand"
-    git push >>"$LOG" 2>&1 \
-        || die "push failed after rebase (see $LOG) -- the commit is here, push it by hand"
-fi
+# The commit-and-push lives in tools/git_publish.sh now, shared with
+# the nightly capture job. Two reasons, both learned the hard way:
+# the push race this used to handle alone (main moves while a
+# ninety-minute refresh runs), and the overlap -- the capture job
+# starts at 09:00, while this is still going, and two git commits in
+# one repository race on the index. bw_publish serialises them.
+bw_publish "Refresh data_cache ($(date '+%Y-%m-%d'))${FAILED:+ [partial: $FAILED failed validation]}" \
+    data_cache.zip >>"$LOG" 2>&1 \
+    || die "could not publish the refreshed cache (see $LOG)"
 say "pushed; Streamlit will redeploy in a minute or two"
+
+# ---- settle up -------------------------------------------------------
+# Scoring belongs here rather than in its own job, and the reason is
+# ordering rather than tidiness. A night can only be scored once the
+# cache has the box scores, and the moment the cache has them is the
+# moment this script finishes fetching. A separate job at a fixed time
+# would either run before this one finished -- recording every player
+# as void, permanently -- or sit idle waiting for it.
+say "scoring any night that has settled"
+"$PYTHON" tools/score_forward_test.py --catch-up >>"$LOG" 2>&1
+SCORE_STATUS=$?
+if [ $SCORE_STATUS -ne 0 ]; then
+    # Never fatal. A scoring bug must not stop tomorrow's cache
+    # refresh; the projections and the snapshots are already on disk
+    # and can be scored again once it is fixed.
+    say "WARNING: scoring exited $SCORE_STATUS (see $LOG) -- the cache is fine"
+else
+    bw_publish "Score $(date '+%Y-%m-%d')" results >>"$LOG" 2>&1 \
+        || say "WARNING: could not publish results (see $LOG)"
+fi
+
 say "=== refresh done ==="

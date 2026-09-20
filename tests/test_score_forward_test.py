@@ -217,3 +217,96 @@ def test_summarise_survives_a_damaged_record(workspace, capsys):
 def test_nothing_to_score_is_an_error(workspace, capsys):
     assert sc.main([]) == 2
     assert "nothing to score" in capsys.readouterr().err
+
+
+# ---- scoring a night without being told which one -------------------------
+# The refresh job calls --catch-up once a morning. What matters is not
+# that it scores, but that it refuses to score too early: a night
+# settled before the cache has the box scores records every player as
+# void, and a void is permanent once written and published.
+import datetime as _dt  # noqa: E402
+
+
+@pytest.fixture
+def catchup(tmp_path, monkeypatch):
+    for name, sub in (("PROJECTION_DIR", "projections"),
+                      ("SNAPSHOT_DIR", "line_snapshots"),
+                      ("RESULT_DIR", "results")):
+        monkeypatch.setattr(sc, name, str(tmp_path / sub))
+    monkeypatch.setattr(sc, "REPO_ROOT", str(tmp_path))
+    (tmp_path / "projections").mkdir()
+    (tmp_path / "line_snapshots").mkdir()
+    return tmp_path
+
+
+def write_projection(root, captured_at, stem=None):
+    body = dict(projections())
+    body["captured_at"] = captured_at.isoformat(timespec="seconds")
+    path = root / "projections" / f"{stem or captured_at.strftime('%Y-%m-%dT%H%M%SZ')}.json"
+    path.write_text(json.dumps(body))
+    return str(path)
+
+
+def write_snapshot(root, captured_at, day="2026-10-21"):
+    folder = root / "line_snapshots" / day
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{captured_at.strftime('%Y-%m-%dT%H%M%SZ')}.json"
+    path.write_text(json.dumps({
+        "captured_at": captured_at.isoformat(timespec="seconds"),
+        "response": {"data": []}}))
+    return str(path)
+
+
+def test_a_night_is_not_scored_before_the_cache_could_know(catchup):
+    """The box scores arrive when the morning refresh fetches them.
+    Scoring an hour after tip-off would mark everyone void, and that
+    record is what gets published."""
+    now = WHEN + _dt.timedelta(hours=2)
+    write_projection(catchup, WHEN)
+    assert sc.unscored(now=now) == []
+
+
+def test_a_night_that_has_settled_is_scored(catchup):
+    now = WHEN + _dt.timedelta(hours=sc.SETTLE_AFTER_HOURS + 1)
+    write_projection(catchup, WHEN)
+    pending = sc.unscored(now=now)
+    assert [game_date for _p, _b, game_date in pending] == ["2026-10-21"]
+
+
+def test_a_night_already_scored_is_left_alone(catchup):
+    """Otherwise every morning rewrites every night it can still see,
+    and a published figure that changes under you is not a record."""
+    now = WHEN + _dt.timedelta(days=2)
+    write_projection(catchup, WHEN)
+    sc.write_record({"totals": {}}, "2026-10-21")
+    assert sc.unscored(now=now) == []
+
+
+def test_the_snapshot_chosen_is_the_last_of_that_evening(catchup):
+    """The capture job samples across the slate precisely because the
+    latest line before a tip is the only one worth calling a close."""
+    write_snapshot(catchup, WHEN + _dt.timedelta(hours=1))
+    last = write_snapshot(catchup, WHEN + _dt.timedelta(hours=4))
+    assert sc.snapshot_for(WHEN) == last
+
+
+def test_a_snapshot_from_another_night_is_not_used(catchup):
+    write_snapshot(catchup, WHEN + _dt.timedelta(hours=30), day="2026-10-22")
+    assert sc.snapshot_for(WHEN) is None
+
+
+def test_catch_up_scores_coverage_with_no_snapshot_at_all(catchup, monkeypatch, capsys):
+    """A night with no snapshot is a night with no market claim, not a
+    night with no evidence."""
+    now = WHEN + _dt.timedelta(days=1)
+    write_projection(catchup, WHEN)
+    monkeypatch.setattr(sc, "read_payload", lambda key: log(pts=30))
+    assert sc.score_unscored(now=now) == 0
+    out = capsys.readouterr().out
+    assert "no line snapshot" in out
+    assert (catchup / "results" / "2026-10-21.json").exists()
+
+
+def test_catch_up_says_so_when_there_is_nothing_to_do(catchup, capsys):
+    assert sc.score_unscored() == 0
+    assert "nothing new to score" in capsys.readouterr().out

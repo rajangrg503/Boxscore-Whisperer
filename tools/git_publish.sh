@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Commit and push some paths, safely, from an unattended job.
+#
+#     source tools/git_publish.sh
+#     bw_publish "Nightly capture (2026-10-21)" projections line_records
+#
+# Sourced, not run. Two jobs need this and they need it to behave
+# identically.
+#
+# WHY THIS IS NOT THREE LINES INLINE
+# Two things went wrong in the first week of running any of this
+# unattended, and both are the kind that leave the job looking healthy.
+#
+# 1. THE PUSH RACE. The refresh job pulls at the top and pushes ninety
+#    minutes later. A PR merged in the browser in between -- which is
+#    how this repo is normally merged -- leaves main ahead, the push is
+#    rejected, and a full day's refresh sits in a local commit nobody
+#    can see. That happened on its first complete run. The fix is to
+#    rebase and push again, and it belongs everywhere that pushes, not
+#    just in the one script where it was noticed.
+#
+# 2. THE OVERLAP. The refresh starts at 08:30 and runs for over an
+#    hour. The line captures start at 09:00. So there is a window every
+#    morning where two launchd jobs are both in this repository, and
+#    two concurrent `git commit`s race on .git/index -- which surfaces
+#    as "another git process seems to be running", or worse, as one
+#    job's staged changes landing in the other's commit.
+#
+#    So every writer takes the same lock first. It is around the
+#    git work only: the refresh spends its ninety minutes fetching,
+#    which needs no lock, and holding one that long would mean the
+#    captures simply never ran.
+
+# Serialise every writer to this repository. mkdir is atomic on every
+# filesystem this could run on, which `[ -e ] && touch` is not.
+BW_LOCK_WAIT_SECONDS="${BW_LOCK_WAIT_SECONDS:-300}"
+
+bw_lock() {
+    local lock="$1" waited=0
+    while ! mkdir "$lock" 2>/dev/null; do
+        # A job killed mid-commit would otherwise block every morning
+        # after it, forever, and the symptom would be silence.
+        if [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +30 2>/dev/null)" ]; then
+            printf 'stale lock (over 30 min old) -- taking it\n'
+            rm -rf "$lock" && continue
+        fi
+        if [ "$waited" -ge "$BW_LOCK_WAIT_SECONDS" ]; then
+            return 1
+        fi
+        sleep 5
+        waited=$((waited + 5))
+    done
+    printf '%s\n' "$$" > "$lock/pid" 2>/dev/null || true
+    return 0
+}
+
+bw_unlock() {
+    rm -rf "$1"
+}
+
+# bw_publish <message> <path>...
+#
+# Stages the given paths, commits if anything changed, and pushes --
+# rebasing once onto whatever arrived while we were working. Returns
+# 0 when there was nothing to commit, which is a normal quiet night and
+# not a failure.
+bw_publish() {
+    local message="$1"; shift
+    local repo lock rc=0
+    repo="$(git rev-parse --show-toplevel)" || return 1
+    lock="$repo/.git/bw-publish.lock"
+
+    if ! bw_lock "$lock"; then
+        printf 'could not get the repo lock within %ss -- nothing committed\n' \
+            "$BW_LOCK_WAIT_SECONDS" >&2
+        return 1
+    fi
+
+    # No trap: bash only fires a RETURN trap under `set -T`, and a lock
+    # released by a mechanism that silently does not fire is worse than
+    # no lock at all. Every exit path below unlocks explicitly.
+    _bw_publish_locked "$message" "$@"
+    rc=$?
+    bw_unlock "$lock"
+    return $rc
+}
+
+_bw_publish_locked() {
+    local message="$1"; shift
+
+    git add -- "$@" || return 1
+
+    if git diff --cached --quiet -- "$@"; then
+        return 0                      # nothing changed; not an error
+    fi
+
+    git -c user.name="Boxscore Whisperer" \
+        -c user.email="noreply@boxscorewhisperer.com" \
+        commit -q -m "$message" -- "$@" || return 1
+
+    if git push >/dev/null 2>&1; then
+        return 0
+    fi
+
+    printf 'push rejected -- main moved; rebasing onto it\n'
+    if ! git pull --rebase >/dev/null 2>&1; then
+        printf 'rebase failed -- the commit is here, push it by hand\n' >&2
+        return 1
+    fi
+    if ! git push >/dev/null 2>&1; then
+        printf 'push failed after rebase -- the commit is here, push it by hand\n' >&2
+        return 1
+    fi
+    return 0
+}
