@@ -121,6 +121,7 @@ import streamlit as st
 from nba_api.stats.endpoints import boxscoreadvancedv3
 
 from engine.stat_columns import STAT_COLUMNS
+from engine.actuals import covered
 from engine.season import season_for_date
 from engine.team_ids import TEAM_ID_BY_ABBR
 from engine.cache import _load_df_cache, _save_df_cache
@@ -588,9 +589,13 @@ def try_resolve_prediction(row, get_head_to_head_log):
             continue
         actual_val = actual[col]
         row[f"{col}_actual"] = actual_val
-        low, high = row.get(f"{col}_low"), row.get(f"{col}_high")
-        if pd.notna(low) and pd.notna(high):
-            row[f"{col}_hit"] = bool(low <= actual_val <= high)
+        # engine/actuals.covered is the one definition of a hit, shared
+        # with the forward-test scorer. Two definitions of "the range
+        # contained it" is two different accuracy figures from the same
+        # night, differing exactly on the boundary cases.
+        hit = covered(row.get(f"{col}_low"), row.get(f"{col}_high"), actual_val)
+        if hit is not None:
+            row[f"{col}_hit"] = hit
 
     game_id = actual.get("Game_ID")
     try:
