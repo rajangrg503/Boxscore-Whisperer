@@ -109,6 +109,18 @@ def main(argv=None):
     print("\nThese are disagreements, not recommendations: nothing has yet")
     print("measured whether our disagreements are right. The forward test")
     print("is scoring exactly these, all season, to find out.")
+    assumed = [row for row in rows if not row.get("market_priced")]
+    if assumed:
+        # A row built on the 50% assumption is a weaker claim than one
+        # built on the book's own prices, and the two must not read
+        # alike. See engine/disagreement.py: ranking against 50% is
+        # what put legs the market had already priced past us at the
+        # top of this list.
+        print(f"\n{len(assumed)} of these had no pair of prices in the "
+              f"snapshot, so the market's side was assumed to be 50-50")
+        print("rather than read from what the book was charging. Treat "
+              "those as the weaker rows.")
+
     thin = [row for row in rows if (row.get("n_prior") or 0) < 15]
     if thin:
         # In the season's first weeks every projection comes from last

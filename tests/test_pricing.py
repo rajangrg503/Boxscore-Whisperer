@@ -12,6 +12,8 @@ mostly about the ways a money figure quietly inflates itself:
 
 import math
 
+import pytest
+
 from engine import pricing
 
 
@@ -148,3 +150,37 @@ def test_a_losing_run_reads_as_a_loss():
 def test_there_is_no_sentence_when_there_is_no_figure():
     assert pricing.summary_sentence(pricing.tally([])) is None
     assert pricing.summary_sentence(None) is None
+
+
+# ---- the market's own probability, de-vigged ------------------------------
+# engine/disagreement.py ranked by distance from 50% on the assumption
+# that a line is where a book balances its action. That holds when the
+# two sides are priced evenly and fails completely when they are not.
+def test_an_evenly_priced_pair_is_exactly_a_coin_flip():
+    assert pricing.implied_probability("-110", "-110") == 0.5
+    assert pricing.implied_probability("+100", "+100") == 0.5
+
+
+def test_a_lopsided_pair_is_nowhere_near_the_midpoint():
+    p = pricing.implied_probability("-300", "+240")
+    assert 0.70 < p < 0.74, p
+    # and the complement is the under
+    assert pricing.implied_probability("+240", "-300") == pytest.approx(1 - p)
+
+
+def test_the_margin_is_removed_rather_than_left_in():
+    # Both raw break-evens carry the vig, so they sum past 1. The
+    # de-vigged pair must sum to exactly 1 or the "market probability"
+    # is systematically too high on both sides at once.
+    over = pricing.implied_probability("-130", "+108")
+    under = pricing.implied_probability("+108", "-130")
+    assert over + under == pytest.approx(1.0)
+    assert pricing.break_even("-130") + pricing.break_even("+108") > 1.0
+
+
+def test_it_refuses_a_one_sided_estimate():
+    # De-vigging needs the pair. One side alone carries the whole
+    # margin, which would bias every disagreement in one direction.
+    assert pricing.implied_probability("-110", None) is None
+    assert pricing.implied_probability(None, "-110") is None
+    assert pricing.implied_probability("junk", "-110") is None

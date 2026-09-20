@@ -27,17 +27,39 @@ P(he goes over) from the same calibrated distribution the page already
 uses for "chance he clears X" -- so a leg where we say 72% is a bigger
 disagreement than one where we say 54%, whatever the stat.
 
-THE MARKET'S SIDE OF IT
-A line is roughly the number at which a book balances its action, so
-the market's own implied probability sits near 50% either way (nearer
-52.4% once the usual -110 vig is counted, on both sides at once). We
-treat the line as the market's midpoint and measure our distance from
-it.
+THE MARKET'S SIDE OF IT -- AND THE ASSUMPTION THAT WAS WRONG
+This module was built on one: that a line is the number at which a
+book balances its action, so the market's own probability sits near
+50% either way, and our distance from 50% is the disagreement. It said
+plainly that this was an approximation, and that the exact implied
+probability was in the prices, "which this repository does not store".
 
-That is an approximation and it is stated as one. The exact implied
-probability is in the prices, which this repository does not store --
-see the licence note below. The approximation is good enough for
-ordering, which is all this produces.
+That last part stopped being true when the parser started reading
+bookOdds. And a rehearsal against the one real capture showed the
+approximation was not merely imprecise, it was selecting for exactly
+the wrong legs:
+
+    strong legs, median break-even      60.2%
+    every other side, median            51.1%
+
+Six of the eight biggest "disagreements" were priced PAST us -- we
+made Cade Cunningham 59% under his threes and the price needed 68%.
+The ranking was finding props where the book had already moved the
+price to say what we were about to say, and calling that a
+disagreement. It is the opposite of one: it is the market being more
+confident than us, in our own direction.
+
+The mechanism is arithmetic, not a small-sample effect. When a book
+prices two sides evenly the line IS the midpoint. When it prices them
+-300 and +240 the line is nowhere near it, and the market's opinion
+lives in the price. Ranking by distance from 50% finds precisely the
+props where the book has moved the price -- which are precisely the
+ones where the book is most sure.
+
+So the market's side now comes from the prices, de-vigged across the
+pair (engine/pricing.implied_probability). Where a leg is not priced
+on both sides the old 50% assumption is used and the row says so, so a
+caller can tell a measured disagreement from an assumed one.
 
 THE EARLY-SEASON TRAP
 Rehearsed against the one real capture (September 2026, 25 legs, six
@@ -55,21 +77,35 @@ year.
 
 WHAT LEAVES THIS MODULE
 Our projection, our probability, the stat, the player, and which side
-we are on. NOT the line. SportsGameOdds' terms forbid redistributing
-their data, and a public ranking that carried their numbers would do
-exactly that. A reader looks up the line in their own sportsbook,
-where they were going to place the bet anyway.
+we are on. NOT the line, and NOT the price. SportsGameOdds' terms
+forbid redistributing their data, and a public ranking that carried
+their numbers would do exactly that. A reader looks up the line in
+their own sportsbook, where they were going to place the bet anyway.
+
+One consequence of the change above, worth stating because it is easy
+to miss: `gap` is now our probability minus the MARKET's, so
+publishing it beside `our_probability` would hand back the market's
+implied probability by subtraction -- which is the price, in different
+clothes. It stays internal, for ordering and filtering. `sentence()`
+does not use it and nothing that leaves here should.
 """
 
 from engine.distribution import distribution_for
 from engine.line_input import interpret as interpret_line
+from engine.pricing import implied_probability
 from engine.stat_columns import STAT_COLUMNS
 
 STAT_LABELS = dict(STAT_COLUMNS)
 
-# Below this we are not really disagreeing. A leg we make 54% is a leg
-# the market has priced about right, and listing it would bury the few
-# that are actually interesting.
+# Below this we are not really disagreeing. A leg we make 54% where the
+# market makes it 52% is a leg the market has priced about right, and
+# listing it would bury the few that are actually interesting.
+#
+# This is now measured against the DE-VIGGED market probability rather
+# than against 50%, which makes it a much higher bar: eight points of
+# edge over a real price is a great deal rarer than eight points away
+# from a coin flip. The list gets shorter, and what is left is the part
+# that was ever worth looking at.
 MIN_PROBABILITY_GAP = 0.08
 
 # tools/capture_projections.py writes "n_prior_games"; this module was
@@ -128,12 +164,28 @@ def probability_over(stat, projection, cutoff):
     return float(dist.sf(float(cutoff)))
 
 
+def market_probability(leg):
+    """The market's chance of the OVER, and where the number came from.
+
+    Returns (probability, priced). priced is False when the pair of
+    prices was not there and the old 50% assumption had to be used --
+    carried through to the row so a caller can tell a measured
+    disagreement from an assumed one rather than trusting both alike.
+    """
+    prices = leg.get("prices") or {}
+    implied = implied_probability(prices.get("over"), prices.get("under"))
+    if implied is None:
+        return 0.5, False
+    return implied, True
+
+
 def for_leg(leg, projection):
     """One leg, as a disagreement, or None if there isn't one.
 
     Returns None rather than a zero-sized entry when we have no
     projection, no distribution, or no real difference of opinion --
-    a list padded with legs we agree about is a worse list.
+    a list padded with legs we agree about is a worse list, and a leg
+    the market has already priced past us is worse still.
     """
     stat = leg.get("stat")
     line = interpret_line(leg.get("line"))
@@ -144,7 +196,11 @@ def for_leg(leg, projection):
     if p_over is None:
         return None
 
-    gap = p_over - 0.5
+    market, priced = market_probability(leg)
+    # Against the market's number, not against a coin flip. On an
+    # evenly-priced prop these are the same thing; on a juiced one they
+    # are opposites, which is the whole reason this changed.
+    gap = p_over - market
     if abs(gap) < MIN_PROBABILITY_GAP:
         return None
 
@@ -161,8 +217,14 @@ def for_leg(leg, projection):
         # Our probability for the side we are on, which is the number a
         # reader can act on. The complement is on the other side.
         "our_probability": p_over if gap > 0 else 1.0 - p_over,
+        # Whether the market's side of this came from its prices or
+        # from the 50% assumption. A row built on the assumption is a
+        # weaker claim and should be readable as one.
+        "market_priced": priced,
+        # INTERNAL. our_probability minus this is the market's implied
+        # probability, which is the price. Ordering and filtering only
+        # -- see WHAT LEAVES THIS MODULE.
         "gap": abs(gap),
-        # NOTE: the line is deliberately absent. See the module note.
     }
 
 
