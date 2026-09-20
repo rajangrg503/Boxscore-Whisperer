@@ -217,25 +217,43 @@ def test_real_lebron_celtics_prediction_scores_65_medium():
 
 # ---- a baseline from a season that has finished --------------------------
 # Until a player has five games this season, the baseline is last
-# season's whole log. The rubric counts those seventy games exactly as
-# it would count seventy from this season -- an unmeasured claim that
-# nobody can check, because the backtest population requires prior
-# in-season games by construction and contains none of these cases.
-def test_a_prior_season_baseline_cannot_be_called_high():
-    """Two unmeasured options; the app takes the one claiming less."""
-    from engine.confidence import score_prediction, PRIOR_SEASON_CAP
-    result = score_prediction({}, baseline_sample_n=70,
-                              baseline_is_prior_season=True)
-    assert result.label == PRIOR_SEASON_CAP
-    assert result.label != "High"
+# season's whole log. The rubric was counting those seventy games
+# exactly as it would count seventy from this season.
+#
+# It is a DEDUCTION, not a cap on the label. The bands at the top of
+# engine/confidence.py are the documented meaning of High and Medium;
+# a rule overriding them from outside would make the published label
+# stop meaning what the rubric says.
+def test_a_prior_season_baseline_costs_points():
+    from engine.confidence import score_prediction, PRIOR_SEASON_PENALTY
+    plain = score_prediction({}, baseline_sample_n=70)
+    early = score_prediction({}, baseline_sample_n=70,
+                             baseline_is_prior_season=True)
+    assert early.score == plain.score - PRIOR_SEASON_PENALTY
 
 
-def test_the_same_baseline_this_season_is_still_high():
+def test_which_is_enough_to_move_a_plain_projection_off_high():
     from engine.confidence import score_prediction
     assert score_prediction({}, baseline_sample_n=70).label == "High"
+    assert score_prediction({}, baseline_sample_n=70,
+                            baseline_is_prior_season=True).label == "Medium"
 
 
-def test_the_reason_is_named_not_just_the_label_lowered():
+def test_the_label_always_follows_the_score_nothing_overrides_it():
+    """The invariant the deduction exists to preserve. The bands are
+    the documented meaning of High and Medium; if a projection scores
+    High after the deduction it says High. An earlier version capped
+    the label from outside the rubric, which made the published word
+    stop meaning what the file says it means."""
+    from engine.confidence import score_prediction, _label_for_score
+    for n in (1, 4, 5, 19, 20, 70):
+        for early in (False, True):
+            result = score_prediction({}, baseline_sample_n=n,
+                                      baseline_is_prior_season=early)
+            assert result.label == _label_for_score(result.score)
+
+
+def test_the_reason_is_named_not_just_the_score_lowered():
     """A badge that drops with no explanation is worse than one that
     does not drop at all."""
     from engine.confidence import score_prediction
@@ -244,20 +262,9 @@ def test_the_reason_is_named_not_just_the_label_lowered():
     assert any("last season" in reason.lower() for reason in result.reasons)
 
 
-def test_the_cap_never_raises_a_low_one():
-    """It is a ceiling, not a re-score. A thin prior-season baseline is
-    still Low."""
+def test_the_score_never_goes_below_zero():
     from engine.confidence import score_prediction
-    result = score_prediction({}, baseline_sample_n=2,
+    result = score_prediction({}, baseline_sample_n=1,
                               baseline_is_prior_season=True)
+    assert result.score >= 0
     assert result.label == "Low"
-
-
-def test_the_score_itself_is_untouched():
-    """The cap is a refusal to publish a label, not a measured penalty,
-    so it must not pretend to be one by moving the rubric total."""
-    from engine.confidence import score_prediction
-    plain = score_prediction({}, baseline_sample_n=70)
-    capped = score_prediction({}, baseline_sample_n=70,
-                              baseline_is_prior_season=True)
-    assert capped.score == plain.score
