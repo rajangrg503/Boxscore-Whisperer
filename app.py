@@ -76,6 +76,7 @@ from engine.adjustments.defense import (
 )
 from analytics.layer_accuracy import build_layer_lines
 from engine.confidence import score_prediction
+from engine import forward_record
 from engine.adjustments.registry import LAYER_DISPLAY
 from engine.team_total import (
     REGULAR_SEASON_GAMES,
@@ -1655,6 +1656,83 @@ st.markdown(
     '</div>',
     unsafe_allow_html=True,
 )
+# ---------------------------------------------------------------------
+# THIS SEASON'S LIVE RECORD
+#
+# The backtest expander below replays seasons already played. This is
+# the other kind of evidence, and it is the one nobody else in this
+# market publishes: what we said BEFORE tip-off, against what happened.
+#
+# engine/forward_record.py decides what may be shown here, and its
+# refusals are the feature. For the first weeks of a season this panel
+# will not quote a percentage at all -- there will be four nights of
+# data, an audience seeing the site for the first time, and a figure
+# that could read 61% purely because forty legs landed well. Publishing
+# that would cost more than it earns, and it would do it by publishing
+# a true number that does not mean what a reader would take it to mean.
+# ---------------------------------------------------------------------
+_FORWARD = forward_record.summarise(os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), "results"))
+_FORWARD_LABEL = (
+    f"This season's live record — {_FORWARD['nights']} night"
+    f"{'s' if _FORWARD['nights'] != 1 else ''} scored"
+    if _FORWARD["nights"] else
+    "This season's live record — nothing scored yet")
+
+with st.expander(_FORWARD_LABEL):
+    st.markdown(
+        "**What we said before tip-off, against what happened.**\n\n"
+        "Everything in the backtest section below is a replay of seasons "
+        "that were already finished. This is the other kind: every night "
+        "of this season, our projection is recorded before the games are "
+        "played and scored against the box score the next morning. "
+        "Neither half can be revised afterwards."
+    )
+    st.markdown(forward_record.headline(_FORWARD))
+
+    _rows = [
+        forward_record.line_for(
+            "Range coverage — how often the 80% range held",
+            _FORWARD["coverage"]),
+        forward_record.line_for(
+            "Against the line — when we disagreed with the market",
+            _FORWARD["against_line"], forward_record.TYPICAL_BREAK_EVEN,
+            "break-even"),
+        forward_record.line_for(
+            "On the legs we would have listed",
+            _FORWARD["strong"], forward_record.TYPICAL_BREAK_EVEN,
+            "break-even"),
+        forward_record.money_line(_FORWARD["money"]["strong"],
+                                  "Units, on the legs we would have listed"),
+        forward_record.money_line(_FORWARD["money"]["all"],
+                                  "Units, across every leg in the feed"),
+    ]
+    _rows = [row for row in _rows if row]
+    if _rows:
+        st.markdown("\n".join(f"- {row}" for row in _rows))
+        for _note in forward_record.pending(_FORWARD):
+            st.markdown(_note)
+    elif _FORWARD["nights"]:
+        st.markdown(
+            "No percentage is shown above, and that is deliberate. A "
+            f"record this young can read 60% or 40% on luck alone, and "
+            f"the counts are what there honestly is to show. Once "
+            f"{forward_record.MIN_NIGHTS_TO_STATE} nights have been scored "
+            f"— and {forward_record.MIN_LEGS_TO_STATE} legs have settled — "
+            "the rates appear here with their confidence intervals, and "
+            "they stay whether they flatter us or not."
+        )
+    else:
+        st.markdown(
+            "The season opens **20 October**. From the morning after the "
+            "first slate, this panel fills itself in — coverage first, "
+            "since it needs nothing but our own projections and the public "
+            "box score, then the record against the market once enough "
+            "legs have settled."
+        )
+
+    st.caption(" ".join(forward_record.caveats(_FORWARD)))
+
 with st.expander("Methodology and backtest results"):
     st.markdown(
         "**How we know this works**\n\n"
