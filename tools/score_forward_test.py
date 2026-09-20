@@ -116,9 +116,15 @@ def digest_of(path):
         return hashlib.sha256(handle.read()).hexdigest()
 
 
-def score(projections, legs, game_date, read=read_payload):
+def score(projections, legs, game_date, read=None):
     """Score one night. Pure apart from the cache read, so the tests
-    can hand it a reader and a game log and check the arithmetic."""
+    can hand it a reader and a game log and check the arithmetic.
+
+    The reader is resolved here rather than bound as a default, so that
+    patching this module's read_payload reaches every caller -- a
+    default argument would capture the original at import and quietly
+    ignore the patch."""
+    read = read or read_payload
     season = projections.get("season")
     by_player_stat = {(leg["player_id"], leg["stat"]): leg for leg in legs}
 
@@ -180,7 +186,7 @@ def score(projections, legs, game_date, read=read_payload):
 
 
 def build_record(projections, projections_path, legs, snapshot_path,
-                 game_date, scored_at, read=read_payload):
+                 game_date, scored_at, read=None):
     players, totals = score(projections, legs, game_date, read=read)
     sources = {
         "projections_file": os.path.relpath(projections_path, REPO_ROOT),
@@ -236,6 +242,132 @@ def game_date_for(projections, override=None):
         return None
 
 
+PROJECTION_DIR = os.path.join(REPO_ROOT, "projections")
+SNAPSHOT_DIR = os.path.join(REPO_ROOT, "line_snapshots")
+
+# How long after the games before a night is worth scoring. The cache
+# only learns a box score when the morning refresh fetches it, so
+# scoring too early produces a night full of "void" players who in fact
+# played -- and a void is permanent once written.
+SETTLE_AFTER_HOURS = 14
+
+
+def _captured_at(path):
+    try:
+        with open(path) as handle:
+            stamp = json.load(handle).get("captured_at")
+        when = datetime.fromisoformat(stamp)
+        return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def snapshot_for(projection_captured_at, snapshot_dir=None):
+    """The line snapshot that best represents what the market said.
+
+    The LAST one taken on the same evening, not the nearest: the
+    capture job samples across the slate precisely because the latest
+    line before a tip is the only one worth calling a close. Anything
+    more than eight hours after the projection belongs to another
+    night.
+    """
+    if projection_captured_at is None:
+        return None
+    root = snapshot_dir or SNAPSHOT_DIR
+    best, best_when = None, None
+    for folder, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(folder, name)
+            when = _captured_at(path)
+            if when is None:
+                continue
+            delta = (when - projection_captured_at).total_seconds()
+            if not -3600 <= delta <= 8 * 3600:
+                continue
+            if best_when is None or when > best_when:
+                best, best_when = path, when
+    return best
+
+
+def unscored(now=None, projection_dir=None, result_dir=None):
+    """Nights we have a claim for and no verdict on.
+
+    Skips anything too recent to settle honestly -- see
+    SETTLE_AFTER_HOURS -- because a night scored before the cache has
+    the box scores records every player as void, and that record is
+    what gets published.
+    """
+    now = now or datetime.now(timezone.utc)
+    projection_dir = projection_dir or PROJECTION_DIR
+    result_dir = result_dir or RESULT_DIR
+    if not os.path.isdir(projection_dir):
+        return []
+
+    done = set()
+    if os.path.isdir(result_dir):
+        done = {name[:-len(".json")] for name in os.listdir(result_dir)
+                if name.endswith(".json")}
+
+    out = []
+    for name in sorted(os.listdir(projection_dir)):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(projection_dir, name)
+        when = _captured_at(path)
+        if when is None:
+            continue
+        if (now - when).total_seconds() < SETTLE_AFTER_HOURS * 3600:
+            continue
+        with open(path) as handle:
+            body = json.load(handle)
+        game_date = game_date_for(body)
+        if not game_date or game_date in done:
+            continue
+        out.append((path, body, game_date))
+    return out
+
+
+def score_unscored(now=None):
+    """Score every night that is ready. Written for the refresh job to
+    call once a morning, after it has updated the cache -- which is the
+    only moment the box scores are certainly there."""
+    pending = unscored(now)
+    if not pending:
+        print("nothing new to score")
+        return 0
+
+    for path, body, game_date in pending:
+        snapshot = snapshot_for(_captured_at(path))
+        legs = []
+        if snapshot:
+            legs, report = legs_from_snapshot(snapshot)
+            print(f"{game_date}: {len(legs)} leg(s) from "
+                  f"{os.path.basename(snapshot)}")
+            print_snapshot_report(report)
+        else:
+            # Coverage is still scoreable, and saying so matters: a
+            # night with no snapshot is a night with no market claim,
+            # not a night with no evidence.
+            print(f"{game_date}: no line snapshot -- coverage only")
+
+        record = build_record(body, path, legs, snapshot, game_date,
+                              now or datetime.now(timezone.utc))
+        result_path, digest = write_record(record, game_date)
+        totals = record["totals"]
+        line = (f"  {totals.get('scored', 0)} claim(s) scored, "
+                f"{totals.get('covered', 0)} inside the range, "
+                f"{totals.get('void_players', 0)} player(s) void")
+        if totals.get("legs"):
+            line += (f"; {totals['legs_correct']}/{totals['legs']} right "
+                     f"against the line")
+        print(line)
+        print(f"  {os.path.relpath(result_path, REPO_ROOT)}  "
+              f"sha256 {digest[:16]}...")
+    return 0
+
+
 def summarise():
     if not os.path.isdir(RESULT_DIR):
         print("nothing scored yet")
@@ -278,12 +410,18 @@ def main(argv=None):
     parser.add_argument("--date", default=None,
                         help="the US game date; inferred from the capture time if omitted")
     parser.add_argument("--summarise", action="store_true")
+    parser.add_argument("--catch-up", action="store_true",
+                        help="score every night that has a projection, no "
+                             "result yet, and has had time to settle")
     parser.add_argument("--dry-run", action="store_true",
                         help="score and report, write nothing")
     args = parser.parse_args(argv)
 
     if args.summarise:
         return summarise()
+
+    if args.catch_up:
+        return score_unscored()
 
     if not args.projections:
         print("nothing to score -- pass --projections", file=sys.stderr)
