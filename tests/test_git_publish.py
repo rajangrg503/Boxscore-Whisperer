@@ -149,3 +149,34 @@ def test_a_fresh_lock_is_waited_on_not_stolen(repo):
     assert result.returncode == 1
     assert "could not get the repo lock" in result.stderr
     assert git(repo, "log", "-1", "--format=%s") == "seed"
+
+
+def test_a_path_that_does_not_exist_yet_is_not_a_failure(repo):
+    """The capture job's first real run died here: projections/ does
+    not exist until the first night with something to project, and
+    `git add` on a missing pathspec is fatal -- so the whole publish
+    went down, including the line_records/ entry next to it that DID
+    have something in it."""
+    (repo / "results" / "a.json").write_text("{}")
+    result = run('bw_publish "Capture today" projections results', repo)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert git(repo, "log", "-1", "--format=%s") == "Capture today"
+    assert git(repo, "show", "--name-only", "--format=", "HEAD").split() \
+        == ["results/a.json"]
+
+
+def test_nothing_existing_at_all_is_a_quiet_night(repo):
+    result = run('bw_publish "Capture today" projections line_records', repo)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert git(repo, "log", "-1", "--format=%s") == "seed"
+
+
+def test_a_deleted_file_still_publishes(repo):
+    """Gone from disk but known to git is a real change, not a missing
+    path -- the filesystem check alone would silently skip it."""
+    (repo / "results" / "a.json").write_text("{}")
+    assert run('bw_publish "Add" results', repo).returncode == 0
+    (repo / "results" / "a.json").unlink()
+    result = run('bw_publish "Remove" results', repo)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert git(repo, "log", "-1", "--format=%s") == "Remove"
