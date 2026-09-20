@@ -213,3 +213,51 @@ def test_real_lebron_celtics_prediction_scores_65_medium():
     assert result.score == 65
     assert result.label == "Medium"
     assert result.reasons == ["Scheme: an untested estimate"]
+
+
+# ---- a baseline from a season that has finished --------------------------
+# Until a player has five games this season, the baseline is last
+# season's whole log. The rubric counts those seventy games exactly as
+# it would count seventy from this season -- an unmeasured claim that
+# nobody can check, because the backtest population requires prior
+# in-season games by construction and contains none of these cases.
+def test_a_prior_season_baseline_cannot_be_called_high():
+    """Two unmeasured options; the app takes the one claiming less."""
+    from engine.confidence import score_prediction, PRIOR_SEASON_CAP
+    result = score_prediction({}, baseline_sample_n=70,
+                              baseline_is_prior_season=True)
+    assert result.label == PRIOR_SEASON_CAP
+    assert result.label != "High"
+
+
+def test_the_same_baseline_this_season_is_still_high():
+    from engine.confidence import score_prediction
+    assert score_prediction({}, baseline_sample_n=70).label == "High"
+
+
+def test_the_reason_is_named_not_just_the_label_lowered():
+    """A badge that drops with no explanation is worse than one that
+    does not drop at all."""
+    from engine.confidence import score_prediction
+    result = score_prediction({}, baseline_sample_n=70,
+                              baseline_is_prior_season=True)
+    assert any("last season" in reason.lower() for reason in result.reasons)
+
+
+def test_the_cap_never_raises_a_low_one():
+    """It is a ceiling, not a re-score. A thin prior-season baseline is
+    still Low."""
+    from engine.confidence import score_prediction
+    result = score_prediction({}, baseline_sample_n=2,
+                              baseline_is_prior_season=True)
+    assert result.label == "Low"
+
+
+def test_the_score_itself_is_untouched():
+    """The cap is a refusal to publish a label, not a measured penalty,
+    so it must not pretend to be one by moving the rubric total."""
+    from engine.confidence import score_prediction
+    plain = score_prediction({}, baseline_sample_n=70)
+    capped = score_prediction({}, baseline_sample_n=70,
+                              baseline_is_prior_season=True)
+    assert capped.score == plain.score
