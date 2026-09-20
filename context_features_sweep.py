@@ -62,8 +62,17 @@ AND THE THING WORTH MORE THAN EITHER
 Production under-predicts, across the board: actual/predicted is 1.027
 for points, 1.040 for assists, 1.018 for rebounds. Following it down:
 
-  * It is not the opponent-defence layer. In this table *_base and
-    *_predicted are identical to four decimal places.
+  * It is not the opponent-defence layer. (An earlier version of this
+    note said that layer was doing nothing at all, on the grounds that
+    mean(*_base) and mean(*_predicted) match to four decimals. That
+    inference was wrong, and it is worth leaving the correction here
+    rather than quietly deleting it: the defence multiplier is CENTRED
+    on 1.0, so equal means are exactly what a working layer produces.
+    Checked properly, it fires on 70,791 of 70,944 rows, moves a
+    projection by 1.3% typically, ranges from 0.95 to 1.03 across the
+    middle 98%, and improves points MAE by 0.083% -- which matches the
+    0.09% the accuracy research measured independently. Small, and
+    alive.)
   * It is not an early-season artifact. It holds at every level of
     prior games played.
   * It is not a constant. Split by minutes actually played, actual over
