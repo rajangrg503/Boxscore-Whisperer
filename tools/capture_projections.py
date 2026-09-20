@@ -60,6 +60,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.baseline_stats import stats_from_gamelog          # noqa: E402
 from engine.cache import read_payload                          # noqa: E402
 from engine.distribution import distribution_for               # noqa: E402
+from engine.odds_snapshot import nba_player_ids                # noqa: E402
 from engine.stat_columns import STAT_COLUMNS                   # noqa: E402
 
 import pandas as pd                                            # noqa: E402
@@ -145,33 +146,21 @@ def write_record(body, captured_at):
 
 
 def player_ids_from_snapshot(path):
-    """Pull player ids out of a line snapshot, best effort.
+    """Who to project tonight, as NBA player ids.
 
-    The odds schema is not documented well enough to rely on, and this
-    is the one place that has to read it. So it walks the structure
-    looking for anything that names a player rather than assuming a
-    shape, and says how many it found -- a wrong guess here means a
-    thin capture, which is visible, rather than a wrong number, which
-    is not.
+    This used to walk the snapshot for anything that looked like a
+    player id. In the real schema that returns the feed's own slugs --
+    CADE_CUNNINGHAM_1_NBA -- and a slug finds no cached game log, so
+    every player would have been skipped as having too little history.
+    On an ordinary night in January that is indistinguishable from the
+    off-season, in a job nobody watches.
+
+    engine/odds_snapshot.py resolves them to NBA ids and reports what
+    it could not match, and it is the same reader the scorer uses, so
+    the players we project and the players we score cannot drift apart.
     """
-    with open(path) as handle:
-        blob = json.load(handle)
-
-    found = set()
-
-    def walk(node):
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key in ("playerID", "player_id", "statEntityID") and isinstance(value, (str, int)):
-                    found.add(str(value))
-                else:
-                    walk(value)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item)
-
-    walk(blob.get("response", blob))
-    return sorted(found)
+    ids, _report = nba_player_ids(path)
+    return ids
 
 
 def summarise():

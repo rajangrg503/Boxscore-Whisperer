@@ -1,0 +1,186 @@
+"""Tests for engine/odds_snapshot.py -- reading the real odds schema.
+
+The first version of this parser was written against a guessed schema
+and every part of the guess was wrong. It would have found zero legs
+on every night of the season and reported that as a quiet night. So
+the fixtures here are shaped like the real capture of 20 Sep 2026, and
+what is pinned is mostly the three ways it went wrong:
+
+  * the line is a STRING in bookOverUnder, not a number in "line"
+  * playerID is the feed's slug, not an NBA player id
+  * a third of the entries are moneylines, spreads and quarter props
+"""
+
+import json
+
+import pytest
+
+from engine import odds_snapshot as osnap
+
+
+def odd(stat="points", player="LEBRON_JAMES_1_NBA", side="over",
+        bet_type="ou", period="game", book="25.5", fair=None):
+    body = {
+        "statID": stat, "playerID": player, "statEntityID": player,
+        "betTypeID": bet_type, "periodID": period, "sideID": side,
+        "marketName": "whatever", "bookOdds": "-110",
+    }
+    if book is not None:
+        body["bookOverUnder"] = book
+    if fair is not None:
+        body["fairOverUnder"] = fair
+    return body
+
+
+def snapshot(odds, players=None):
+    players = players or {"LEBRON_JAMES_1_NBA": {
+        "playerID": "LEBRON_JAMES_1_NBA", "name": "LeBron James",
+        "firstName": "LeBron", "lastName": "James",
+        "teamID": "LOS_ANGELES_LAKERS_NBA"}}
+    return {"response": {"success": True, "data": [
+        {"eventID": "e1", "leagueID": "NBA",
+         "players": players,
+         "odds": {f"k{i}": o for i, o in enumerate(odds)}}]}}
+
+
+# ---- the three things the guess got wrong ---------------------------------
+def test_the_line_is_read_out_of_a_string_field():
+    """bookOverUnder: "25.5". The guessed parser looked for a numeric
+    "overUnder" or "line" and would have found nothing, all season."""
+    legs, _report = osnap.read(snapshot([odd(book="25.5")]))
+    assert len(legs) == 1
+    assert legs[0]["line"] == 25.5
+    assert legs[0]["line_source"] == "book"
+
+
+def test_the_feeds_player_slug_is_resolved_to_an_nba_id():
+    """A slug finds no cached game log, so every player would have been
+    skipped as having too little history -- which looks exactly like
+    the off-season."""
+    legs, _report = osnap.read(snapshot([odd()]))
+    assert legs[0]["player_id"] == "2544"      # LeBron James
+    assert legs[0]["name"] == "LeBron James"
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"bet_type": "ml"},          # moneyline
+    {"bet_type": "sp"},          # spread
+    {"period": "1q"},            # first quarter
+    {"period": "1h"},            # first half
+    {"period": "reg"},           # regulation only -- settles without OT
+])
+def test_anything_that_is_not_a_game_long_over_under_is_left_alone(kwargs):
+    """Scoring a first-quarter points line against a full box score
+    would be wrong in a way no total would reveal."""
+    legs, _report = osnap.read(snapshot([odd(**kwargs)]))
+    assert legs == []
+
+
+# ---- what it refuses to invent --------------------------------------------
+def test_a_player_it_cannot_match_is_reported_not_guessed():
+    players = {"NOT_A_REAL_PERSON_1_NBA": {"name": "Zzz Nobodyson"}}
+    legs, report = osnap.read(
+        snapshot([odd(player="NOT_A_REAL_PERSON_1_NBA")], players))
+    assert legs == []
+    assert report["unresolved_players"]["Zzz Nobodyson"] == 1
+
+
+def test_an_unknown_stat_is_reported_as_a_parser_failure():
+    legs, report = osnap.read(snapshot([odd(stat="somethingNew")]))
+    assert legs == []
+    assert report["unknown_stats"]["somethingNew"] == 1
+
+
+def test_a_market_we_choose_not_to_score_is_not_a_parser_failure():
+    """"We do not do combined totals" and "our parser broke" produce
+    the same missing leg and want opposite responses."""
+    legs, report = osnap.read(snapshot([
+        odd(stat="points+rebounds+assists"), odd(stat="doubleDouble")]))
+    assert legs == []
+    assert "unknown_stats" not in report
+    assert report["not_scored"]["points+rebounds+assists"] == 1
+    assert report["not_scored"]["doubleDouble"] == 1
+
+
+def test_a_missing_line_is_skipped_rather_than_zeroed():
+    legs, _report = osnap.read(snapshot([odd(book=None)]))
+    assert legs == []
+
+
+# ---- one leg per claim ----------------------------------------------------
+def test_over_and_under_are_one_leg_not_two():
+    """They are two entries carrying the same number. Counting both
+    would weight every prop twice in the published figure."""
+    legs, _report = osnap.read(snapshot([
+        odd(side="over"), odd(side="under")]))
+    assert len(legs) == 1
+
+
+def test_the_same_prop_from_several_books_is_one_leg():
+    legs, _report = osnap.read(snapshot([
+        odd(book="25.5"), odd(book="26.5"), odd(book="25.5")]))
+    assert len(legs) == 1
+
+
+def test_different_stats_for_one_player_are_different_legs():
+    legs, _report = osnap.read(snapshot([
+        odd(stat="points"), odd(stat="rebounds"), odd(stat="assists")]))
+    assert sorted(leg["stat"] for leg in legs) == ["AST", "PTS", "REB"]
+
+
+# ---- the book line, not the consensus -------------------------------------
+def test_the_bookmakers_line_is_preferred_over_the_consensus():
+    """"We beat the market" has to mean something somebody could
+    actually have bet."""
+    legs, _report = osnap.read(snapshot([odd(book="25.5", fair="24.5")]))
+    assert legs[0]["line"] == 25.5 and legs[0]["line_source"] == "book"
+
+
+def test_the_consensus_is_used_when_no_book_offered_one_and_says_so():
+    legs, _report = osnap.read(snapshot([odd(book=None, fair="24.5")]))
+    assert legs[0]["line"] == 24.5 and legs[0]["line_source"] == "fair"
+
+
+# ---- names the feed writes without diacritics -----------------------------
+def test_a_name_written_without_its_accents_still_resolves():
+    """The feed writes plain ASCII and the NBA's table has the
+    diacritics. That is most of a team's stars in this league."""
+    players = {"NIKOLA_JOKIC_1_NBA": {"name": "Nikola Jokic"}}
+    legs, report = osnap.read(
+        snapshot([odd(player="NIKOLA_JOKIC_1_NBA")], players))
+    assert "unresolved_players" not in report
+    assert legs[0]["player_id"] == "203999"
+
+
+# ---- the other caller -----------------------------------------------------
+def test_player_ids_come_back_as_nba_ids_for_the_projection_capture():
+    players = {"LEBRON_JAMES_1_NBA": {"name": "LeBron James"},
+               "STEPHEN_CURRY_1_NBA": {"name": "Stephen Curry"}}
+    ids, _report = osnap.nba_player_ids(snapshot(
+        [odd(player="LEBRON_JAMES_1_NBA"), odd(player="STEPHEN_CURRY_1_NBA")],
+        players))
+    assert ids == sorted(["2544", "201939"])
+
+
+def test_a_snapshot_with_nothing_in_it_is_empty_not_an_error():
+    ids, report = osnap.nba_player_ids({"response": {"data": []}})
+    assert ids == [] and report == {}
+
+
+def test_it_reads_a_file_as_well_as_a_blob(tmp_path):
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps(snapshot([odd()])))
+    legs, _report = osnap.read(str(path))
+    assert len(legs) == 1
+
+
+def test_a_team_market_is_not_reported_as_an_unmatched_player():
+    """Team totals are game-long over/unders too, and they name their
+    entity "all", "home" or "away". Reporting those as players we
+    failed to resolve would cry wolf on every capture -- which is how
+    a real unresolved player ends up unnoticed."""
+    legs, report = osnap.read(snapshot([
+        odd(player="all"), odd(player="home"), odd(player="away")]))
+    assert legs == []
+    assert "unresolved_players" not in report
+    assert sum(report["team_markets"].values()) == 3

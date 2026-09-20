@@ -67,106 +67,48 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.actuals import (                                   # noqa: E402
     actual_stats, covered, side_settled, side_taken)
 from engine.cache import read_payload                          # noqa: E402
+from engine.odds_snapshot import read as read_snapshot         # noqa: E402
 from engine.line_input import interpret as interpret_line      # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULT_DIR = os.path.join(REPO_ROOT, "results")
 
-# What the odds feed calls a stat, in our column names. Deliberately
-# generous about spelling: this is a vocabulary we do not control and
-# cannot see until a real capture exists, so near-misses are matched
-# rather than dropped. Anything still unmatched is REPORTED, never
-# silently skipped -- an unrecognised stat is a leg we failed to score,
-# which is a bug, and it must not look like a leg nobody bet.
-STAT_BY_NAME = {
-    "points": "PTS", "pts": "PTS",
-    "assists": "AST", "ast": "AST",
-    "rebounds": "REB", "reb": "REB", "totalrebounds": "REB",
-    "steals": "STL", "stl": "STL",
-    "blocks": "BLK", "blk": "BLK",
-    "turnovers": "TOV", "tov": "TOV",
-    "threepointersmade": "FG3M", "three_pointers_made": "FG3M",
-    "fg3m": "FG3M", "threes": "FG3M", "3pm": "FG3M",
-    "threepointersattempted": "FG3A", "fg3a": "FG3A", "3pa": "FG3A",
-    "offensiverebounds": "OREB", "oreb": "OREB",
-}
-
-# Keys that have carried a player id in the shapes seen so far. Same
-# list tools/capture_projections.py walks for, kept in step with it.
-PLAYER_KEYS = ("playerID", "player_id", "statEntityID")
-# Keys that have carried the number the bet is struck at. "points" is
-# deliberately absent: it is also a stat name, and a node carrying a
-# points total would be read as a line struck at that total -- a wrong
-# number scored silently, which is the one failure mode here that does
-# not announce itself.
-LINE_KEYS = ("overUnder", "over_under", "line", "handicap")
-# Keys that have carried what the bet is on.
-STAT_KEYS = ("statID", "stat_id", "statistic", "market", "marketName", "propType")
+# The snapshot parser lives in engine/odds_snapshot.py, shared with
+# tools/capture_projections.py. Two readers of the same file that
+# disagreed would project one set of players and score another, and
+# nothing in either output would show the gap.
+legs_from_snapshot = read_snapshot
 
 
-def _normalise(name):
-    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+def print_snapshot_report(report):
+    """Say what did not become a leg, and separate the reasons.
 
-
-def legs_from_snapshot(path):
-    """Every (player, stat, line) the snapshot offers, best effort.
-
-    THE SCHEMA IS NOT DOCUMENTED well enough to assume a shape, and a
-    wrong assumption here is expensive in a specific way: it produces a
-    scored record that looks complete and is missing half the bets. So
-    this walks for objects that carry all three things at once rather
-    than following a path, and returns what it could not interpret
-    alongside what it could.
-
-    Returns (legs, unknown_stats). legs are dicts of player_id, stat,
-    line. unknown_stats counts the stat names that looked like legs but
-    matched nothing in STAT_BY_NAME -- the caller is expected to print
-    that, not swallow it.
+    "We do not score combined totals" and "our parser broke on a stat
+    we have never seen" produce the same missing leg and need opposite
+    responses, so a single dropped-count would be worse than useless.
+    Only the first is expected; the rest want a person.
     """
-    with open(path) as handle:
-        blob = json.load(handle)
+    if not report:
+        return
+    quiet = {
+        "not_scored": "markets we do not score",
+        "skipped_bet_types": "not over/unders",
+        "skipped_periods": "not game-long",
+        "team_markets": "team markets, not player props",
+    }
+    for key, label in quiet.items():
+        counts = report.get(key)
+        if counts:
+            total = sum(counts.values())
+            print(f"  {total} {label} ({', '.join(sorted(k for k in counts if k))})")
 
-    legs = {}
-    unknown = Counter()
-
-    def first(node, keys):
-        for key in keys:
-            if key in node and node[key] is not None:
-                return node[key]
-        return None
-
-    def walk(node, inherited_player=None):
-        if isinstance(node, dict):
-            player = first(node, PLAYER_KEYS) or inherited_player
-            raw_stat = first(node, STAT_KEYS)
-            raw_line = first(node, LINE_KEYS)
-
-            if player is not None and raw_stat is not None and raw_line is not None:
-                try:
-                    value = float(raw_line)
-                except (TypeError, ValueError):
-                    value = None
-                if value is not None:
-                    stat = STAT_BY_NAME.get(_normalise(raw_stat))
-                    if stat is None:
-                        unknown[str(raw_stat)] += 1
-                    else:
-                        # One line per player and stat. A feed carries
-                        # the same prop from several books; they agree
-                        # on the number far more often than not, and
-                        # scoring the same leg nine times would weight
-                        # one popular prop nine times in the figure.
-                        legs.setdefault((str(player), stat),
-                                        {"player_id": str(player), "stat": stat,
-                                         "line": value})
-            for value in node.values():
-                walk(value, player)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item, inherited_player)
-
-    walk(blob.get("response", blob))
-    return list(legs.values()), unknown
+    for stat, count in (report.get("unknown_stats") or {}).items():
+        print(f"  UNRECOGNISED stat '{stat}' x{count} -- a captured bet we "
+              f"failed to score; add it to STAT_BY_ID")
+    for name, count in (report.get("unresolved_players") or {}).items():
+        print(f"  UNRESOLVED player '{name}' x{count} -- no NBA id matched")
+    for name, note in (report.get("ambiguous_players") or {}).items():
+        print(f"  AMBIGUOUS player '{name}': {note}")
 
 
 def digest_of(path):
@@ -356,16 +298,11 @@ def main(argv=None):
               file=sys.stderr)
         return 2
 
-    legs, unknown = ([], Counter())
+    legs = []
     if args.snapshot:
-        legs, unknown = legs_from_snapshot(args.snapshot)
+        legs, report = legs_from_snapshot(args.snapshot)
         print(f"{len(legs)} leg(s) read from the snapshot")
-        if unknown:
-            # Loudly. Every one of these is a bet we captured and then
-            # failed to score, and the fix is one line in STAT_BY_NAME.
-            print("  UNRECOGNISED stat names (not scored): " +
-                  ", ".join(f"{name} x{count}"
-                            for name, count in unknown.most_common(12)))
+        print_snapshot_report(report)
 
     scored_at = datetime.now(timezone.utc)
     body = build_record(projections, args.projections, legs, args.snapshot,
