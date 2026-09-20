@@ -1206,6 +1206,28 @@ div[data-testid="stAlertContentSuccess"] {
     }
     [data-testid="stMainBlockContainer"], .block-container {
         padding-top: 4.25rem;
+        /* Community Cloud pins "Hosted with Streamlit" and the author
+           avatar to the bottom of the viewport. On a phone they land
+           on top of the "Predict statline" button -- the one thing on
+           the page a reader has to press.
+
+           This pads our own content out from under them rather than
+           hiding theirs: the badge is how the free hosting is paid
+           for, there is no official word on whether it may be removed,
+           and a cosmetic win is not worth finding out. Roughly the
+           badge's height plus a thumb's clearance. */
+        padding-bottom: 5.5rem;
+    }
+    /* Streamlit ellipsises a checkbox label that does not fit on one
+       line, so "no season blending" arrived as "no season blen…" --
+       the clause carrying the actual meaning. Wrapping costs one line
+       and says the whole thing. */
+    [data-testid="stCheckbox"] label,
+    [data-testid="stCheckbox"] label p,
+    [data-testid="stCheckbox"] label div {
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
     }
     .bw-wordmark { flex-direction: column; gap: 10px; }
     .bw-wordmark svg { width: 52px; height: 52px; }
