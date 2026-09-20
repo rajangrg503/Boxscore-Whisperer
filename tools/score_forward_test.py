@@ -92,7 +92,10 @@ def print_snapshot_report(report):
         return
     quiet = {
         "not_scored": "markets we do not score",
-        "skipped_bet_types": "not over/unders",
+        # Not discarded: engine/odds_snapshot.game_context() reads the
+        # spreads and the game total, which are the only advance signal
+        # we have for game script. They are simply not player props.
+        "skipped_bet_types": "game markets, read separately",
         "skipped_periods": "not game-long",
         "team_markets": "team markets, not player props",
     }
