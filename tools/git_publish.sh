@@ -30,10 +30,28 @@
 #    git work only: the refresh spends its ninety minutes fetching,
 #    which needs no lock, and holding one that long would mean the
 #    captures simply never ran.
+#
+# 3. THE WRONG BRANCH. Every push below is a bare `git push`, which
+#    pushes whatever happens to be checked out. On 21 Sep 2026 the
+#    repository was left on a review branch after a PR. The next
+#    refresh would have committed the day's data cache onto that
+#    branch, pushed it there, returned 0, and left the live app --
+#    which deploys from main -- serving a cache that quietly stopped
+#    advancing. Nothing rejects a push to the wrong branch, so the
+#    log would have read like a clean night for as long as it took
+#    somebody to notice the dates.
+#
+#    So this refuses to publish from anywhere but main. A job that
+#    does nothing and says so can be recovered from; one that does
+#    the wrong thing and reports success cannot.
 
 # Serialise every writer to this repository. mkdir is atomic on every
 # filesystem this could run on, which `[ -e ] && touch` is not.
 BW_LOCK_WAIT_SECONDS="${BW_LOCK_WAIT_SECONDS:-300}"
+
+# The branch the live app deploys from. Overridable only so the tests
+# can build a repository that is not called main.
+BW_PUBLISH_BRANCH="${BW_PUBLISH_BRANCH:-main}"
 
 bw_lock() {
     local lock="$1" waited=0
@@ -66,9 +84,20 @@ bw_unlock() {
 # not a failure.
 bw_publish() {
     local message="$1"; shift
-    local repo lock rc=0
+    local repo lock branch rc=0
     repo="$(git rev-parse --show-toplevel)" || return 1
     lock="$repo/.git/bw-publish.lock"
+
+    # Before the lock, because a refusal should not make the other job
+    # wait for a lock this one is only going to hand straight back.
+    # A detached HEAD reports itself as "HEAD" and is refused too: it
+    # is not a branch, so a push from it goes nowhere useful either.
+    branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    if [ "$branch" != "$BW_PUBLISH_BRANCH" ]; then
+        printf 'on branch %s, not %s -- refusing to publish. Nothing was committed.\n' \
+            "${branch:-unknown}" "$BW_PUBLISH_BRANCH" >&2
+        return 1
+    fi
 
     if ! bw_lock "$lock"; then
         printf 'could not get the repo lock within %ss -- nothing committed\n' \

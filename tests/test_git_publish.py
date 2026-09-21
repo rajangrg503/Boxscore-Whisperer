@@ -2,10 +2,12 @@
 
 Shell in a launchd job is where this project's worst failures have
 lived: not crashes, but jobs that exit 0 having done nothing, at 08:30,
-to nobody. Both behaviours pinned here were real incidents waiting to
-happen -- the push race actually did happen, on the refresh job's first
-complete run, and the overlap is two launchd jobs in one repository
-every morning from 09:00.
+to nobody. The behaviours pinned here were all real incidents waiting
+to happen -- the push race actually did happen, on the refresh job's
+first complete run; the overlap is two launchd jobs in one repository
+every morning from 09:00; and the wrong-branch publish was one night
+away on 21 Sep 2026, with the repository left on a review branch after
+a PR was merged.
 
 These drive the real script against real git repositories, because the
 bug would be in the shell, and a mock of git would have the bug too.
@@ -39,8 +41,15 @@ def repo(tmp_path):
     """A working repo with an upstream, as the jobs see it."""
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    # Both ends on main by name, not by whatever init.defaultBranch is
+    # set to on the machine running this -- bw_publish now refuses to
+    # publish from anywhere else, and that refusal is the point.
+    subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+                   cwd=remote, check=True)
     work = tmp_path / "work"
     subprocess.run(["git", "clone", "-q", str(remote), str(work)], check=True)
+    subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+                   cwd=work, check=True)
     for key, value in (("user.name", "Test"), ("user.email", "t@example.com"),
                        ("commit.gpgsign", "false")):
         subprocess.run(["git", "config", key, value], cwd=work, check=True)
@@ -180,3 +189,80 @@ def test_a_deleted_file_still_publishes(repo):
     result = run('bw_publish "Remove" results', repo)
     assert result.returncode == 0, result.stderr + result.stdout
     assert git(repo, "log", "-1", "--format=%s") == "Remove"
+
+
+def test_it_refuses_to_publish_from_the_wrong_branch(repo):
+    """21 Sep 2026: the repository was left on a review branch after a
+    PR. Every push in the helper is a bare `git push`, so the next
+    refresh would have committed the night's data cache to that
+    branch, pushed it, returned 0, and left the live app -- which
+    deploys from main -- serving a cache that quietly stopped
+    advancing. Nothing rejects a push to the wrong branch."""
+    subprocess.run(["git", "checkout", "-qb", "claude/some-review"],
+                   cwd=repo, check=True)
+    (repo / "results" / "a.json").write_text("{}")
+    result = run('bw_publish "Score today" results', repo)
+
+    assert result.returncode == 1
+    # The branch it found, by name: "wrong branch" alone sends whoever
+    # reads launchd.err looking for which one.
+    assert "claude/some-review" in result.stderr
+    assert "main" in result.stderr
+    assert git(repo, "log", "-1", "--format=%s") == "seed"
+    # Nothing staged either -- a refusal that leaves the index dirty
+    # hands the next job a commit it did not make.
+    assert git(repo, "diff", "--cached", "--name-only") == ""
+
+
+def test_a_detached_head_is_refused_too(repo):
+    """Not a branch, so a push from it goes nowhere useful. git spells
+    it "HEAD", which is not main, so the same check catches it."""
+    subprocess.run(["git", "checkout", "-q", "--detach"], cwd=repo, check=True)
+    (repo / "results" / "a.json").write_text("{}")
+    result = run('bw_publish "Score today" results', repo)
+
+    assert result.returncode == 1
+    assert "refusing to publish" in result.stderr
+    assert git(repo, "log", "-1", "--format=%s") == "seed"
+
+
+def test_the_wrong_branch_is_caught_before_the_lock(repo):
+    """Two things at once: a job that is going to refuse should not
+    spend the lock wait first, and it must not report the other job's
+    lock as the reason. The whole value of this check is that the log
+    says what actually happened."""
+    (repo / ".git" / "bw-publish.lock").mkdir()
+    subprocess.run(["git", "checkout", "-qb", "claude/some-review"],
+                   cwd=repo, check=True)
+    (repo / "results" / "a.json").write_text("{}")
+    result = run('bw_publish "Score today" results',
+                 repo, BW_LOCK_WAIT_SECONDS="5")
+
+    assert result.returncode == 1
+    assert "not main" in result.stderr
+    assert "could not get the repo lock" not in result.stderr
+
+
+def test_main_still_publishes(repo):
+    """The guard's cost, pinned: the normal night must be untouched."""
+    assert git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    (repo / "results" / "a.json").write_text("{}")
+    result = run('bw_publish "Score today" results', repo)
+    assert result.returncode == 0, result.stderr
+    assert git(repo, "rev-parse", "HEAD") == git(repo, "rev-parse", "@{upstream}")
+
+
+def test_the_branch_name_is_not_hardcoded_past_the_setting(repo):
+    """The tests override it; nothing else should need to. If this
+    fails, the check grew a second copy of the name somewhere."""
+    subprocess.run(["git", "checkout", "-qb", "deploy"], cwd=repo, check=True)
+    # A real deploy branch, with an upstream. Without one the push
+    # fails for a reason that has nothing to do with this check, and
+    # the test passes or fails on the wrong thing.
+    subprocess.run(["git", "push", "-q", "-u", "origin", "deploy"],
+                   cwd=repo, check=True)
+    (repo / "results" / "a.json").write_text("{}")
+    result = run('bw_publish "Score today" results', repo,
+                 BW_PUBLISH_BRANCH="deploy")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert git(repo, "log", "-1", "--format=%s") == "Score today"
