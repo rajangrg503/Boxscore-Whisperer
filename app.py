@@ -77,7 +77,6 @@ from engine.adjustments.defense import (
 from analytics.layer_accuracy import build_layer_lines
 from engine.confidence import score_prediction
 from engine import forward_record
-from engine import source_guard
 from engine.adjustments.registry import LAYER_DISPLAY
 from engine.team_total import (
     REGULAR_SEASON_GAMES,
@@ -561,20 +560,36 @@ st.set_page_config(
     layout="wide",
 )
 
-# ---------------------------- Deploy skew ------------------------------
-# Streamlit Cloud pulls new code and re-runs THIS file without
-# restarting Python, so every module under engine/ can be hours behind
-# the script calling it. On 20 Sep 2026 that produced a TypeError from
-# two files that were never inconsistent in git -- and a TypeError was
-# the lucky outcome. A change that keeps its signature makes no noise
-# and serves yesterday's numbers instead.
+# --------------------- Deploys and stale modules -----------------------
+# A guard used to sit here (engine/source_guard.py, PR #53). It was
+# removed on 21 Sep 2026 because it could not work, and because the
+# problem it described does not exist.
 #
-# Checked here, before anything is drawn, so a stale page is never
-# half-rendered. engine/source_guard.py has the full reasoning.
-_stale_modules = source_guard.check()
-if _stale_modules:
-    st.error(source_guard.message(_stale_modules))
-    st.stop()
+# Streamlit already handles this itself. On any change to a watched
+# local file, lib/streamlit/watcher/local_sources_watcher.py queues
+# EVERY watched module for eviction from sys.modules -- in its own
+# words, "as a workaround we simply unload all watched modules" -- and
+# on_script_run() flushes those evictions "at the start of each script
+# run ... before any user code executes". So a deploy re-imports
+# engine/ and analytics/ from disk. They do not keep the code they had
+# when the container booted. Read in streamlit 1.64.0, the pinned
+# version.
+#
+# The guard hashed each file the first time it saw it and compared on
+# every rerun. It lived under engine/, so the same eviction wiped its
+# own snapshot before it could ever compare: it re-imported empty,
+# recorded every file as current, and returned nothing. It could not
+# fire, and never did.
+#
+# That leaves the 20 Sep 2026 TypeError (app.py and engine/confidence.py
+# disagreeing on a keyword argument, with no commit where they were
+# inconsistent) UNEXPLAINED. Do not write down a cause here until one
+# is demonstrated. The remaining candidate is a race rather than
+# staleness: git pull writes several files, the watcher fires on the
+# first one, and the re-import reads the tree as it stands at that
+# instant. That window is seconds wide and clears on the next rerun,
+# which would mean a refresh was enough and the reboot was incidental.
+# Untested -- we rebooted before trying a refresh.
 
 # ---------------------------- Design system ----------------------------
 # One set of tokens for every custom element below. Streamlit's own
