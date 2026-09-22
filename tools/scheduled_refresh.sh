@@ -93,8 +93,20 @@ ALL_STATUS=$?
 say "running refresh_cache.py (team stats, game logs, synergy)"
 "$PYTHON" refresh_cache.py >>"$LOG" 2>&1
 CACHE_STATUS=$?
-[ $ALL_STATUS -eq 0 ] || say "WARNING: refresh_all.py exited $ALL_STATUS"
-[ $CACHE_STATUS -eq 0 ] || say "WARNING: refresh_cache.py exited $CACHE_STATUS"
+# A non-zero exit from either fetcher means part of data_cache/ was not
+# refreshed. That is still worth pushing -- what did fetch is real, and
+# the alternative is the whole site going a day stale over one endpoint
+# -- but the run must not then sign off as if it were clean. PARTIAL
+# carries that to the last line and to the exit code.
+PARTIAL=""
+if [ $ALL_STATUS -ne 0 ]; then
+    PARTIAL="refresh_all exited $ALL_STATUS"
+    say "WARNING: refresh_all.py exited $ALL_STATUS -- at least one batch script did not complete"
+fi
+if [ $CACHE_STATUS -ne 0 ]; then
+    PARTIAL="${PARTIAL:+$PARTIAL; }refresh_cache exited $CACHE_STATUS"
+    say "WARNING: refresh_cache.py exited $CACHE_STATUS"
+fi
 
 # The watchdog writes which endpoints failed validation. Anything that
 # failed left its own cache files untouched, but a failure means the
@@ -108,8 +120,13 @@ try:
 except (OSError, ValueError):
     print("")
 else:
+    # data_watchdog/runner.check() writes "passed" (a bool), never
+    # "last_result" -- reading the latter made this list permanently
+    # empty, so the WARNING below and the [partial: ...] commit tag
+    # could never fire. Absent/None still means "never checked", which
+    # is not a failure.
     bad = [k for k, v in status.items()
-           if isinstance(v, dict) and v.get("last_result") not in (None, "ok", "pass", "passed")]
+           if isinstance(v, dict) and v.get("passed") is False]
     print(",".join(sorted(bad)))
 PY
 )"
@@ -195,6 +212,18 @@ if [ $SCORE_STATUS -ne 0 ]; then
 else
     bw_publish "Score $(date '+%Y-%m-%d')" results >>"$LOG" 2>&1 \
         || say "WARNING: could not publish results (see $LOG)"
+fi
+
+if [ -n "$PARTIAL" ]; then
+    # Deliberately not "=== refresh done ===" and deliberately non-zero:
+    # that line is what a morning glance greps for, and
+    # "launchctl list | grep boxscore" shows the status. A partial
+    # refresh that reports itself as done is the same quiet lie as a
+    # stale cache reporting itself fresh.
+    say "=== refresh done, PARTIAL ($PARTIAL) ==="
+    say "Part of data_cache/ is still yesterday's; what did fetch has been pushed. \
+Re-run tools/scheduled_refresh.sh to retry the rest."
+    exit 1
 fi
 
 say "=== refresh done ==="

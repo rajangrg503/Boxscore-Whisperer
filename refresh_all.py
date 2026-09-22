@@ -24,7 +24,11 @@ Usage:
     python3 refresh_all.py
 """
 
+import sys
+import traceback
+
 from data_watchdog import runner
+from data_watchdog.gate import WatchdogFailure
 
 # endpoint_key -> batch script module name, or None if refreshed by
 # refresh_cache.py instead of a dedicated batch script.
@@ -68,11 +72,30 @@ def main():
     print(f"\nRunning batch refresh for {len(runnable_passed)} passed endpoint(s) "
           f"with a dedicated batch script...\n")
 
+    crashed = []
+
     for key in runnable_passed:
         script_name = BATCH_SCRIPTS[key]
         print(f"=== Running {script_name}.py (endpoint: {key}) ===")
-        module = __import__(script_name)
-        module.main()
+        try:
+            module = __import__(script_name)
+            module.main()
+        except WatchdogFailure as exc:
+            # gate.py's contract still holds: the batch script refused to
+            # run and wrote nothing for this endpoint. What must not
+            # happen is that refusal taking its SIBLINGS down with it.
+            # 22 Sep 2026: player_career_stats' pre-flight hit a single
+            # ConnectionResetError from stats.nba.com at 11:55, the
+            # exception left this loop, and the four batch scripts that
+            # had not run yet -- matchups, estimated metrics, rosters,
+            # hustle -- never ran at all. The wrapper logged one WARNING
+            # line and still pushed and signed off with "refresh done".
+            crashed.append((key, f"pre-flight refused: {exc}"))
+            print(f"!! {script_name}.py refused to run -- {exc}")
+        except Exception as exc:  # noqa: BLE001 -- one endpoint must not end the run
+            crashed.append((key, f"{type(exc).__name__}: {exc}"))
+            print(f"!! {script_name}.py crashed -- {type(exc).__name__}: {exc}")
+            traceback.print_exc(file=sys.stdout)
         print()
 
     no_script_passed = [k for k in passed_keys if BATCH_SCRIPTS.get(k) is None]
@@ -82,11 +105,27 @@ def main():
             f"batch script -- run refresh_cache.py separately to actually refresh them."
         )
 
+    if crashed:
+        print(f"\n{len(crashed)} batch script(s) did not complete:")
+        for key, reason in crashed:
+            print(f"  - {key}: {reason}")
+        print(
+            "\nEach of those left its own data_cache/ files untouched -- that part "
+            "of the cache is now yesterday's. Everything else above did refresh. "
+            "Re-run refresh_all.py to retry just these (the rest skip what is "
+            "already cached)."
+        )
+
     print(
         "\nDone. Now run tools/pack_cache.py and commit data_cache.zip so the "
         "deployed app picks it up."
     )
 
+    # Non-zero so tools/scheduled_refresh.sh can tell a full refresh from a
+    # partial one. A partial refresh is still worth pushing -- what did
+    # fetch is real -- but it must not report itself as a clean run.
+    return 1 if crashed else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
