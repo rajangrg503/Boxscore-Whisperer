@@ -230,15 +230,62 @@ def test_the_money_comes_through_with_the_bar_it_had_to_clear(pipeline):
     assert money["all"]["break_even"] == pytest.approx(115 / 215, abs=1e-4)
 
 
+BOOKKEEPING_KEYS = {
+    "projections_file", "projections_sha256",
+    "line_snapshot_file", "line_snapshot_sha256",
+}
+
+
+def licence_blob(record):
+    """The record's DATA, with `sources` left out.
+
+    `sources.projections_file` is a path. On 22 Sep 2026 this test
+    failed with "the price -105 reached the record" because pytest's
+    temp directory had reached `pytest-105` and the fixture writes
+    outside the repo, so relpath walked out to
+    `.../pytest-105/.../projections.json`. No price was anywhere near
+    it. A licence check that fires on the 105th run of the day, on a
+    machine nobody changed, teaches everybody to ignore it -- and a
+    licence check people ignore is worse than none.
+
+    A price lands in a leg or a player's stats. Nothing puts one in a
+    filename or a digest, so dropping `sources` costs the check
+    nothing -- provided `sources` really is only bookkeeping, which
+    the test below pins before relying on it.
+    """
+    return json.dumps({key: value for key, value in record.items()
+                       if key != "sources"})
+
+
 def test_the_published_record_still_carries_no_price_and_no_line(pipeline):
     """The licence line, asserted on the record the whole chain built
     rather than on one assembled for the purpose."""
-    blob = json.dumps(pipeline["record"])
+    record = pipeline["record"]
+    # Excluding `sources` is only safe while `sources` is bookkeeping
+    # and nothing else. A new key here is a new place a price could
+    # hide from this check, so it fails until somebody looks.
+    assert set(record["sources"]) <= BOOKKEEPING_KEYS, (
+        "a new key in sources -- the licence check below skips this "
+        "whole object, so decide whether a price could reach it")
+
+    blob = licence_blob(record)
     for price in ("-115", "-105"):
         assert price not in blob, f"the price {price} reached the record"
     for _stat, (_col, line, _actual) in MARKETS.items():
         assert f'"{line}"' not in blob
     assert "bookOverUnder" not in blob and "bookOdds" not in blob
+
+
+def test_the_licence_check_can_still_fail(pipeline):
+    """The control on the test above. Narrowing what it reads is how a
+    guard quietly stops guarding -- this project has shipped that
+    exact bug twice. So put a price where one would really land and
+    confirm the same function still sees it."""
+    record = json.loads(json.dumps(pipeline["record"]))  # deep copy
+    player = next(iter(record["players"].values()))
+    stat = next(iter(player["stats"].values()))
+    stat["price"] = -115
+    assert "-115" in licence_blob(record)
 
 
 def test_every_stage_would_have_failed_loudly_on_an_empty_snapshot():
