@@ -40,6 +40,7 @@ capture of 20 Sep 2026 and every key in it has been seen in the wild.
 """
 
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -52,7 +53,8 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
 
 import capture_projections as cp                                  # noqa: E402
 import score_forward_test as sc                                   # noqa: E402
-from engine import disagreement, odds_snapshot, pricing           # noqa: E402
+from engine import (disagreement, forward_record, odds_snapshot,  # noqa: E402
+                    pricing)
 
 SEASON = "2026-27"
 GAME_DATE = "2026-10-21"
@@ -297,3 +299,117 @@ def test_every_stage_would_have_failed_loudly_on_an_empty_snapshot():
     assert ids == [] and legs == [] and report == {}
     assert disagreement.rank(legs, {"players": {}}) == []
     assert pricing.tally([])["roi"] is None
+
+
+def test_the_live_record_page_reads_what_the_writer_wrote(pipeline, tmp_path):
+    """The chain above stops at build_record(). The public page is the
+    next link: engine/forward_record.summarise() reads the night files
+    tools/score_forward_test.py writes, and the live record panel says
+    whatever it returns.
+
+    Nothing tested that seam. tests/test_forward_record.py builds its
+    nights with a hand-written night() helper -- the exact shape that
+    hid the n_prior bug for a whole feature: a reader and a writer
+    disagreeing on a spelling, every test green because the fixture was
+    written in the reader's spelling.
+
+    So nothing here is spelled by hand. The comparison is key by key
+    against the record the writer really produced.
+    """
+    folder = tmp_path / "results"
+    folder.mkdir()
+    (folder / "2026-10-21.json").write_text(json.dumps(pipeline["record"]))
+
+    summary = forward_record.summarise(str(folder))
+    assert summary["nights"] == 1, "the writer's own record did not count"
+    assert summary["empty_nights"] == 0, (
+        "a night the writer scored was read as having no evidence")
+
+    written = pipeline["record"]["totals"]
+    page = summary["totals"]
+    assert page, "summarise produced no totals at all"
+
+    # The counters the live record panel is built from. Named here
+    # because they are the CONTRACT between the two modules -- the
+    # n_prior lesson is do not build the DATA by hand, not do not write
+    # down what the two sides have to agree on. A rename on either side
+    # empties this set and fails here, loudly, instead of showing the
+    # reader a zero.
+    CORE = {"scored", "covered", "legs", "legs_correct",
+            "strong_legs", "strong_correct"}
+    shared = set(page) & set(written)
+    assert CORE <= shared, (
+        "the page and the writer no longer share the counters the live "
+        f"record is built from. Missing: {sorted(CORE - shared)}. "
+        f"The page reads {sorted(page)}; the writer wrote {sorted(written)}")
+
+    for key in sorted(shared):
+        assert page[key] == written[key], (
+            f"the page's {key} is {page[key]!r}, the writer wrote "
+            f"{written[key]!r}")
+
+    # A key the writer never wrote is a counter that stayed at zero:
+    # build_record() accumulates into a Counter, which does not
+    # materialise a key it never incremented. Absence is zero, not a
+    # mismatch -- void_players is normally absent, and should be.
+    for key in sorted(set(page) - shared):
+        assert page[key] == 0, (
+            f"the page reports {key}={page[key]!r} from a record that "
+            f"never carried that key")
+
+    # ...and the shared counters are real, so the comparison above is
+    # not 0 == 0 for every key -- which is what a mismatch looks like.
+    assert page["legs"] > 0 and page["scored"] > 0
+
+    money = summary["money"]["all"]
+    assert money["legs"] == written["legs"]
+    assert money["staked"] > 0 and money["profit"] != 0
+
+
+def test_one_night_is_withheld_by_the_gate_not_by_a_missing_key(pipeline,
+                                                                tmp_path):
+    """The control on the test above.
+
+    At one night every rate is None -- which looks identical to a page
+    reading keys nobody writes. So repeat the SAME writer-made record
+    until the gates are cleared. If the figures then appear, the silence
+    at one night was the gate doing its job, not the page failing to
+    find the numbers.
+
+    The counts come from the gates and from the record, never from a
+    literal here, so moving a gate cannot quietly turn this into a
+    no-op.
+    """
+    record = pipeline["record"]
+    totals = record["totals"]
+    nights_needed = max(
+        forward_record.MIN_NIGHTS_TO_STATE,
+        math.ceil(forward_record.MIN_LEGS_TO_STATE / totals["legs"]),
+        math.ceil(forward_record.MIN_CLAIMS_TO_STATE / totals["scored"]),
+    )
+
+    one = tmp_path / "one"
+    one.mkdir()
+    (one / "2026-10-21.json").write_text(json.dumps(record))
+    held = forward_record.summarise(str(one))
+    assert held["coverage"] is None
+    assert held["against_line"] is None
+    assert held["strong"] is None
+    assert held["money"]["all"]["publishable"] is False
+
+    many = tmp_path / "many"
+    many.mkdir()
+    for index in range(nights_needed):
+        day = (f"2026-10-{21 + index:02d}" if index < 11
+               else f"2026-11-{index - 10:02d}")
+        (many / f"{day}.json").write_text(json.dumps(record))
+    freed = forward_record.summarise(str(many))
+
+    assert freed["nights"] == nights_needed
+    for key in ("coverage", "against_line", "strong"):
+        assert freed[key] is not None, (
+            f"{key} is still withheld at {nights_needed} nights and "
+            f"{freed['totals']['legs']} legs -- the page is not reading "
+            f"the writer's numbers, and the gate was never the reason")
+        assert 0.0 <= freed[key]["rate"] <= 1.0
+    assert freed["money"]["all"]["publishable"] is True
