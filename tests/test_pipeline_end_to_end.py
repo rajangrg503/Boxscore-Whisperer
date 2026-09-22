@@ -54,7 +54,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
 import capture_projections as cp                                  # noqa: E402
 import score_forward_test as sc                                   # noqa: E402
 from engine import (disagreement, forward_record, odds_snapshot,  # noqa: E402
-                    pricing)
+                    pricing, slip)
 
 SEASON = "2026-27"
 GAME_DATE = "2026-10-21"
@@ -413,3 +413,138 @@ def test_one_night_is_withheld_by_the_gate_not_by_a_missing_key(pipeline,
             f"the writer's numbers, and the gate was never the reason")
         assert 0.0 <= freed[key]["rate"] <= 1.0
     assert freed["money"]["all"]["publishable"] is True
+
+
+# --------------------------------------------------------------------
+# The nightly slip: the claim posted before tip-off, and the accounting
+# of it the next morning. engine/slip.py explains why the commitment is
+# a file rather than a formatter.
+# --------------------------------------------------------------------
+
+SLIP_CLAIM_KEYS = {"player_id", "name", "stat", "projected", "low", "high",
+                   "calibrated"}
+
+
+def test_a_slip_is_built_from_projections_the_writer_really_made(pipeline):
+    """Not a hand-typed projections dict -- the one
+    tools/capture_projections.py produced earlier in this chain."""
+    names = {pid: f"Player {pid}" for pid
+             in pipeline["projections"]["players"]}
+    card = slip.commit(pipeline["projections"], "2026-10-21", names=names)
+
+    assert card["claims"], "the slip named nothing from a real capture"
+    assert card["range_nominal"] == pipeline["projections"]["range_nominal"]
+    for claim in card["claims"]:
+        assert set(claim) == SLIP_CLAIM_KEYS, (
+            f"claim carries {sorted(set(claim) - SLIP_CLAIM_KEYS)} -- a "
+            f"slip is published, so every field on it is published too")
+        assert claim["low"] <= claim["projected"] <= claim["high"]
+
+
+def test_the_slip_carries_nothing_of_the_market(pipeline):
+    """The licence line, on the thing that actually gets posted.
+
+    A slip has no line and no price by construction: the claim is a
+    projection and a range, both ours. This asserts the rendered text
+    as well as the structure, because the rendered text is what leaves
+    the building.
+    """
+    names = {pid: f"Player {pid}" for pid
+             in pipeline["projections"]["players"]}
+    card = slip.commit(pipeline["projections"], "2026-10-21", names=names)
+    text = slip.render_card(card)
+
+    for leg in pipeline["legs"]:
+        assert str(leg["line"]) not in text, (
+            f"the book's line {leg['line']} reached a published slip")
+    for price in ("-115", "-105"):
+        assert price not in text
+
+
+def test_the_slip_licence_check_can_still_fail(pipeline):
+    """The control. The assertion above passes trivially if the
+    renderer prints nothing useful, so put a line where one would land
+    and confirm the same render surfaces it."""
+    names = {pid: f"Player {pid}" for pid
+             in pipeline["projections"]["players"]}
+    card = slip.commit(pipeline["projections"], "2026-10-21", names=names)
+    line = pipeline["legs"][0]["line"]
+    card["claims"][0]["name"] = f"Someone ({line})"
+
+    assert str(line) in slip.render_card(card)
+
+
+def test_the_morning_settles_exactly_what_the_night_committed(pipeline):
+    """The cherry-picking guard.
+
+    If the morning post chose what to report, it would select for the
+    claims that landed, every morning, without anybody deciding to.
+    """
+    names = {pid: f"Player {pid}" for pid
+             in pipeline["projections"]["players"]}
+    card = slip.commit(pipeline["projections"], "2026-10-21", names=names)
+    settled = slip.settle(card, pipeline["record"])
+
+    committed = [(c["player_id"], c["stat"]) for c in card["claims"]]
+    reported = [(c["player_id"], c["stat"]) for c in settled["claims"]]
+    assert reported == committed, (
+        "the morning post reported a different set of claims than the "
+        "card committed to")
+
+    counts = slip.tally(settled)
+    assert counts["claims"] == len(committed)
+    assert counts["settled"] > 0, (
+        "nothing settled against a record the writer really built -- "
+        "the slip and the record disagree about a shape")
+    assert counts["covered"] == sum(1 for c in settled["claims"]
+                                    if c.get("covered"))
+
+
+def test_a_claim_with_no_result_is_reported_not_dropped(pipeline):
+    """The control on the guard above. A claim that cannot be settled
+    is the one a quiet failure would swallow, so make one and watch it
+    come back marked."""
+    names = {pid: f"Player {pid}" for pid
+             in pipeline["projections"]["players"]}
+    card = slip.commit(pipeline["projections"], "2026-10-21", names=names)
+    thinned = json.loads(json.dumps(pipeline["record"]))
+    dropped = card["claims"][0]
+    thinned["players"].pop(dropped["player_id"], None)
+
+    settled = slip.settle(card, thinned)
+    assert len(settled["claims"]) == len(card["claims"])
+
+    missing = [c for c in settled["claims"]
+               if c["player_id"] == dropped["player_id"]]
+    assert missing, "the unsettled claim vanished from the morning post"
+    assert all(c["covered"] is None and c["actual"] is None
+               for c in missing)
+    assert slip.tally(settled)["unsettled"] == len(missing)
+    assert "did not play" in slip.render_result(settled)
+
+
+def test_the_card_is_chosen_before_the_games_not_after(pipeline):
+    """Selection must not depend on anything the night produced."""
+    names = {pid: f"Player {pid}" for pid
+             in pipeline["projections"]["players"]}
+    first = slip.commit(pipeline["projections"], "2026-10-21", names=names)
+    again = slip.commit(pipeline["projections"], "2026-10-21", names=names)
+    assert first == again, "the card is not deterministic"
+
+    # Assert the property, not a second copy of the sort. Reproducing
+    # the ordering here would only pin that two expressions of the same
+    # line agree -- and the first version of this test did exactly
+    # that, then failed on a tie-break it had spelled backwards.
+    chosen = slip.select(pipeline["projections"])
+    assert chosen, "nothing was selected from a real capture"
+
+    points = {pid: p["stats"]["PTS"]["projected"]
+              for pid, p in pipeline["projections"]["players"].items()
+              if (p.get("stats") or {}).get("PTS")}
+    assert set(chosen) <= set(points), (
+        "a player with no points projection cannot be ranked by one")
+    left_out = set(points) - set(chosen)
+    if left_out:
+        assert min(points[pid] for pid in chosen) >= \
+            max(points[pid] for pid in left_out), (
+                "somebody left off the card outprojects somebody on it")
