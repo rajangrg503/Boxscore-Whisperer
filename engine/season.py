@@ -74,3 +74,26 @@ def game_date_for(projections, override=None):
         return str(when.astimezone(ZoneInfo("America/New_York")).date())
     except Exception:
         return None
+
+
+# The first night that counts. Before this date the NBA is playing
+# exhibitions, and nothing about them is evidence:
+#
+#   * rotations are meaningless -- starters play about twenty minutes,
+#     so a projection built from last season's full-game rates runs
+#     high by a third before anyone tips off;
+#   * and no preseason box score reaches our cache at all, because
+#     engine/game_log.py asks the API for "Regular Season" and
+#     "Playoffs" only. Every preseason night therefore scores as
+#     all-void, which means a preseason CLAIM CAN NEVER BE SETTLED.
+#
+# The second one is why engine/slip.py refuses to write a card before
+# this date. A card that can never be graded is a public claim with no
+# result coming, which is the opposite of what the nightly post
+# promises. The minutes would only make its numbers wrong; the
+# settlement makes it dishonest.
+#
+# UPDATE EACH SEASON. Left stale, the date simply passes and the
+# restrictions stop applying -- everything degrades to normal behaviour
+# rather than silently skipping a real slate.
+SEASON_OPENS = "2026-10-20"

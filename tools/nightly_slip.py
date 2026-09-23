@@ -39,6 +39,10 @@ PROJECTION_DIR = os.path.join(REPO_ROOT, "projections")
 RESULT_DIR = os.path.join(REPO_ROOT, "results")
 SLIP_DIR = os.path.join(REPO_ROOT, "slips")
 
+# Sentinel, not a card: a preseason night wrote nothing and that is
+# the correct outcome, which is different from failing to write.
+PRESEASON = object()
+
 
 def _read(path):
     with open(path, encoding="utf-8") as handle:
@@ -57,6 +61,13 @@ def latest_projections(directory):
 def commit(game_date, projections_path, slip_dir, size):
     projections = _read(projections_path)
     card = slip.commit(projections, game_date, size=size)
+    if card is None:
+        # Not a failure. Exhibition nights are a normal state for a
+        # fortnight of the year, and a job that reports failure every
+        # night for a fortnight trains everybody to ignore it.
+        return PRESEASON, (f"{game_date} is before the season opens "
+                           f"({slip.SEASON_OPENS}) -- no card written: a "
+                           f"preseason claim can never be settled")
     if not card["claims"]:
         return None, "no projection in that capture could be carded"
 
@@ -153,6 +164,9 @@ def main(argv=None):
               f"game date to file the card under", file=sys.stderr)
         return 1
     card, why = commit(game_date, path, args.slips, args.size)
+    if card is PRESEASON:
+        print(why, file=sys.stderr)
+        return 0
     if card is None:
         print(why, file=sys.stderr)
         return 1
