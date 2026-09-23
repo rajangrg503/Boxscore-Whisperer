@@ -47,6 +47,8 @@ and both are the reader's to see.
 
 from collections import OrderedDict
 
+from engine.season import SEASON_OPENS
+
 # The stats a card reports. Points, rebounds, assists -- the three a
 # reader recognises without being taught the product first.
 CARD_STATS = ("PTS", "REB", "AST")
@@ -96,13 +98,35 @@ def select(projections, size=CARD_SIZE):
     return [player_id for _points, player_id in ranked[:size]]
 
 
+def too_early(game_date):
+    """Is this date before the first night that counts?
+
+    A preseason card could never be settled: engine/game_log.py fetches
+    "Regular Season" and "Playoffs" only, so no preseason box score
+    reaches the cache and every preseason claim scores as void. Posting
+    one would be a public claim with no result coming -- the exact
+    opposite of what the nightly post promises.
+
+    The minutes make the numbers wrong too: starters play about twenty
+    minutes in exhibitions, so a projection from last season's
+    full-game rates runs high by a third. But the settlement is the
+    binding reason. A card that cannot be graded should not exist,
+    however good its numbers.
+    """
+    return str(game_date) < SEASON_OPENS
+
+
 def commit(projections, game_date, size=CARD_SIZE, names=None):
     """The slip: what we are claiming tonight, fixed before tip-off.
 
     Everything here is ours -- a projection and the range around it.
     Write this out and commit it; settle() later may report only what
     this named.
+
+    Returns None before SEASON_OPENS -- see too_early().
     """
+    if too_early(game_date):
+        return None
     names = names_by_id() if names is None else names
     claims = []
     for player_id in select(projections, size):

@@ -81,10 +81,18 @@ say "=== capture starting (dry-run=$DRY_RUN) ==="
 # fortnight rather than 250, out of a 2,500 monthly allowance, and a
 # real rehearsal either way.
 #
-# UPDATE THIS EACH SEASON. If it is left stale the date simply passes
-# and the throttle stops applying -- the job degrades to its normal
-# behaviour rather than silently skipping a real slate.
-SEASON_OPENS="${SEASON_OPENS:-2026-10-20}"
+# The date lives in engine/season.py, which is also what engine/slip.py
+# checks before writing a card. Read, not copied: two copies of a season
+# boundary is how the capture throttles on one date and the card refuses
+# on another.
+#
+# UPDATE IT THERE EACH SEASON. If it is left stale the date simply
+# passes and the throttle stops applying -- the job degrades to its
+# normal behaviour rather than silently skipping a real slate.
+SEASON_OPENS="${SEASON_OPENS:-$("$PYTHON" -c \
+    'from engine.season import SEASON_OPENS; print(SEASON_OPENS)' 2>/dev/null)}"
+[ -n "$SEASON_OPENS" ] \
+    || die "could not read SEASON_OPENS from engine/season.py"
 PRESEASON_MARKER="logs/.preseason-captured-$TODAY"
 PRESEASON=0
 if [[ "$TODAY" < "$SEASON_OPENS" ]]; then

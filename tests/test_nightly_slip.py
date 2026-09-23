@@ -223,3 +223,60 @@ def test_settle_with_nothing_scored_says_so(tmp_path):
     result = run("--settle", "--slips", str(slips), "--results", str(results))
     assert result.returncode == 1
     assert "no committed card has a result" in result.stderr
+
+
+def capture_on(day, tmp_path):
+    """A capture whose US game date is `day`. 17:00 UTC is the same
+    calendar day in New York, so the fixture says what it means."""
+    body = {"captured_at": f"{day}T17:00:00+00:00", "season": "2026-27",
+            "range_nominal": 0.8,
+            "players": {"2544": {"n_prior_games": 40, "stats": {
+                "PTS": {"projected": 25.0, "low": 20.0, "high": 30.0,
+                        "calibrated": True}}}}}
+    path = tmp_path / f"capture-{day}.json"
+    path.write_text(json.dumps(body))
+    return path
+
+
+def test_no_card_is_written_before_the_season_opens(tmp_path):
+    """Karma, 23 Sep: "in pre season starting 5s will play about 20 mins
+    only". True, and it would put the numbers a third high. But the
+    binding reason is settlement: engine/game_log.py fetches Regular
+    Season and Playoffs only, so no preseason box score ever reaches the
+    cache and every preseason claim scores as void.
+
+    A card that can never be graded is a public claim with no result
+    coming, which is the opposite of what the nightly post promises."""
+    from engine.season import SEASON_OPENS
+    slips = tmp_path / "slips"
+    result = run("--projections", str(capture_on("2026-10-05", tmp_path)),
+                 "--slips", str(slips))
+
+    # Exit 0 on purpose: a fortnight of exhibitions is a normal state,
+    # and a job that reports failure nightly for a fortnight gets
+    # ignored -- which is how a real failure then goes unnoticed.
+    assert result.returncode == 0, result.stderr
+    assert "can never be settled" in result.stderr
+    assert SEASON_OPENS in result.stderr
+    assert not slips.exists() or not list(slips.iterdir())
+
+
+def test_a_card_is_written_once_the_season_opens(tmp_path):
+    """The control. A guard that refused every date would pass the test
+    above while making the whole feature dead."""
+    from engine.season import SEASON_OPENS
+    slips = tmp_path / "slips"
+    result = run("--projections", str(capture_on(SEASON_OPENS, tmp_path)),
+                 "--slips", str(slips))
+    assert result.returncode == 0, result.stderr
+    assert [f.name for f in slips.iterdir()] == [f"{SEASON_OPENS}.json"]
+
+
+def test_the_capture_script_reads_the_opener_rather_than_copying_it():
+    """Two copies of a season boundary is how the capture throttles on
+    one date and the card refuses on another."""
+    from engine.season import SEASON_OPENS
+    script = open(os.path.join(REPO_ROOT, "tools", "nightly_capture.sh")).read()
+    assert "from engine.season import SEASON_OPENS" in script
+    assert SEASON_OPENS not in script, (
+        "the opener is hardcoded in the shell as well as engine/season.py")
