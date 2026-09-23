@@ -87,6 +87,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.actuals import (                                   # noqa: E402
     actual_stats, covered, side_settled, side_taken)
 from engine.cache import read_payload                          # noqa: E402
+# Lives in engine/season.py so tools/nightly_slip.py can reach it
+# without importing this module, which pulls in streamlit. One
+# definition: a second copy is how a card gets filed under one date
+# and its result under another.
+from engine.season import game_date_for                        # noqa: E402,F401
 from engine.disagreement import for_leg, prior_games           # noqa: E402
 from engine.odds_snapshot import read as read_snapshot         # noqa: E402
 from engine.line_input import interpret as interpret_line      # noqa: E402
@@ -373,28 +378,6 @@ def write_record(body, game_date):
         handle.write(raw)
     return path, hashlib.sha256(raw).hexdigest()
 
-
-def game_date_for(projections, override=None):
-    """The US date the games were played on.
-
-    Captures run from Australia, so the capture timestamp's UTC date is
-    the game date only by luck. Eastern is what the NBA schedules in,
-    and October straddles a DST change, so this asks the timezone
-    database rather than subtracting a fixed number of hours.
-    """
-    if override:
-        return override
-    captured = projections.get("captured_at")
-    if not captured:
-        return None
-    when = datetime.fromisoformat(captured)
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    try:
-        from zoneinfo import ZoneInfo
-        return str(when.astimezone(ZoneInfo("America/New_York")).date())
-    except Exception:
-        return None
 
 
 PROJECTION_DIR = os.path.join(REPO_ROOT, "projections")

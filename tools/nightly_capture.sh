@@ -156,6 +156,22 @@ else
         # cache is still filling in.
         if [ $PROJ_STATUS -eq 0 ] && [ "$AFTER" -gt "$BEFORE" ]; then
             touch "$PROJECTED_MARKER"
+            # Tonight's card, fixed before tip-off. Written here and
+            # nowhere else: this is the one run of the evening that
+            # produced projections, so the card is written exactly
+            # once. The later runs take the branch above and leave it
+            # alone -- rewriting a card after the games is the single
+            # thing engine/slip.py is arranged to prevent, and the tool
+            # refuses it anyway.
+            #
+            # No --date. The card is filed under the US game date the
+            # capture implies, which is what the scorer will name its
+            # result. Passing the local date here would file the two
+            # under different names and the card would never settle.
+            "$PYTHON" tools/nightly_slip.py 2>&1 | tee -a "$LOG"
+            SLIP_STATUS=${PIPESTATUS[0]}
+            [ $SLIP_STATUS -eq 0 ] \
+                || say "WARNING: nightly_slip.py exited $SLIP_STATUS -- no card tonight"
         elif [ $PROJ_STATUS -eq 0 ]; then
             say "nothing projectable yet -- will try again on the next run"
         fi
@@ -172,9 +188,11 @@ fi
 # ---- publish ---------------------------------------------------------
 # line_records/ is the public commitment to tonight's snapshot: when we
 # asked, how many events came back, and a digest. projections/ is the
-# claim itself. Neither carries a price. The raw snapshot stays out --
+# claim itself, and slips/ is the short version of it that gets
+# posted -- committed before the games, which is what stops the
+# morning post choosing what to report. None of them carries a price. The raw snapshot stays out --
 # .gitignore keeps line_snapshots/ local, which is the licence line.
-bw_publish "Capture $TODAY" projections line_records 2>&1 | tee -a "$LOG"
+bw_publish "Capture $TODAY" projections line_records slips 2>&1 | tee -a "$LOG"
 PUBLISH_STATUS=${PIPESTATUS[0]}
 [ $PUBLISH_STATUS -eq 0 ] || die "could not publish tonight's capture"
 

@@ -176,8 +176,7 @@ def render_card(slip):
     nominal = slip.get("range_nominal")
     share = f"{round(nominal * 100)}%" if nominal else "our stated"
     lines = [f"Tonight's card -- {slip['game_date']}", ""]
-    lines.append(f"What we expect, before tip-off. Each range is a "
-                 f"{share} range.")
+    lines.append(f"What we expect, before tip-off. Ranges are {share}.")
     lines.append("")
     for claim in slip.get("claims") or []:
         lines.append(f"  {claim['name']:<24} {claim['stat']:<4} "
