@@ -51,3 +51,26 @@ def recent_seasons(n, current=None):
 # next restart.
 CURRENT_SEASON = season_for_date(datetime.date.today())
 PREVIOUS_SEASON = season_offset(CURRENT_SEASON, 1)
+
+
+def game_date_for(projections, override=None):
+    """The US date the games were played on.
+
+    Captures run from Australia, so the capture timestamp's UTC date is
+    the game date only by luck. Eastern is what the NBA schedules in,
+    and October straddles a DST change, so this asks the timezone
+    database rather than subtracting a fixed number of hours.
+    """
+    if override:
+        return override
+    captured = projections.get("captured_at")
+    if not captured:
+        return None
+    when = datetime.datetime.fromisoformat(captured)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+        return str(when.astimezone(ZoneInfo("America/New_York")).date())
+    except Exception:
+        return None

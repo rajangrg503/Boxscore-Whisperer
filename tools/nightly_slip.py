@@ -26,15 +26,14 @@ tests in tests/test_pipeline_end_to_end.py.
 """
 
 import argparse
-import datetime as dt
 import json
 import os
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
-
 from engine import slip  # noqa: E402
+from engine.season import game_date_for  # noqa: E402
 
 PROJECTION_DIR = os.path.join(REPO_ROOT, "projections")
 RESULT_DIR = os.path.join(REPO_ROOT, "results")
@@ -85,9 +84,44 @@ def settle(game_date, slip_dir, result_dir):
     return slip.settle(_read(slip_path), _read(result_path)), slip_path
 
 
+def game_date_of(projections_path):
+    """The US date the games were played on, for this capture.
+
+    NOT today's date. Captures run from Australia, so the local date is
+    a day ahead of the slate for most of the evening, and
+    tools/score_forward_test.py files its results under the US Eastern
+    date. A card filed under the local date would never find a result
+    to settle against, and the failure would be silent -- no error, just
+    a morning post that never appears.
+
+    So this asks the scorer for the same answer the scorer will use.
+    One function, one convention, no second copy to drift.
+    """
+    return game_date_for(_read(projections_path))
+
+
+def latest_settleable(slip_dir, result_dir):
+    """The newest committed card that has a result waiting for it.
+
+    Avoids doing date arithmetic in the caller: "yesterday" in Australia
+    is not the game date, and the morning job should not have to know
+    that.
+    """
+    if not os.path.isdir(slip_dir):
+        return None
+    for name in sorted(os.listdir(slip_dir), reverse=True):
+        if not name.endswith(".json"):
+            continue
+        game_date = name[:-len(".json")]
+        if os.path.exists(os.path.join(result_dir, f"{game_date}.json")):
+            return game_date
+    return None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--date", help="YYYY-MM-DD (default: today)")
+    parser.add_argument("--date", help="YYYY-MM-DD (default: the game "
+                        "date of the capture, in US Eastern)")
     parser.add_argument("--settle", action="store_true",
                         help="print the morning post for a committed card")
     parser.add_argument("--projections", help="a capture to build from")
@@ -96,9 +130,12 @@ def main(argv=None):
     parser.add_argument("--size", type=int, default=slip.CARD_SIZE)
     args = parser.parse_args(argv)
 
-    game_date = args.date or dt.date.today().isoformat()
-
     if args.settle:
+        game_date = args.date or latest_settleable(args.slips, args.results)
+        if game_date is None:
+            print("no committed card has a result to settle yet",
+                  file=sys.stderr)
+            return 1
         settled, why = settle(game_date, args.slips, args.results)
         if settled is None:
             print(why, file=sys.stderr)
@@ -109,6 +146,11 @@ def main(argv=None):
     path = args.projections or latest_projections(PROJECTION_DIR)
     if path is None:
         print("no projections to build a card from", file=sys.stderr)
+        return 1
+    game_date = args.date or game_date_of(path)
+    if game_date is None:
+        print(f"{path} carries no usable captured_at, so there is no "
+              f"game date to file the card under", file=sys.stderr)
         return 1
     card, why = commit(game_date, path, args.slips, args.size)
     if card is None:

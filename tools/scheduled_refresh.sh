@@ -212,6 +212,17 @@ if [ $SCORE_STATUS -ne 0 ]; then
 else
     bw_publish "Score $(date '+%Y-%m-%d')" results >>"$LOG" 2>&1 \
         || say "WARNING: could not publish results (see $LOG)"
+
+    # The morning post, written into the log for copying out. No --date:
+    # the tool picks the newest committed card that has a result, so
+    # this job never has to work out what "yesterday" means from
+    # Australia -- which is the same timezone trap that would have made
+    # every card unsettleable.
+    #
+    # Printed, never posted. Posting is a human action and stays one.
+    say "last night's card:"
+    "$PYTHON" tools/nightly_slip.py --settle >>"$LOG" 2>&1 \
+        || say "nothing to settle yet"
 fi
 
 if [ -n "$PARTIAL" ]; then
