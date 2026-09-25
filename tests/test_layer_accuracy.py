@@ -272,3 +272,59 @@ def test_the_mark_survives_the_real_write_path(temp_log):
     result = layer_accuracy.layer_hit_rate("opponent_defense", "PTS")
     assert result.n == 0, "five saved what-ifs must contribute nothing"
     assert result.reason == "insufficient_data"
+
+
+# ---------------------------------------------------------------------
+# The empty log -- the state none of the tests above exercised, and the
+# state the app is actually in on a fresh install and was in on the day
+# the filter shipped. Every test in this file writes rows first, so the
+# ordinary path went untested while the interesting ones were covered.
+# ---------------------------------------------------------------------
+
+def test_an_empty_log_still_has_its_columns(temp_log):
+    """The regression. .map() on an empty Series cannot infer a dtype
+    and returns object; pandas reads df[<object Series>] as COLUMN
+    selection, so the filter silently returned a frame with zero columns
+    and the next df["status"] raised KeyError -- taking down "See how
+    this estimate was built" for every visitor."""
+    recent = layer_accuracy._recent_resolved(50)
+    assert len(recent) == 0
+    for column in ("status", "saved_at", "layers_json", "PTS_base"):
+        assert column in recent.columns, (
+            f"{column} was dropped: the mask was read as a column indexer")
+
+
+@pytest.mark.parametrize("rows, label", [
+    ([], "no rows at all"),
+    ([("pending", False)], "nothing resolved yet"),
+    ([("resolved", True)], "resolved, but every one a what-if"),
+])
+def test_every_way_the_sample_comes_out_empty(temp_log, rows, label):
+    """All three reach the same zero-row frame by different routes, and
+    each one used to lose its columns."""
+    built = []
+    for i, (status, made_up) in enumerate(rows):
+        row = _make_row(f"r{i}", 20.0, 15.0, 0.9, status=status)
+        row["hypothetical"] = made_up
+        built.append(row)
+    if built:
+        _write_rows(temp_log, built)
+
+    recent = layer_accuracy._recent_resolved(50)
+    assert len(recent) == 0, label
+    assert "status" in recent.columns, label
+    # And the thing the KeyError actually broke: the caller must survive.
+    result = layer_accuracy.layer_hit_rate("opponent_defense", "PTS", df=recent)
+    assert result.hit_rate is None
+    assert result.reason == "insufficient_data"
+
+
+def test_the_whole_panel_renders_against_an_empty_log(temp_log):
+    """The end of the chain, which is what the visitor sees. app.py calls
+    build_layer_lines() unconditionally, so this is the exact call that
+    raised in the browser."""
+    notes_by_layer = {key: "NOTE" for key, _label in
+                      __import__("engine.adjustments.registry", fromlist=["x"]).LAYER_DISPLAY}
+    lines = layer_accuracy.build_layer_lines(notes_by_layer)
+    assert len(lines) == len(notes_by_layer)
+    assert all(isinstance(line, str) and line for line in lines)

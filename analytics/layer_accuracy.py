@@ -68,9 +68,19 @@ def _recent_resolved(window):
     # the latest fifty rows and the "last 50 resolved predictions"
     # becomes thirty-eight, with nothing on screen saying so. Filtering
     # first reaches further back and keeps the window's promise.
+    #
+    # .astype(bool) and .loc are both load-bearing, and leaving either
+    # out is silent. On an EMPTY frame -- no resolved rows yet, which is
+    # a fresh install and was production the day this shipped -- .map()
+    # cannot infer a dtype and returns object. df[<object Series>] is
+    # not row filtering: pandas reads a non-boolean indexer as COLUMN
+    # selection, so an empty one returns a frame with zero columns and
+    # the next df["status"] raises KeyError. .astype(bool) keeps the
+    # mask boolean when there is nothing to infer from, and .loc means
+    # only rows were ever on the table.
     if "hypothetical" in resolved.columns:
-        real = ~resolved["hypothetical"].map(is_hypothetical)
-        resolved = resolved[real]
+        made_up = resolved["hypothetical"].map(is_hypothetical).astype(bool)
+        resolved = resolved.loc[~made_up]
     if "saved_at" in resolved.columns:
         resolved = resolved.sort_values("saved_at", ascending=False)
     resolved = resolved.head(window)
