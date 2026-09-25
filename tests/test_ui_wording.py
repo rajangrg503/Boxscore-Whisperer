@@ -261,3 +261,47 @@ def test_the_calibration_claim_is_still_made_normally():
     text = source()
     assert "in three seasons of backtests the real result " in text
     assert "landed inside an 80% range about 80% of the time" in text
+
+
+def test_the_scenario_applies_without_pressing_a_button():
+    """The button was a trap. A reader types a sentence, presses the big
+    green Predict button because it says Predict, and the sentence is
+    ignored with no sign it was -- which reads as "the feature doesn't
+    work", not "you missed a step". Observed on the live site."""
+    text = source()
+    assert '_typed != _already_read' in text, (
+        "the scenario no longer applies on a text change; it is back to "
+        "requiring the button, and pressing Predict will ignore the box")
+    assert 'st.session_state["matchup_scenario_source"] = _typed' in text, (
+        "nothing records what was last read, so it would re-apply on every "
+        "rerun and stamp over the reader's own edits to the pickers")
+
+
+def test_the_button_still_exists_for_re_applying():
+    """The control. Deleting the button would pass the test above while
+    removing the only way to re-apply a scenario after the pickers have
+    been edited by hand -- at which point the text is unchanged, so
+    nothing fires on its own."""
+    assert 'st.button("Read my scenario"' in source()
+
+
+def test_a_failed_roster_does_not_render_an_empty_picker():
+    """st.multiselect drops any session_state value not in `options`,
+    silently. With an empty roster that un-marks everyone the reader
+    marked out and the projection returns at full strength looking
+    normal. Not rendering the widget leaves session_state intact."""
+    text = source()
+    assert "if not roster:" in text, "the empty-roster branch is gone"
+    i, j = text.index("if not roster:"), text.index("out_ids = st.multiselect(")
+    assert i < j, "the guard must come before the widget is built"
+    assert "return [], []" in text[i:j], (
+        "the guard no longer returns early, so the widget is still built "
+        "with empty options")
+
+
+def test_the_picker_is_still_built_when_the_roster_loads():
+    """The control. A guard that returned early always would pass the
+    test above and remove the who's-out feature entirely."""
+    text = source()
+    assert "options=[pid for pid, _pname in roster]" in text
+    assert "format_func=lambda pid: player_search_label(roster_id_to_name[pid])" in text
