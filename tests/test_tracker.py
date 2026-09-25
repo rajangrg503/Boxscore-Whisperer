@@ -501,3 +501,97 @@ def test_try_resolve_prediction_capture_failure_never_blocks_resolution(monkeypa
     assert resolved["PTS_hit"] is True
     # capture columns stay absent/unset since the capture itself blew up
     assert "game_id" not in resolved or resolved.get("game_id") is None
+
+
+# ---------------------------------------------------------------------
+# hypothetical: the column that keeps a reader's what-if out of the
+# public track record (see LOG_COLUMNS' comment and
+# analytics/layer_accuracy.py::_recent_resolved)
+# ---------------------------------------------------------------------
+
+def test_a_saved_prediction_is_not_hypothetical_unless_it_says_so():
+    """The default has to be "real". Every caller that predates the
+    scenario box passes nothing, and a default of True would empty the
+    track record the moment this column shipped."""
+    assert "hypothetical" in tracker.LOG_COLUMNS
+    row = tracker._build_row(
+        2544, "LeBron James", "Boston Celtics", "BOS",
+        datetime.date(2026, 10, 20), _sample_predictions(),
+    )
+    assert row["hypothetical"] is False
+
+
+def test_a_scenario_save_is_marked(temp_log):
+    tracker.append_prediction_to_log(
+        2544, "LeBron James", "Boston Celtics", "BOS",
+        datetime.date(2026, 10, 20), _sample_predictions(), hypothetical=True,
+    )
+    df = tracker.load_prediction_log()
+    assert tracker.is_hypothetical(df.iloc[0]["hypothetical"]) is True
+
+
+def test_the_mark_survives_a_write_and_read_back(temp_log):
+    """The control that matters, and the one a bool-typed assertion
+    would miss: the CSV backend stores this cell as the TEXT "True" /
+    "False", so the round trip is where a naive reader breaks. Both
+    values are checked in one log, because a decoder that returned True
+    for everything would pass a hypothetical-only test."""
+    tracker.append_prediction_to_log(
+        1, "Real Row", "Boston Celtics", "BOS",
+        datetime.date(2026, 10, 20), _sample_predictions(), hypothetical=False,
+    )
+    tracker.append_prediction_to_log(
+        2, "What If Row", "Boston Celtics", "BOS",
+        datetime.date(2026, 10, 20), _sample_predictions(), hypothetical=True,
+    )
+    df = tracker.load_prediction_log()
+    by_name = {r["player_full_name"]: r["hypothetical"] for _i, r in df.iterrows()}
+    assert tracker.is_hypothetical(by_name["What If Row"]) is True
+    assert tracker.is_hypothetical(by_name["Real Row"]) is False
+
+
+@pytest.mark.parametrize("cell", [True, "True", "true", "TRUE", " true ", "1", "yes", 1, 1.0])
+def test_every_way_a_yes_comes_back(cell):
+    assert tracker.is_hypothetical(cell) is True
+
+
+@pytest.mark.parametrize("cell", [
+    False, "False", "false", "FALSE", "0", "no", 0, 0.0, "", "   ", None,
+    float("nan"), pd.NA,
+])
+def test_every_way_a_no_comes_back(cell):
+    """"False" is the dangerous one: it is a non-empty string, so plain
+    Python truthiness calls it True. A decoder that got this wrong would
+    exclude every row in the log from the track record and say nothing.
+    NaN is the second: it is what a legacy row reads back as."""
+    assert tracker.is_hypothetical(cell) is False
+
+
+def test_a_legacy_row_that_predates_the_column_counts_as_real(temp_log):
+    """Rows saved before this column existed have no value for it. They
+    are treated as real, because we cannot tell which old manual entries
+    were speculative and guessing would be worse than admitting that."""
+    legacy = {c: None for c in tracker.LOG_COLUMNS if c != "hypothetical"}
+    legacy.update({"id": "old00001", "status": "resolved", "player_full_name": "Legacy"})
+    write_raw_log(pd.DataFrame([legacy]), temp_log)
+    df = tracker.load_prediction_log()
+    assert "hypothetical" in df.columns  # reindexed in, as NaN
+    assert tracker.is_hypothetical(df.iloc[0]["hypothetical"]) is False
+
+
+def test_the_batch_path_marks_rows_one_by_one(temp_log):
+    """Per row, unlike saved_by_email and source. A batch where one
+    player's line came from a scenario and the rest did not must not
+    mark all of them, or the whole matchup leaves the track record."""
+    ids = tracker.append_predictions_batch([
+        _batch_row(1, "Plain One"),
+        _batch_row(2, "What If", hypothetical=True),
+        _batch_row(3, "Plain Two"),
+    ])
+    assert len(ids) == 3
+    df = tracker.load_prediction_log()
+    marked = {
+        r["player_full_name"] for _i, r in df.iterrows()
+        if tracker.is_hypothetical(r["hypothetical"])
+    }
+    assert marked == {"What If"}

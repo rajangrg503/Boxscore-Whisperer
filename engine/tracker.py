@@ -151,6 +151,54 @@ LOG_COLUMNS += [
     "opp_def_rating_actual", "opp_def_rating_season_avg",
     "key_teammate_out", "key_teammate_out_names",
 ]
+# True when the inputs behind this row were a reader's hypothesis rather
+# than real news -- today that means the typed scenario box (see
+# engine/scenario.py). Additive like every column above: rows saved
+# before this existed have no value and read back as NaN.
+#
+# WHY IT EXISTS, which is not obvious from the name: it is not for
+# display. analytics/layer_accuracy.py shows EVERY visitor a line
+# reading "this type of adjustment has been directionally correct N% of
+# the time", computed over the most recent resolved rows in this shared
+# log -- everybody's rows, not the reader's own. A hypothetical is a
+# made-up input, so scoring it and folding the result into that number
+# would report a track record the model never actually earned. This
+# column is what lets that query exclude them. See is_hypothetical()
+# for why reading it back is fussier than a bool should be.
+LOG_COLUMNS += ["hypothetical"]
+
+def is_hypothetical(value):
+    """Whether one row's `hypothetical` cell means yes.
+
+    A bool that survives a CSV round trip stops being a bool, and the
+    direction of the mistake matters enormously here. This column gates
+    what enters the public track record: read a legacy NaN as True and
+    the track record silently empties; read the string "False" as True
+    -- which plain Python truthiness does, because it is a non-empty
+    string -- and it empties just as silently, while every test that
+    only checks "hypotheticals are excluded" still passes. So the cell
+    is decoded explicitly rather than trusted to be a bool.
+
+    Yes: True, "True"/"true"/"TRUE", "1", "yes", 1, 1.0.
+    No: everything else, including False, "False", "", None and NaN.
+    A legacy row has no value at all and is NOT hypothetical -- those
+    rows predate the scenario box, and inventing a guess about which
+    old manual entries were speculative would be worse than admitting
+    we cannot tell.
+    """
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    try:
+        if value != value:  # NaN, which is not equal to itself
+            return False
+        return bool(float(value))
+    except (TypeError, ValueError):
+        return False
+
 
 KEY_TEAMMATE_GAMES_PLAYED_PCT = 0.70  # a "key" teammate is one who played in
 # at least this fraction of their team's real games that season -- a casual
@@ -280,7 +328,7 @@ def _build_layers_json(layer_results):
 
 def _build_row(player_id, player_full_name, opponent_full_name, opponent_abbr,
                 game_date, predictions, layer_results=None, saved_by_email=None,
-                source="single_player"):
+                source="single_player", hypothetical=False):
     """One fully-formed row dict, ready to append -- factored out of
     append_prediction_to_log() so append_predictions_batch() can reuse
     the exact same per-row construction (stat columns, layers_json)
@@ -288,7 +336,10 @@ def _build_row(player_id, player_full_name, opponent_full_name, opponent_abbr,
     "high", "base"}}. layer_results is {layer_name: AdjustmentResult}
     for every layer that fired -- optional. source distinguishes which
     tool produced this row ("single_player" | "full_matchup"); see
-    module docstring."""
+    module docstring. hypothetical marks a row whose inputs were the
+    reader's own hypothesis rather than real news -- see the
+    LOG_COLUMNS comment for why that has to be recorded separately from
+    source."""
     row = {
         "id": uuid.uuid4().hex[:8],
         "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -300,6 +351,7 @@ def _build_row(player_id, player_full_name, opponent_full_name, opponent_abbr,
         "status": "pending",
         "saved_by_email": (saved_by_email or "").strip().lower(),
         "source": source,
+        "hypothetical": bool(hypothetical),
     }
     for col, _ in STAT_COLUMNS:
         p = predictions[col]
@@ -315,7 +367,8 @@ def _build_row(player_id, player_full_name, opponent_full_name, opponent_abbr,
 
 def append_prediction_to_log(player_id, player_full_name, opponent_full_name,
                               opponent_abbr, game_date, predictions, layer_results=None,
-                              saved_by_email=None, source="single_player"):
+                              saved_by_email=None, source="single_player",
+                              hypothetical=False):
     """saved_by_email is the plain string typed into the sidebar's tracker
     email input -- optional; see this module's docstring for what this
     does and doesn't protect against. See _build_row() for the shared
@@ -324,6 +377,7 @@ def append_prediction_to_log(player_id, player_full_name, opponent_full_name,
         player_id, player_full_name, opponent_full_name, opponent_abbr,
         game_date, predictions, layer_results=layer_results,
         saved_by_email=saved_by_email, source=source,
+        hypothetical=hypothetical,
     )
     with _locked():
         df = load_prediction_log()
@@ -346,6 +400,13 @@ def append_predictions_batch(rows_input, saved_by_email=None, source="full_match
     source apply uniformly to the whole batch -- a Full Matchup save is
     one action by one visitor for one matchup, not a mix.
 
+    hypothetical is read PER ROW (r.get("hypothetical")), unlike
+    saved_by_email and source above. Those describe the one save action;
+    this one describes where a particular row's inputs came from, and
+    nothing guarantees a future caller applies a scenario to every
+    player in a matchup rather than one of them. A row that doesn't say
+    is not hypothetical.
+
     Returns the list of new row ids, in the same order as rows_input.
     Returns [] without touching the file if rows_input is empty."""
     if not rows_input:
@@ -355,7 +416,7 @@ def append_predictions_batch(rows_input, saved_by_email=None, source="full_match
             r["player_id"], r["player_full_name"], r["opponent_full_name"],
             r["opponent_abbr"], r["game_date"], r["predictions"],
             layer_results=r.get("layer_results"), saved_by_email=saved_by_email,
-            source=source,
+            source=source, hypothetical=r.get("hypothetical", False),
         )
         for r in rows_input
     ]

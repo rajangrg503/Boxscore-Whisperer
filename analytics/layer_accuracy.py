@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from engine import log_store
-from engine.tracker import TrackerStorageError, load_prediction_log
+from engine.tracker import TrackerStorageError, load_prediction_log, is_hypothetical
 from engine.adjustments.base import AdjustmentResult
 from engine.adjustments.registry import LAYER_DISPLAY, NEVER_APPLIED_BY_DESIGN
 
@@ -47,7 +47,9 @@ class LayerAccuracy:
 
 
 def _recent_resolved(window):
-    """The live log's `window` most recently saved resolved rows.
+    """The live log's `window` most recently saved resolved rows, minus
+    any row a reader marked as a hypothesis.
+
     Cached for RECENT_CACHE_SECONDS when the log is in Postgres; the
     CSV backend is read fresh every time, as before."""
     url = log_store.database_url()
@@ -58,6 +60,17 @@ def _recent_resolved(window):
             return hit[1].copy()
     df = load_prediction_log()
     resolved = df[df["status"] == "resolved"]
+    # Drop the reader's own hypotheses BEFORE taking the window, not
+    # after. This line is shown to every visitor as a track record, and
+    # the sample is this shared log -- everybody's rows. Filtering after
+    # .head(window) would mean a run of scenario saves quietly shrank
+    # the sample instead of being skipped over: twelve hypotheticals in
+    # the latest fifty rows and the "last 50 resolved predictions"
+    # becomes thirty-eight, with nothing on screen saying so. Filtering
+    # first reaches further back and keeps the window's promise.
+    if "hypothetical" in resolved.columns:
+        real = ~resolved["hypothetical"].map(is_hypothetical)
+        resolved = resolved[real]
     if "saved_at" in resolved.columns:
         resolved = resolved.sort_values("saved_at", ascending=False)
     resolved = resolved.head(window)
