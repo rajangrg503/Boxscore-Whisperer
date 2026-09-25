@@ -132,18 +132,34 @@ def why_not(df, stat_columns):
     return None
 
 
-def minutes_aware_means(df, stat_columns):
+def minutes_aware_means(df, stat_columns, minutes_override=None):
     """{stat: projected mean} from per-minute rates times projected
     minutes, or None when the log can't support it (why_not says why).
 
     Returns None rather than falling back internally, so the caller
     decides what the fallback is and the fallback stays visible in one
-    place instead of two."""
+    place instead of two.
+
+    minutes_override replaces the projected minutes and NOTHING else.
+    The per-minute rates still come from his real games; only the
+    number they are multiplied by changes. That is the whole reason
+    this is a safe control to hand a reader: the worst they can do is
+    be wrong about a rotation, which they are often better placed to
+    know than we are (preseason, a back-to-back, a blowout, a minutes
+    restriction we have no feed for).
+
+    why_not() still governs. An override does not rescue a log too thin
+    to give rates -- there would be nothing to multiply. A reader who
+    sets minutes on a player with four games has still told us nothing
+    about his per-minute production.
+    """
     if why_not(df, stat_columns) is not None:
         return None
     played = _played(df)
     total_minutes = float(played[MINUTES_COLUMN].sum())
     projected = projected_minutes(df)
+    if minutes_override is not None:
+        projected = float(minutes_override)
 
     means = {}
     for col, _label in stat_columns:

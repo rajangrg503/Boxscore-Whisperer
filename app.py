@@ -38,7 +38,10 @@ from nba_api.stats.endpoints import (
 
 from engine.players import get_player_id, get_team_id, player_search_label
 from engine.career_stats import resolve_season_mpg
-from engine.season import CURRENT_SEASON, PREVIOUS_SEASON, recent_seasons
+from engine.season import (
+    CURRENT_SEASON, PREVIOUS_SEASON, recent_seasons,
+    before_opener as season_before_opener,
+)
 from engine.stat_columns import STAT_COLUMNS
 from engine import scenario
 from engine.tracker import (
@@ -364,7 +367,7 @@ def get_head_to_head_vs_player_combo(player_id, opponent_player_ids, seasons=HEA
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_season_baseline(player_id, player_name):
+def get_season_baseline(player_id, player_name, minutes_override=None):
     """Returns (stats_dict, source_label, n_games). stats_dict maps each
     stat column in STAT_COLUMNS to a (mean, std) tuple -- named here
     instead of listed out, since a hardcoded list in this docstring has
@@ -386,7 +389,11 @@ def get_season_baseline(player_id, player_name):
     of re-deriving it. This function's own return shape and behavior
     are unchanged by that move."""
     df, season, source = resolve_season_gamelog(player_id)
-    stats_dict, n_games = stats_from_gamelog(df)
+    # minutes_override is the reader's own minutes for tonight. It
+    # reaches the per-minute core and nothing else -- see
+    # engine/minutes.py's minutes_aware_means for why that is the only
+    # safe shape for this control.
+    stats_dict, n_games = stats_from_gamelog(df, minutes_override=minutes_override)
 
     # The season comes back too, because "which season is this built
     # from" is a different question from "how many games", and the page
@@ -2165,6 +2172,33 @@ with tab1:
             ),
         )
 
+        # The single biggest lever in the projection, and until now the
+        # only one the reader could not touch. Everything on the card is
+        # a per-minute rate times this number (engine/minutes.py), so a
+        # reader who knows the rotation -- preseason, a back-to-back, a
+        # minutes restriction announced an hour before tip-off, a
+        # blowout he expects to sit out -- knows something the model has
+        # no feed for and could not previously say.
+        #
+        # 0 means "use his projected minutes", the same convention the
+        # line inputs below already use. A default of the projected
+        # value would be better, but it cannot be computed until a
+        # player is chosen, and every widget here sits inside st.form,
+        # which does not rerun when the player changes. 0-means-default
+        # is honest and consistent; a stale default from the previously
+        # chosen player would not be.
+        minutes_input = st.number_input(
+            "Minutes he'll play (0 = use his projected minutes)",
+            min_value=0.0, max_value=48.0, value=0.0, step=1.0,
+            help=(
+                "Overrides the minutes only. His per-minute rates still come "
+                "from his real games, so this scales the whole line rather than "
+                "inventing one. The likely range keeps its usual width: he is no "
+                "more predictable because you told us his minutes."
+            ),
+        )
+        minutes_override = minutes_input if minutes_input > 0 else None
+
         # Said once, here, rather than nine times in nine labels -- and
         # said accurately. A blank line falls back to
         # predictions[col]["base"], which stopped being a season average
@@ -2345,7 +2379,8 @@ with tab1:
             h2h_cutoff = roster_change_date if roster_change_active else None
 
             try:
-                season_stats, season_source, season_n, season_used = get_season_baseline(player_id, player_full_name)
+                season_stats, season_source, season_n, season_used = get_season_baseline(
+                    player_id, player_full_name, minutes_override=minutes_override)
 
                 team_h2h_stats, team_h2h_n = None, 0
                 team_h2h_note = None
@@ -2695,6 +2730,7 @@ with tab1:
             "opponent_log": opponent_log_for_hitrate,
             "season_log": season_log_for_hitrate,
             "minutes_note": get_projected_minutes_note(player_id),
+            "minutes_override": minutes_override,
             "using_h2h": using_h2h,
             "h2h_cutoff": h2h_cutoff,
             "roster_change_active": roster_change_active,
@@ -2790,6 +2826,27 @@ with tab1:
                 f"— {player_full_name.split()[-1]} has not played five games this season yet, "
                 "so there is not enough of it to project from.",
                 icon="📅",
+            )
+
+        # Preseason. Said on the card rather than in the expander, and
+        # for the same reason as the banner above: 3-16 October is
+        # plausibly when the most people see this page for the first
+        # time, and it is the fortnight when the number is most wrong.
+        #
+        # The projection itself is left alone. His per-minute rates are
+        # real; only the minutes are wrong, and the honest fix for that
+        # is the override below the stat cards, not a fudge factor
+        # applied on everyone's behalf. What is NOT acceptable is
+        # showing a confident 30.9 for a man who will play twenty
+        # minutes and saying nothing about it.
+        if season_before_opener():
+            st.warning(
+                "The NBA is still playing preseason games. This number assumes "
+                f"{player_full_name.split()[-1]} plays his usual minutes — in "
+                "exhibitions, starters often play about twenty, which would make "
+                "it roughly a third too high. Set his minutes below if you know "
+                "what the rotation will be.",
+                icon="🏀",
             )
 
         _short_night = short_night_risk(r.get("season_log"))
@@ -2931,15 +2988,23 @@ with tab1:
                         player_id, player_full_name, opponent_full_name,
                         opponent_abbr, tracked_game_date, predictions,
                         layer_results=layer_results, saved_by_email=save_email,
-                        # Every input on this tab is one the reader
-                        # picked by hand, so nothing saved here is a
-                        # hypothesis in the sense the column means. The
-                        # typed scenario, which is what produces one,
-                        # lives on the Full Matchup tab. Passed
-                        # explicitly rather than left to the default so
-                        # that the day this tab gains a scenario of its
-                        # own, the line is already here to change.
-                        hypothetical=False,
+                        # A reader-supplied minutes number is an
+                        # input the model did not measure, which is
+                        # exactly what this column is for. The layer
+                        # track record compares each layer's direction
+                        # against {stat}_base, and with an override that
+                        # base is built on an assumed rotation -- so
+                        # scoring it would credit or blame a layer for a
+                        # number the reader chose. Everything else on
+                        # this tab is a real selection and counts.
+                        # r["minutes_override"], not the widget. The
+                        # widget is what the form holds NOW; r is what
+                        # this projection was actually built with. They
+                        # can differ -- results persist in session_state
+                        # across reruns the form did not drive -- and
+                        # the row must describe the number being saved,
+                        # not the state of a control beside it.
+                        hypothetical=bool(r.get("minutes_override")),
                     )
                 except TrackerStorageError:
                     st.error(TRACKER_UNAVAILABLE_MSG)
@@ -3213,6 +3278,21 @@ with tab1:
                     f"&nbsp;&nbsp;&nbsp;&nbsp;↳ *Projected minutes not used here "
                     f"({minutes_reason or 'reason unknown'}) — the numbers above are "
                     f"flat per-game averages.*"
+                )
+            elif r.get("minutes_override"):
+                # The default sentence explains where the minutes came
+                # from. When a reader supplied them, that sentence is
+                # false, and quietly leaving it up would be the app
+                # claiming its own model produced a number the reader
+                # typed in.
+                _override = float(r["minutes_override"])
+                st.write(
+                    f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **Minutes: {_override:.1f} — yours, not "
+                    f"ours.** The model would have used {_mins['projected']:.1f} "
+                    f"(half his last {_mins['window']} games at {_mins['recent']:.1f}, "
+                    f"half his season at {_mins['mpg']:.1f} over {_mins['games']}). Every "
+                    f"stat above is his real per-minute rate times *your* number, so the "
+                    f"rates are measured and the minutes are assumed."
                 )
             else:
                 st.write(
@@ -3917,6 +3997,21 @@ with tab2:
                 "adjusted from real games without him. The other team's lines "
                 "are noted but not changed."
             )
+
+            # Same warning as the Single Player tab, and more load-
+            # bearing here: a whole projected box score at regular-
+            # season minutes during exhibitions is a page of numbers
+            # that are all wrong the same way, which reads as far more
+            # authoritative than one wrong number.
+            if season_before_opener():
+                st.warning(
+                    "The NBA is still playing preseason games. Every line below "
+                    "assumes regular-season minutes — in exhibitions, starters "
+                    "often play about twenty, so the whole table runs high. There "
+                    "is no minutes control on this tab yet; the Single Player tab "
+                    "has one.",
+                    icon="🏀",
+                )
 
             # What the sentence did, and did not do. Rendered right under
             # the pickers it just filled, so the two halves are read

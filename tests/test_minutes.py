@@ -148,3 +148,58 @@ def test_why_not_and_means_always_agree():
     for mins in ([10, 10, 30, 30, 30], [30, 30], [0, 0, 0, 0, 0, 0], [30] * 6):
         d = log(mins)
         assert (m.why_not(d, COLS) is None) == (m.minutes_aware_means(d, COLS) is not None)
+
+
+# ---- the reader's own minutes ---------------------------------------------
+# The single biggest lever in a projection, and the one the reader is
+# often better placed to know than the model is: preseason rotations, a
+# back-to-back, a restriction announced an hour before tip-off.
+
+def test_an_override_scales_the_line_and_nothing_else():
+    """The rates stay measured; only the multiplier changes. A player
+    averaging 2 points per minute over 30 minutes projects 60, and the
+    same player told he will play 15 projects exactly half that."""
+    d = log([30, 30, 30, 30, 30], points=[60, 60, 60, 60, 60])
+    normal = m.minutes_aware_means(d, COLS)
+    halved = m.minutes_aware_means(d, COLS, minutes_override=15.0)
+    assert normal["PTS"] == pytest.approx(60.0)
+    assert halved["PTS"] == pytest.approx(30.0)
+
+
+def test_no_override_is_unchanged():
+    """The control. An override that leaked into the default path would
+    change every projection in the app, and every other test here would
+    still pass because they all go through the same one function."""
+    d = log([10, 10, 30, 30, 30])
+    assert m.minutes_aware_means(d, COLS) == m.minutes_aware_means(
+        d, COLS, minutes_override=None)
+
+
+def test_an_override_cannot_rescue_a_log_too_thin_to_have_rates():
+    """why_not() still governs. Four games give no usable per-minute
+    rate, and asserting minutes says nothing about production -- there
+    would be nothing to multiply. Returning a number here would be the
+    confident-wrong-answer this module exists to refuse."""
+    d = log([30, 30, 30, 30])
+    assert m.minutes_aware_means(d, COLS, minutes_override=36.0) is None
+
+
+def test_the_spread_does_not_narrow_because_minutes_were_asserted():
+    """He is no more consistent because somebody told us his minutes.
+    Narrowing the range on an assumption would manufacture confidence:
+    the point estimate moves, how much he varies around it does not --
+    the same rule the minutes model itself follows."""
+    d = log([20, 40, 20, 40, 30], points=[40, 80, 40, 80, 60])
+    plain, _n = stats_from_gamelog(d, stat_columns=COLS)
+    forced, _n2 = stats_from_gamelog(d, stat_columns=COLS, minutes_override=10.0)
+    assert forced["PTS"][0] < plain["PTS"][0], "the mean should have moved"
+    assert forced["PTS"][1] == pytest.approx(plain["PTS"][1]), "the std must not"
+
+
+def test_zero_is_not_the_same_as_no_override():
+    """The page sends None for "use his projected minutes" and never 0,
+    but the core is a library: 0 is a real assertion (he does not play)
+    and must not be silently read as "unset" by a falsy check."""
+    d = log([30, 30, 30, 30, 30], points=[60, 60, 60, 60, 60])
+    assert m.minutes_aware_means(d, COLS, minutes_override=0.0)["PTS"] == 0.0
+    assert m.minutes_aware_means(d, COLS, minutes_override=None)["PTS"] == 60.0

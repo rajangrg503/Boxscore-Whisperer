@@ -18,14 +18,28 @@ from engine.minutes import minutes_aware_means
 from engine.stat_columns import STAT_COLUMNS
 
 
-def stats_from_gamelog(df, stat_columns=STAT_COLUMNS, minutes_aware=True):
+def stats_from_gamelog(df, stat_columns=STAT_COLUMNS, minutes_aware=True,
+                       minutes_override=None):
     """({stat_col: (mean, std)}, n_games) from a gamelog dataframe.
 
     minutes_aware=False gives the flat per-game averages this used to
     return, which is what the sweeps compare against -- it is the
     control, not a legacy path.
+
+    minutes_override is the reader's own minutes for this player, and
+    only reaches the mean. The std stays his real game-to-game spread:
+    he is no more or less consistent because somebody told us he will
+    play 20 tonight, and narrowing the range on an asserted number
+    would manufacture confidence out of an assumption. Same principle
+    as this module's docstring -- the point estimate moves, how much he
+    varies around it does not.
+
+    The backtest never passes it. Nothing in engine/backtest_*.py knows
+    tonight's rotation, and a backtest that could set its own minutes
+    would be scoring itself against a number it chose.
     """
-    means = minutes_aware_means(df, stat_columns) if minutes_aware else None
+    means = (minutes_aware_means(df, stat_columns, minutes_override=minutes_override)
+             if minutes_aware else None)
     stats_dict = {}
     for col, _ in stat_columns:
         mean = df[col].mean() if means is None else means[col]

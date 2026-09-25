@@ -97,3 +97,39 @@ def game_date_for(projections, override=None):
 # restrictions stop applying -- everything degrades to normal behaviour
 # rather than silently skipping a real slate.
 SEASON_OPENS = "2026-10-20"
+
+
+def tonight_eastern():
+    """Today's date where the NBA schedules, as a string.
+
+    The same reasoning as game_date_for(): this runs from Australia,
+    where the local date is a day ahead of the US for most of the
+    working day. Asking date.today() would call the season open a day
+    early every year, and the whole point of the date is that it is the
+    boundary of a claim.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        return str(datetime.datetime.now(ZoneInfo("America/New_York")).date())
+    except Exception:
+        # No tz database. A day either side of the opener is a far
+        # smaller error than refusing to answer, and the only thing
+        # downstream is whether a note is shown.
+        return str(datetime.date.today())
+
+
+def before_opener(today=None):
+    """True while the NBA is still playing exhibitions.
+
+    The page uses this to say so. It does NOT gate any number: the
+    projection during preseason is a real projection of a real player's
+    rates, it is simply built on minutes he will not play. Refusing to
+    project would be less useful than projecting and saying what the
+    number assumes -- which is the same choice engine/slip.py makes
+    differently, and for a different reason (a card is a public claim
+    that can never be settled; a page is a reader asking a question).
+
+    When the date passes, this goes false on its own and every caller
+    degrades to normal behaviour. See SEASON_OPENS above.
+    """
+    return (today or tonight_eastern()) < SEASON_OPENS
