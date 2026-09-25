@@ -40,6 +40,7 @@ from engine.players import get_player_id, get_team_id, player_search_label
 from engine.career_stats import resolve_season_mpg
 from engine.season import CURRENT_SEASON, PREVIOUS_SEASON, recent_seasons
 from engine.stat_columns import STAT_COLUMNS
+from engine import scenario
 from engine.tracker import (
     LOG_COLUMNS,
     TrackerStorageError,
@@ -2223,6 +2224,25 @@ with tab1:
                     "Off. rebounds line", min_value=0.0, value=0.0, step=0.5
                 )
 
+        # Deliberately ABOVE the Advanced options rather than inside
+        # them: this box fills those controls in, and a reader who never
+        # opens the expander would otherwise never learn it exists.
+        scenario_text = st.text_area(
+            "Or describe the game in your own words (optional)",
+            placeholder=(
+                "e.g. Chet is out so Jaylin Williams plays a lot, "
+                "and Shai gets double teamed"
+            ),
+            height=80,
+            help=(
+                "Fills in the Advanced options below from a sentence. It only "
+                "acts on what the model actually measures -- who is in and who "
+                "is out -- and lists everything else back to you unused rather "
+                "than pretending to have accounted for it. It never invents a "
+                "number of its own."
+            ),
+        )
+
         with st.expander("Advanced options (injuries, defender, scheme)"):
             adv1, adv2 = st.columns(2)
             with adv1:
@@ -2329,6 +2349,68 @@ with tab1:
             if opponent_id is None:
                 st.error(f"No team found for '{opponent_input}'. Use the full team name.")
                 st.stop()
+
+            # ---------- the typed scenario ----------
+            # Parsed HERE, on submit, rather than live as the reader
+            # types. Every widget on this tab sits inside st.form, and a
+            # form does not rerun when one of its fields changes -- so
+            # there is no moment before submit at which both the sentence
+            # and the two rosters are known. (Driving the multiselects
+            # through session_state was the first design and is a dead
+            # end for the same reason: Streamlit will not let a widget's
+            # key be written after the widget is instantiated.)
+            #
+            # The rosters are the two REAL rosters, never the league.
+            # Narrowing is not an optimisation: league-wide, "Williams is
+            # out" is ambiguous a dozen ways and the parser would refuse
+            # every one of them. See engine/scenario.py.
+            scenario_parsed = None
+            if scenario_text and scenario_text.strip():
+                player_team_id = get_player_team_and_number(player_id)[0]
+                teammate_roster = [
+                    (pid, nm)
+                    for pid, nm in (get_team_roster(player_team_id) if player_team_id else [])
+                    if pid != player_id  # he is the subject, not a missing teammate
+                ]
+                opponent_roster = get_team_roster(opponent_id)
+                scenario_parsed = scenario.parse(
+                    scenario_text,
+                    teammates=teammate_roster,
+                    opponents=opponent_roster,
+                    subject=(player_id, player_full_name),
+                )
+                # Resolve ids from the rosters the parser actually saw,
+                # not from the league list: a player on a current roster
+                # who is missing from get_active_players() would
+                # otherwise come back nameless.
+                roster_names = dict(teammate_roster)
+                roster_names.update(dict(opponent_roster))
+                missing_teammates, missing_opponents, _overflow = scenario.merge(
+                    scenario_parsed,
+                    manual_teammates=missing_teammates,
+                    manual_opponents=missing_opponents,
+                    name_of=roster_names.get,
+                )
+                scenario_parsed["unmatched"] = list(scenario_parsed["unmatched"]) + _overflow
+                if not teammate_roster and not opponent_roster:
+                    # Otherwise every clause comes back "no player from
+                    # either roster named here", which reads as a
+                    # spelling complaint when the real cause is that we
+                    # could not load a roster at all.
+                    scenario_parsed["unmatched"] = [{
+                        "clause": scenario_text.strip(),
+                        "reason": ("no roster available for either team right now, "
+                                   "so no name in this could be checked"),
+                    }]
+                    scenario_parsed["applied"] = []
+                    scenario_parsed["blocked"] = (
+                        "Couldn't check any names: no roster loaded for either "
+                        "team right now. Nothing from your description was used."
+                    )
+                # An explicit pick outranks a parsed sentence, same rule
+                # as the multiselects in scenario.merge().
+                if scenario_parsed["arriving"] and new_teammate_input is None:
+                    new_teammate_input = roster_names.get(scenario_parsed["arriving"])
 
             roster_change_active = roster_change_checked and roster_change_date is not None
             h2h_cutoff = roster_change_date if roster_change_active else None
@@ -2692,6 +2774,7 @@ with tab1:
             "effective_key_players_input": effective_key_players_input,
             "no_combo_data": no_combo_data,
             "valid_ids": valid_ids,
+            "scenario_parsed": scenario_parsed,
         }
 
     if "results" in st.session_state:
@@ -2701,6 +2784,10 @@ with tab1:
         opponent_full_name = r["opponent_full_name"]
         opponent_abbr = r["opponent_abbr"]
         source = r["source"]
+        # .get() rather than [], because a results dict written into
+        # session_state before this key existed is still there after a
+        # deploy -- Streamlit keeps session state across a script reload.
+        scenario_parsed = r.get("scenario_parsed")
         predictions = r["predictions"]
         line_inputs = r["line_inputs"]
         layer_results = r["layer_results"]
@@ -2853,6 +2940,51 @@ with tab1:
             "line above to also see the chance he clears it."
         )
 
+        # ---------- what the typed scenario did, and did not do ----------
+        # Rendered here, beside the number, and NOT inside the "See how
+        # this estimate was built" expander. The two-column split is the
+        # honest half of this feature: a reader who typed six clauses and
+        # got one applied has learned something true about the model.
+        # Behind a collapsed expander they would instead see an adjusted
+        # number and assume the sentence had been understood.
+        if scenario_parsed:
+            _applied = scenario_parsed["applied"]
+            _unmatched = scenario_parsed["unmatched"]
+            with st.container(border=True):
+                st.markdown("**From what you described**")
+                st.caption(scenario.summary(scenario_parsed))
+                sc1, sc2 = st.columns(2)
+                with sc1:
+                    st.markdown("**Applied**")
+                    if _applied:
+                        for item in _applied:
+                            st.markdown(
+                                f"- **{item['player']}** → {item['control']}  \n"
+                                f"  <span style='opacity:.6'>from “{html.escape(item['clause'])}”</span>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.markdown("_Nothing in this changed the projection._")
+                with sc2:
+                    st.markdown("**Not modelled**")
+                    if _unmatched:
+                        for item in _unmatched:
+                            st.markdown(
+                                f"- “{html.escape(item['clause'])}”  \n"
+                                f"  <span style='opacity:.6'>{html.escape(item['reason'])}</span>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.markdown("_Everything you described was used._")
+                if _applied:
+                    st.caption(
+                        "Because your scenario changed the inputs, this projection is "
+                        "yours rather than ours: it is never posted on the nightly card, "
+                        "and if you save it, it is left out of the public accuracy record. "
+                        "That record only measures the default projection, which is the "
+                        "only reason it means anything."
+                    )
+
         # Strong leans (engine/lean.py) -- only from the CURRENT season's
         # own gamelog (resolve_season_gamelog is cached; early in a season
         # it returns last season's log, and strong_lean_lines then says
@@ -2920,6 +3052,15 @@ with tab1:
                         player_id, player_full_name, opponent_full_name,
                         opponent_abbr, tracked_game_date, predictions,
                         layer_results=layer_results, saved_by_email=save_email,
+                        # A sentence that changed nothing leaves a
+                        # default projection, which belongs in the public
+                        # sample like any other. What disqualifies a row
+                        # is an input the reader supposed, so the test is
+                        # whether anything was APPLIED -- not whether the
+                        # box had text in it.
+                        hypothetical=bool(
+                            scenario_parsed and scenario_parsed["applied"]
+                        ),
                     )
                 except TrackerStorageError:
                     st.error(TRACKER_UNAVAILABLE_MSG)

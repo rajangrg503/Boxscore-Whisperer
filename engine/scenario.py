@@ -183,7 +183,7 @@ def _names(matches):
     return ", ".join(name for _pid, name in matches)
 
 
-def parse(text, teammates=(), opponents=()):
+def parse(text, teammates=(), opponents=(), subject=None):
     """Fill the controls from a typed scenario.
 
     `teammates` and `opponents` are (player_id, full_name) pairs -- the
@@ -191,12 +191,21 @@ def parse(text, teammates=(), opponents=()):
     teammate, and narrowing the candidates is also what makes the names
     resolvable at all: league-wide, half the surnames are ambiguous.
 
+    `subject` is the (player_id, full_name) being projected, and the page
+    leaves him out of `teammates` because he cannot be his own missing
+    teammate. Pass him here anyway: without it, "SGA is out" comes back
+    as "no player from either roster named here", which is true of the
+    lists and misleading about the world -- he is on the roster, he is
+    the person being projected. Optional; omitting it only costs that
+    one message its precision.
+
     Returns a dict. `out_teammates`, `out_opponents` and `arriving` are
     ready for the widgets; `applied` and `unmatched` are what the page
     shows the reader.
     """
     teammates = list(teammates)
     opponents = list(opponents)
+    subject_list = [subject] if subject else []
 
     out_teammates, out_opponents, arriving = [], [], None
     applied, unmatched = [], []
@@ -215,10 +224,17 @@ def parse(text, teammates=(), opponents=()):
             continue
 
         if not matches:
-            unmatched.append({
-                "clause": clause,
-                "reason": "no player from either roster named here",
-            })
+            if _candidates(clause, subject_list):
+                unmatched.append({
+                    "clause": clause,
+                    "reason": (f"{subject[1]} is the player being projected -- "
+                               f"pick somebody else to project if he sits"),
+                })
+            else:
+                unmatched.append({
+                    "clause": clause,
+                    "reason": "no player from either roster named here",
+                })
             continue
 
         if len(matches) > 1:
@@ -286,8 +302,72 @@ def parse(text, teammates=(), opponents=()):
     }
 
 
+def merge(parsed, manual_teammates=(), manual_opponents=(), name_of=None):
+    """Combine what the reader picked by hand with what their sentence
+    said, and report anything the controls could not hold.
+
+    `manual_teammates` / `manual_opponents` are NAMES, because that is
+    what the page's widgets hand downstream. `name_of` maps a player_id
+    from `parsed` to a name; a scenario hit whose id it cannot resolve is
+    dropped and reported rather than passed on as an id where every
+    consumer expects a name.
+
+    MANUAL PICKS COME FIRST, and that is the whole reason this function
+    exists rather than a one-line union at the call site. The controls
+    hold MAX_PER_CONTROL players. A reader who clicked five names and
+    then typed a sixth into the sentence has told us two things of
+    unequal weight: the clicks are unambiguous, the sentence was parsed.
+    So the clicks win the cap and the sentence overflows -- and the
+    overflow is reported, never silently dropped, because a player the
+    reader believes is out who is quietly not in the model is exactly
+    the kind of wrong number this app exists to not produce.
+
+    Returns (teammate_names, opponent_names, notes) where notes is a list
+    of {"clause", "reason"} in `unmatched`'s shape, ready to append to it.
+    """
+    name_of = name_of or (lambda pid: None)
+    notes = []
+
+    def combine(manual, scenario_ids, control):
+        out = []
+        for name in manual:
+            if name not in out:
+                out.append(name)
+        for player_id in scenario_ids:
+            name = name_of(player_id)
+            if name is None:
+                notes.append({
+                    "clause": f"player {player_id}",
+                    "reason": "could not be matched to a name the model knows",
+                })
+                continue
+            if name in out:
+                continue  # already picked by hand; not a second slot
+            if len(out) >= MAX_PER_CONTROL:
+                notes.append({
+                    "clause": name,
+                    "reason": (f"{control} already holds {MAX_PER_CONTROL} "
+                               f"players you picked -- not added"),
+                })
+                continue
+            out.append(name)
+        return out
+
+    teammates = combine(manual_teammates, parsed.get("out_teammates", ()),
+                        "Missing teammates")
+    opponents = combine(manual_opponents, parsed.get("out_opponents", ()),
+                        "Missing opponent players")
+    return teammates, opponents, notes
+
+
 def summary(parsed):
     """One line for the page, above the two columns."""
+    # A caller that could not even look (no roster loaded, say) supplies
+    # its own line. Without this, the count below would report "none of
+    # this maps to a layer the model measures", which is a different and
+    # untrue claim: nothing was measured because nothing could be read.
+    if parsed.get("blocked"):
+        return parsed["blocked"]
     used, ignored = len(parsed["applied"]), len(parsed["unmatched"])
     total = used + ignored
     if not total:
