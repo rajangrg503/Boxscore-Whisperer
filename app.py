@@ -3773,6 +3773,34 @@ with tab2:
         both out lists. Returns (out_ids, out_names), both in
         roster order."""
         roster = get_team_roster(team_id)
+
+        # A FAILED ROSTER FETCH MUST NOT QUIETLY UN-MARK ANYONE.
+        # st.multiselect drops, silently and with no error anywhere, any
+        # value in session_state that is not in `options`. With an empty
+        # roster -- stats.nba.com timing out and nothing cached, which
+        # this app sees regularly -- `options` is empty, so every player
+        # the reader (or their scenario) marked out would disappear and
+        # the projection would come back at full strength looking
+        # perfectly normal. That is the failure this codebase keeps
+        # finding: a wrong number with no sign anything went astray.
+        #
+        # So: do not instantiate the widget at all. Not rendering it
+        # leaves session_state untouched, which also means the reader's
+        # selection survives to the next run instead of being destroyed
+        # by a bad minute on nba.com.
+        if not roster:
+            held = st.session_state.get(out_key) or []
+            st.warning(
+                f"Couldn't load the {team_full} roster just now, so the "
+                f"who's-out picker is unavailable for them"
+                + (f" — your {len(held)} selection(s) are kept, not cleared."
+                   if held else ".")
+                + " The projection below can't be built without the roster "
+                  "either; try again in a moment.",
+                icon="📡",
+            )
+            return [], []
+
         roster_id_to_name = dict(roster)
         out_ids = st.multiselect(
             f"Mark {team_full} players as out (optional)",
@@ -3958,7 +3986,27 @@ with tab2:
                     "pretending to have accounted for it."
                 ),
             )
-            if st.button("Read my scenario", key="read_scenario_btn"):
+            # Applied whenever the text CHANGES, not only when a button
+            # is pressed. The button was a trap: a reader types a
+            # sentence, presses the big green Predict button because it
+            # says Predict, and the sentence is silently ignored --
+            # which is exactly what happened to Karma on the live site,
+            # and reads as "the feature doesn't work" rather than "you
+            # missed a step". A control that has to be used in the right
+            # order, with no sign when it wasn't, is a defect.
+            #
+            # This tab is not inside an st.form, so editing the box
+            # already triggers a rerun. On that rerun this block runs
+            # BEFORE pick_out_players() below, which is the only moment
+            # a widget's session_state may be written. The button
+            # remains for re-applying after the pickers were edited by
+            # hand, where the text has not changed and so nothing would
+            # fire on its own.
+            _typed = (scenario_text or "").strip()
+            _already_read = st.session_state.get("matchup_scenario_source")
+            _read_clicked = st.button("Read my scenario", key="read_scenario_btn")
+            if _read_clicked or (_typed and _typed != _already_read):
+                st.session_state["matchup_scenario_source"] = _typed
                 roster_a = get_team_roster(team_a_id)
                 roster_b = get_team_roster(team_b_id)
                 parsed = scenario.parse(
