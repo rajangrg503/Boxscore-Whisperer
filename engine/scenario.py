@@ -46,6 +46,47 @@ finding in other shapes.
 So an ambiguous name is NEVER guessed. It goes to unmatched, naming the
 people it could have meant, and the reader picks. Under-applying is
 recoverable; applying to the wrong player is not.
+
+THE SECOND HAZARD: THE READER'S SENTENCE IS NOT THE PARSER'S SENTENCE
+The first version split on punctuation and conjunctions alone, and
+handed each piece to the matcher as a complete assertion. Two everyday
+shapes broke on that, and both were found by watching Karma type:
+
+    "chet is out sga will be double teamed"
+
+  -- one clause with two names in it, because nobody punctuates a
+  scratch note. Two candidates, so it refused the whole thing as
+  ambiguous and applied NOTHING, including the half it measures best.
+
+    "chet and jalen williams are out"
+
+  -- split on "and" into "chet" and "jalen williams are out". The
+  second half carries the verb, so Jalen was marked out and Chet was
+  quietly dropped as unmeasurable. That is the worse of the two: it
+  looks like it worked, and the lineup it projects is not the one the
+  reader described.
+
+Both need to know WHERE in the clause each name sits, which is what
+_words() and _mention_spans() below are for. Two rules use it:
+
+  SPLIT  a clause in two before a name, when a state phrase has
+         already completed after an earlier name -- "chet is out" is
+         a finished assertion, so whatever follows starts a new one.
+
+  CARRY  a clause that is nothing but a name takes the state of the
+         clause after it, when a comma or an "and" joined them --
+         the list shape, "chet, jalen and dort are out".
+
+Both are deliberately narrow, and the narrowness is the point. CARRY
+refuses to fire on "sga plays more, chet is out", because "sga plays
+more" is an assertion of its own rather than a name in a list, and
+inheriting "out" there would mark out a player the reader said was
+playing MORE. SPLIT refuses to fire when it cannot locate every name
+it matched, falling back to the old whole-clause behaviour. Neither
+rule ever resolves an ambiguous name: "chet is out williams is out"
+splits into two assertions and then refuses the second one, which is
+the same refusal as before, now attached to the right half of the
+sentence.
 """
 
 import re
@@ -90,6 +131,20 @@ CLAUSE_BREAK = re.compile(
     re.IGNORECASE,
 )
 
+# The same breaks, with the separator kept, so a clause can be asked
+# what joined it to the one before. A comma or an "and" is WEAK: it is
+# how people list names ("chet, jalen and dort are out"). A full stop,
+# a "so" or a "because" is not -- those introduce a new assertion, and
+# a state must never be carried backwards across one.
+_CLAUSE_BREAK_KEPT = re.compile("(" + CLAUSE_BREAK.pattern + ")", re.IGNORECASE)
+_WEAK_BREAK = re.compile(r"^\s*(?:,|and)\s*$", re.IGNORECASE)
+
+# Words that may sit beside a name in a list without making the clause
+# an assertion about anything. Kept tiny on purpose: every word added
+# here is a guess about what somebody meant, and the cost of guessing
+# wrong is a player marked out who was not.
+LIST_FILLER = ("and", "both", "also", "too")
+
 # The multiselects this fills cap out at five.
 MAX_PER_CONTROL = 5
 
@@ -124,8 +179,196 @@ def _initials(full_name):
 
 def clauses(text):
     """The typed scenario, split into the things it asserts."""
-    parts = CLAUSE_BREAK.split(str(text or ""))
-    return [p.strip() for p in parts if p and p.strip()]
+    return [clause for clause, _weak in _clause_parts(text)]
+
+
+def _clause_parts(text):
+    """[(clause, joined weakly to the clause before it)].
+
+    Same split as clauses(), keeping what the split was made on, so
+    the CARRY rule can tell a list from a new sentence.
+    """
+    bits = _CLAUSE_BREAK_KEPT.split(str(text or ""))
+    parts, weak = [], False
+    for index, bit in enumerate(bits):
+        if index % 2:
+            weak = bool(_WEAK_BREAK.match(bit))
+            continue
+        clause = bit.strip()
+        if clause:
+            parts.append((clause, weak))
+    return parts
+
+
+def _words(text):
+    """(folded word, start, end) for every word, spans into `text`.
+
+    The spans point at the ORIGINAL string rather than the folded one,
+    because a clause that gets cut is echoed back to the reader in the
+    panel and folding is lossy -- cutting the folded text would quietly
+    rewrite their sentence in lower case with the punctuation gone.
+
+    One typed token can fold to several words ("Gilgeous-Alexander" ->
+    "gilgeous", "alexander"). Both carry the whole token's span, so a
+    cut can never land inside a hyphenated name.
+    """
+    words = []
+    for match in re.finditer(r"\S+", text):
+        for word in _fold(match.group(0)).split():
+            words.append((word, match.start(), match.end()))
+    return words
+
+
+def _runs(words, needle):
+    """Every (first, last+1) index range where `needle` appears."""
+    size = len(needle)
+    if not size or size > len(words):
+        return []
+    plain = [w for w, _s, _e in words]
+    return [(i, i + size) for i in range(len(plain) - size + 1)
+            if plain[i:i + size] == needle]
+
+
+def _mention_spans(clause, roster):
+    """{player_id: (first word, last word + 1)} -- best effort.
+
+    Deliberately a SEPARATE pass from _candidates(), which is left
+    exactly as it was. _candidates decides who a clause could mean and
+    is the matcher the refusals are built on; this one only answers
+    "and where does that name sit", and is allowed to come back empty.
+    A caller that cannot find a position for every candidate falls back
+    to treating the clause as one assertion -- the old behaviour, which
+    is never wrong, only blunt.
+    """
+    words = _words(clause)
+    plain = [w for w, _s, _e in words]
+    spans = {}
+    for player_id, name in roster:
+        name_words = _fold(name).split()
+        found = _runs(words, name_words)
+        if found:
+            spans[player_id] = found[0]
+            continue
+        parts = [p for p in name_words if len(p) > 1]
+        hit = next((k for k, w in enumerate(plain) if w in parts), None)
+        if hit is None:
+            letters = _initials(name)
+            if len(letters) >= 2:
+                hit = next((k for k, w in enumerate(plain) if w == letters), None)
+        if hit is not None:
+            spans[player_id] = (hit, hit + 1)
+    return spans
+
+
+def _signal_ends(words):
+    """Where each state phrase finishes, as a word index.
+
+    Only the literal phrase lists -- the denials are regexes and are
+    not needed here, because a denial is still one assertion about one
+    player and nothing is ever cut out of it.
+    """
+    ends = set()
+    for phrase in OUT_SIGNALS + ARRIVING_SIGNALS + UNDECIDED:
+        for _first, last in _runs(words, _fold(phrase).split()):
+            ends.add(last)
+    return ends
+
+
+def _cut_points(clause, rosters):
+    """Character offsets where this clause starts saying a new thing.
+
+    The rule: cut before a name when some EARLIER name already has a
+    completed state phrase after it. "chet is out sga will be double
+    teamed" cuts before "sga", because "chet ... is out" is a finished
+    assertion by then.
+
+    Requiring an earlier name is what keeps "missing chet dort" whole:
+    the state phrase there comes first, so nothing has been asserted
+    about anybody yet and the clause is exactly as ambiguous as it
+    looks.
+    """
+    words = _words(clause)
+    if len(words) < 2:
+        return []
+    ends = _signal_ends(words)
+    if not ends:
+        return []
+
+    starts = []
+    for roster in rosters:
+        spans = _mention_spans(clause, roster)
+        for player_id, _name in _candidates(clause, roster):
+            if player_id not in spans:
+                return []  # cannot see where this name is -- do not cut
+            starts.append(spans[player_id][0])
+    if len(set(starts)) < 2:
+        return []
+
+    cuts = []
+    for start in sorted(set(starts)):
+        if start and any(s < end <= start for end in ends for s in starts):
+            cuts.append(words[start][1])
+    return cuts
+
+
+def _is_only_a_name(clause, rosters):
+    """True when the clause says nothing except somebody's name.
+
+    The gate on the CARRY rule, and the whole reason it is safe. "chet"
+    is a name in a list; "sga plays more" is a claim, and a claim never
+    inherits a state from the clause after it however it is punctuated.
+    """
+    words = _words(clause)
+    if not words:
+        return False
+    covered = set()
+    for roster in rosters:
+        spans = _mention_spans(clause, roster)
+        for player_id, _name in _candidates(clause, roster):
+            if player_id not in spans:
+                return False
+            first, last = spans[player_id]
+            covered.update(range(first, last))
+    if not covered:
+        return False
+    leftover = [w for index, (w, _s, _e) in enumerate(words)
+                if index not in covered]
+    return all(w in LIST_FILLER for w in leftover)
+
+
+def assertions(text, rosters=()):
+    """[(clause, state)] -- what the sentence actually claims.
+
+    clauses() splits on punctuation; this applies the two rules in the
+    module docstring on top of it, which is everything that needs to
+    know where the names are. Returned as text plus state rather than
+    as a structure, so the clause echoed into the panel is still a
+    verbatim slice of what the reader typed.
+    """
+    parts = []
+    for clause, weak in _clause_parts(text):
+        cuts = _cut_points(clause, rosters)
+        if not cuts:
+            parts.append((clause, weak))
+            continue
+        bounds = [0] + cuts + [len(clause)]
+        for index in range(len(bounds) - 1):
+            piece = clause[bounds[index]:bounds[index + 1]].strip()
+            if piece:
+                # Only the first piece inherits how the clause was
+                # joined: a cut means an assertion finished here, which
+                # is the opposite of a list.
+                parts.append((piece, weak if index == 0 else False))
+
+    states = [_state(clause) for clause, _weak in parts]
+    for index in range(len(parts) - 2, -1, -1):
+        if states[index] is not None or states[index + 1] is None:
+            continue
+        if not parts[index + 1][1]:
+            continue
+        if _is_only_a_name(parts[index][0], rosters):
+            states[index] = states[index + 1]
+    return [(clause, state) for (clause, _weak), state in zip(parts, states)]
 
 
 def _candidates(clause, roster):
@@ -210,8 +453,7 @@ def parse(text, teammates=(), opponents=(), subject=None):
     out_teammates, out_opponents, arriving = [], [], None
     applied, unmatched = [], []
 
-    for clause in clauses(text):
-        state = _state(clause)
+    for clause, state in assertions(text, (teammates, opponents)):
         here = _candidates(clause, teammates)
         there = _candidates(clause, opponents)
         matches = here + there

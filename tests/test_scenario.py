@@ -326,3 +326,111 @@ def test_omitting_the_subject_changes_nothing_else():
     """It is optional, so every existing caller keeps working."""
     result = scenario.parse("Chet is out", teammates=THUNDER, opponents=SPURS)
     assert result["out_teammates"] == ["1628369"]
+
+
+# --------------------------------------------------------------------
+# The shape of the sentence, which is a separate problem from the
+# shape of the name.
+#
+# Both rules below were written after watching the live site refuse a
+# sentence it could mostly read. Every one of them is paired with a
+# control, because the obvious way to make a run-on work -- resolve the
+# clause to whichever name looks best -- would pass the applying tests
+# and destroy the refusal this whole file is built on.
+# --------------------------------------------------------------------
+
+def test_a_run_on_still_applies_the_half_it_measures():
+    """25 Sep, verbatim, off the phone. No punctuation between "out"
+    and the next subject, so the old splitter handed the matcher one
+    clause with two names in it, called it ambiguous, and applied
+    nothing at all -- including "chet is out", which is the layer this
+    app measures best. Reported as "I tried it but I dont think it
+    works", which is the correct reading of what it did."""
+    result = parse("chet is out sga will be double teamed. jalen williams "
+                   "will only play 20 minutes due to minute restrictions")
+
+    assert result["out_teammates"] == ["1628369"]
+    assert [a["clause"] for a in result["applied"]] == ["chet is out"]
+
+    ignored = [u["clause"] for u in result["unmatched"]]
+    assert "sga will be double teamed" in ignored
+    assert any("20 minutes" in clause for clause in ignored)
+
+
+def test_a_run_on_does_not_resolve_an_ambiguous_name():
+    """THE control for the split. Cutting a clause in two must not be
+    a back door into guessing: the second half here names a surname two
+    Thunder players share, and it has to be refused exactly as it would
+    be on its own."""
+    result = parse("chet is out williams is out")
+
+    assert result["out_teammates"] == ["1628369"], "Chet still applies"
+    assert len(result["unmatched"]) == 1
+    reason = result["unmatched"][0]["reason"]
+    assert "Jalen Williams" in reason and "Jaylin Williams" in reason
+
+
+def test_the_cut_keeps_the_reader_s_own_words():
+    """The panel quotes the clause back. Cutting the folded text would
+    echo a lower-cased, punctuation-stripped version of a sentence the
+    reader can see on screen, which reads as the app having misheard
+    them."""
+    result = parse("Chet is OUT, SGA will be double teamed")
+    assert result["applied"][0]["clause"] == "Chet is OUT"
+    assert result["unmatched"][0]["clause"] == "SGA will be double teamed"
+
+
+def test_a_state_phrase_before_any_name_does_not_cut():
+    """The control for the cut's precondition. "missing Chet Caruso"
+    names two players and asserts nothing about either one yet, so it
+    is as ambiguous as it looks -- a cut there would invent a boundary
+    the sentence does not have."""
+    assert parse("missing Chet")["out_teammates"] == ["1628369"]
+    result = parse("missing Chet Caruso")
+    assert result["out_teammates"] == []
+    assert "could mean" in result["unmatched"][0]["reason"]
+
+
+def test_a_list_of_names_sharing_one_verb_marks_all_of_them_out():
+    """The quieter half of the bug, and the worse one. "and" is a
+    clause break, so this used to split into "chet" -- a name with no
+    verb, dropped as unmeasurable -- and "jalen williams are out",
+    which applied. One applied, one silently gone, and a projected
+    lineup that was not the one described."""
+    result = parse("Chet and Jalen Williams are out")
+    assert sorted(result["out_teammates"]) == sorted(["1628369", "1631114"])
+    assert len(result["applied"]) == 2
+
+
+def test_a_longer_list_carries_down_the_whole_chain():
+    result = parse("Chet, Jalen Williams, and Alex Caruso are out")
+    assert sorted(result["out_teammates"]) == sorted(
+        ["1628369", "1631114", "1627936"])
+
+
+def test_a_claim_never_inherits_the_next_clause_s_state():
+    """THE control for the carry, and the reason it is gated on the
+    clause being nothing but a name. "SGA plays more" is an assertion
+    of its own; inheriting "out" from the clause after it would mark
+    out the one player the reader just said would play MORE -- silent,
+    and in the direction that flatters the projection."""
+    result = parse("SGA plays more, Chet is out")
+    assert result["out_teammates"] == ["1628369"]
+    assert "2544" not in result["out_teammates"]
+    assert any("plays more" in u["clause"] for u in result["unmatched"])
+
+
+def test_a_state_is_not_carried_across_a_full_stop():
+    """A comma lists; a full stop starts again. "Chet plays." is not a
+    list item waiting for a verb, whatever follows it."""
+    result = parse("Chet plays. Jalen Williams is out")
+    assert result["out_teammates"] == ["1631114"]
+
+
+def test_a_bare_ambiguous_name_in_a_list_is_still_refused():
+    """The carry hands a state to a name; it does not decide who the
+    name is."""
+    result = parse("Williams and Chet are out")
+    assert result["out_teammates"] == ["1628369"]
+    assert any("Jalen Williams" in u["reason"] and "Jaylin Williams" in u["reason"]
+               for u in result["unmatched"])
