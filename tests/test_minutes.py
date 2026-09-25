@@ -184,16 +184,60 @@ def test_an_override_cannot_rescue_a_log_too_thin_to_have_rates():
     assert m.minutes_aware_means(d, COLS, minutes_override=36.0) is None
 
 
-def test_the_spread_does_not_narrow_because_minutes_were_asserted():
-    """He is no more consistent because somebody told us his minutes.
-    Narrowing the range on an assumption would manufacture confidence:
-    the point estimate moves, how much he varies around it does not --
-    the same rule the minutes model itself follows."""
+def test_the_spread_follows_the_minutes():
+    """The correction. The first version of this kept the per-game std
+    whole and moved only the mean, which produced ranges whose upper
+    half was games that cannot happen -- a 27-point scorer set to 20
+    minutes came out at 15.5 with a range of 3 to 32, and 32 points in
+    20 minutes is 1.6 points per minute against an elite rate of 0.9.
+
+    Asserting minutes removes a real source of variation: how long he
+    plays. What is left is how productive he is per minute."""
     d = log([20, 40, 20, 40, 30], points=[40, 80, 40, 80, 60])
     plain, _n = stats_from_gamelog(d, stat_columns=COLS)
     forced, _n2 = stats_from_gamelog(d, stat_columns=COLS, minutes_override=10.0)
     assert forced["PTS"][0] < plain["PTS"][0], "the mean should have moved"
-    assert forced["PTS"][1] == pytest.approx(plain["PTS"][1]), "the std must not"
+    assert forced["PTS"][1] < plain["PTS"][1], "the spread should have moved with it"
+
+
+def test_a_perfectly_steady_rate_leaves_no_spread_at_known_minutes():
+    """The sharp end of the same idea, and the clearest statement of what
+    the override means. This player scores exactly 2.0 a minute in every
+    game; all his per-game variation IS minutes variation. Tell us the
+    minutes and there is nothing left to be uncertain about -- his
+    per-game std is large and his known-minutes spread is zero."""
+    d = log([10, 20, 30, 40, 50], points=[20, 40, 60, 80, 100])
+    plain, _n = stats_from_gamelog(d, stat_columns=COLS)
+    forced, _n2 = stats_from_gamelog(d, stat_columns=COLS, minutes_override=25.0)
+    assert plain["PTS"][1] > 20, "his per-game spread is real and large"
+    assert forced["PTS"][1] == pytest.approx(0.0, abs=1e-9)
+    assert forced["PTS"][0] == pytest.approx(50.0)
+
+
+def test_the_range_stays_inside_basketball():
+    """The property the original bug violated, stated in the units a
+    reader would notice. Whatever the arithmetic, the top of the range
+    must not imply a scoring rate nobody achieves."""
+    d = log([34, 36, 35, 33, 37], points=[28, 30, 24, 26, 32])
+    forced, _n = stats_from_gamelog(d, stat_columns=COLS, minutes_override=20.0)
+    mean, std = forced["PTS"]
+    top = mean + 1.28 * std          # the upper edge of an 80% range
+    assert top / 20.0 < 0.95, (
+        f"top of range is {top:.1f} in 20 minutes = {top/20:.2f} pts/min")
+
+
+def test_a_short_garbage_time_game_does_not_dominate_the_spread():
+    """Minutes-weighted on purpose. A two-minute appearance with four
+    points is a rate of 2.0, five times his usual, and unweighted it
+    would count as much as a thirty-eight-minute game. Short outings are
+    exactly where a per-minute rate is noisiest."""
+    steady = log([36, 36, 36, 36, 36], points=[14, 14, 14, 14, 14])
+    with_scrub = log([36, 36, 36, 36, 2], points=[14, 14, 14, 14, 4])
+    a, _ = stats_from_gamelog(steady, stat_columns=COLS, minutes_override=30.0)
+    b, _ = stats_from_gamelog(with_scrub, stat_columns=COLS, minutes_override=30.0)
+    assert b["PTS"][1] > a["PTS"][1], "the odd game should register at all"
+    assert b["PTS"][1] < 2.5, (
+        f"but not dominate: spread {b['PTS'][1]:.2f} on a steady 0.39/min player")
 
 
 def test_zero_is_not_the_same_as_no_override():

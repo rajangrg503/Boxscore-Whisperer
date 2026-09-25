@@ -239,3 +239,25 @@ def test_preseason_is_said_on_both_tabs():
     assert text.count("season_before_opener()") == 2, (
         f"expected the preseason check on both tabs, found "
         f"{text.count('season_before_opener()')}")
+
+
+def test_the_calibration_claim_is_not_made_over_reader_set_minutes():
+    """Three seasons of backtests measured the range built from the
+    MODEL's minutes. spread_at_minutes() has not been backtested at all,
+    so leaving that sentence up over an overridden projection would
+    borrow a measured figure to vouch for an unmeasured one."""
+    text = source()
+    assert 'if not r.get("minutes_override") else' in text, (
+        "the calibration sentence is no longer conditional on the override")
+    assert "has not been\n            backtested" in text or \
+           "not been backtested" in text, \
+        "the override branch no longer says the scaling is unbacktested"
+
+
+def test_the_calibration_claim_is_still_made_normally():
+    """The control. A conditional that dropped the sentence in both
+    branches would pass the test above while quietly deleting a true
+    and hard-won claim from every projection on the site."""
+    text = source()
+    assert "in three seasons of backtests the real result " in text
+    assert "landed inside an 80% range about 80% of the time" in text

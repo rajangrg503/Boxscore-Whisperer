@@ -2912,13 +2912,28 @@ with tab1:
             _applied_phrase = (
                 "adjusted for " + ", ".join(_applied_labels[:-1]) + " and " + _applied_labels[-1]
             )
+        # The calibration claim is true of the model's OWN minutes --
+        # that is what the three seasons of backtests measured. On a
+        # projection built from minutes the reader supplied, the range
+        # comes from engine/minutes.py's spread_at_minutes(), which has
+        # not been backtested at all. Leaving the sentence up would be
+        # borrowing a measured figure to vouch for an unmeasured one,
+        # which is the exact move this whole app exists not to make.
+        _range_sentence = (
+            "The range is calibrated: in three seasons of backtests the real result "
+            "landed inside an 80% range about 80% of the time (see the methodology "
+            "for each stat)."
+            if not r.get("minutes_override") else
+            "The range is built from how much he varies per minute, scaled to the "
+            "minutes you set — so it narrows with them. That scaling has not been "
+            "backtested, so the 80% figure quoted elsewhere on this site does not "
+            "apply to this number."
+        )
         st.caption(
             f"This isn't a raw season average — it's the baseline {_applied_phrase}, using "
             "the math shown in \"See how this estimate was built\" below. The unadjusted "
-            "baseline is shown separately there in step [1] for comparison. The range is "
-            "calibrated: in three seasons of backtests the real result landed inside an "
-            "80% range about 80% of the time (see the methodology for each stat). Enter a "
-            "line above to also see the chance he clears it."
+            f"baseline is shown separately there in step [1] for comparison. {_range_sentence} "
+            "Enter a line above to also see the chance he clears it."
         )
 
         # Strong leans (engine/lean.py) -- only from the CURRENT season's
