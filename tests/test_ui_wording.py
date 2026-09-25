@@ -305,3 +305,41 @@ def test_the_picker_is_still_built_when_the_roster_loads():
     text = source()
     assert "options=[pid for pid, _pname in roster]" in text
     assert "format_func=lambda pid: player_search_label(roster_id_to_name[pid])" in text
+def test_the_passing_panel_never_touches_the_projection():
+    """It is descriptive. The data does not say WHY a teammate got open,
+    so turning it into an adjustment would smuggle a causal claim into a
+    descriptive dataset. The guard is that `passing` is never used to
+    build a number -- only to print one."""
+    text = source()
+    import re as _re
+    uses = _re.findall(r"passing\.(\w+)", text)
+    allowed = {"_fetch_passes", "feeds", "shooting_note", "recent_cutoff", "RECENT_DAYS"}
+    assert set(uses) <= allowed, f"unexpected use of engine.passing: {set(uses) - allowed}"
+    # and it must not reach the layer machinery
+    assert "layer_results[\"passing\"]" not in text
+    assert "passing" not in text[text.index("notes_by_layer = {"):
+                                 text.index("notes_by_layer = {") + 400]
+
+
+def test_the_passing_panel_is_opt_in():
+    """Two extra nba.com calls per projection, on an endpoint that was
+    timing out today. Firing them on every prediction would make the
+    page slower for everyone to answer a question most readers are not
+    asking."""
+    text = source()
+    i = text.index('section_heading("Who he passes to"')
+    j = text.index("passing._fetch_passes")
+    between = text[i:j]
+    assert 'st.checkbox(' in between, (
+        "the passing panel fetches without being asked; that is two more "
+        "calls on every projection")
+    assert "extra data fetches" in between, "the label no longer says what it costs"
+
+
+def test_the_panel_says_it_is_not_an_explanation():
+    """A reader who sees 'Shai -> McCain, 14 threes' will reach for a
+    cause. The panel has to say it does not have one, next to the list
+    rather than somewhere above it."""
+    text = source()
+    assert "it does not say why anyone " in text
+    assert "does not change the projection above" in text
