@@ -153,3 +153,122 @@ def test_build_layer_lines_matches_old_hardcoded_output(temp_log):
     assert "not enough resolved predictions" in actual[1]
     assert "never becomes a multiplier on its own" in actual[4]
     assert "vs. specific player" in actual[4]  # the corrected copy points at the real mechanism
+
+
+# ---------------------------------------------------------------------
+# The public track record must not contain the reader's own what-ifs.
+#
+# This is the one line in the app that shows EVERY visitor a number
+# computed from EVERY visitor's saved rows ("directionally correct N% of
+# the time", app.py's "See how this estimate was built"). A scenario save
+# is a made-up input, so scoring it would report a track record the model
+# never earned.
+# ---------------------------------------------------------------------
+
+def _five_hits(prefix, **kw):
+    return [_make_row(f"{prefix}{i}", 20.0, 15.0, 0.9, **kw) for i in range(5)]
+
+
+def _five_misses(prefix, **kw):
+    return [_make_row(f"{prefix}{i}", 20.0, 25.0, 0.9, **kw) for i in range(5)]
+
+
+def test_hypothetical_rows_do_not_reach_the_public_track_record(temp_log):
+    rows = _five_hits("real")
+    for r in rows:
+        r["hypothetical"] = False
+    made_up = _five_misses("whatif")
+    for r in made_up:
+        r["hypothetical"] = True
+    _write_rows(temp_log, rows + made_up)
+
+    result = layer_accuracy.layer_hit_rate("opponent_defense", "PTS")
+    assert result.n == 5, "only the five real rows should be scored"
+    assert result.hit_rate == 100.0, "the five invented misses must not drag it down"
+
+
+def test_real_rows_still_reach_it(temp_log):
+    """The control. An over-eager filter that dropped everything would
+    pass the test above while silently emptying the track record -- and
+    "insufficient_data" reads on screen as a young app, not as a bug,
+    so nothing would ever surface it."""
+    rows = _five_hits("real")
+    for r in rows:
+        r["hypothetical"] = False
+    _write_rows(temp_log, rows)
+
+    result = layer_accuracy.layer_hit_rate("opponent_defense", "PTS")
+    assert result.n == 5
+    assert result.hit_rate == 100.0
+    assert result.reason is None
+
+
+def test_what_ifs_are_skipped_over_not_counted_against_the_window(temp_log):
+    """Filtering has to happen BEFORE the window is taken, not after.
+
+    Fifty what-ifs saved today and five real rows saved earlier: filter
+    after .head(50) and the sample is empty while the app still says
+    "over the last 50 resolved predictions". The number would quietly
+    stop meaning anything, which is the failure mode this codebase keeps
+    finding. Filtering first reaches past them.
+    """
+    made_up = [
+        dict(_make_row(f"whatif{i}", 20.0, 25.0, 0.9,
+                       saved_at=f"2026-09-20T00:{i:02d}:00"), hypothetical=True)
+        for i in range(50)
+    ]
+    real = [
+        dict(_make_row(f"real{i}", 20.0, 15.0, 0.9,
+                       saved_at=f"2026-09-01T00:{i:02d}:00"), hypothetical=False)
+        for i in range(5)
+    ]
+    _write_rows(temp_log, made_up + real)
+
+    result = layer_accuracy.layer_hit_rate("opponent_defense", "PTS")
+    assert result.n == 5
+    assert result.hit_rate == 100.0
+
+
+def test_a_log_that_predates_the_column_is_unaffected(temp_log):
+    """Rows written before the column existed read back as NaN, and NaN
+    is not a what-if. Without this, shipping the column would have
+    blanked the whole existing track record on deploy."""
+    rows = _five_hits("legacy")
+    for r in rows:
+        del r["hypothetical"]
+    _write_rows(temp_log, rows)
+
+    result = layer_accuracy.layer_hit_rate("opponent_defense", "PTS")
+    assert result.n == 5
+    assert result.hit_rate == 100.0
+
+
+def test_the_mark_survives_the_real_write_path(temp_log):
+    """The tests above hand-build frames, which proves the filter but not
+    that anything ever sets the flag. This one goes through
+    append_prediction_to_log and back out, so a scenario save really is
+    excluded end to end -- including the CSV round trip that turns the
+    bool into the text "True"."""
+    predictions = {
+        col: {"low": 15.0, "predicted": 20.0, "high": 25.0, "base": 22.0}
+        for col, _ in tracker.STAT_COLUMNS
+    }
+    for i in range(5):
+        tracker.append_prediction_to_log(
+            i, f"What If {i}", "Boston Celtics", "BOS",
+            __import__("datetime").date(2026, 10, 20), predictions,
+            hypothetical=True,
+        )
+    df = tracker.load_prediction_log()
+    df["status"] = "resolved"
+    for col in ("PTS_actual",):
+        df[col] = 15.0
+    df["layers_json"] = json.dumps({
+        "opponent_defense": {"applied": True, "data_quality": "real_current",
+                             "sample_n": 0, "value": {"_all": 0.9}},
+    })
+    write_raw_log(df, temp_log)
+
+    result = layer_accuracy.layer_hit_rate("opponent_defense", "PTS")
+    assert result.n == 0, "five saved what-ifs must contribute nothing"
+    assert result.reason == "insufficient_data"

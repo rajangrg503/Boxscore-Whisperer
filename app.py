@@ -47,6 +47,7 @@ from engine.tracker import (
     append_prediction_to_log,
     append_predictions_batch,
     refresh_pending_predictions,
+    is_hypothetical,
 )
 from engine.game_log import fetch_combined_game_log, resolve_season_gamelog
 
@@ -1509,9 +1510,19 @@ with st.sidebar:
 
             with st.expander("View all saved predictions"):
                 display_log = my_log_df[[
-                    "saved_at", "source", "player_full_name", "opponent_full_name", "game_date",
+                    "saved_at", "source", "hypothetical", "player_full_name",
+                    "opponent_full_name", "game_date",
                     "status", "PTS_low", "PTS_mid", "PTS_high", "PTS_actual", "PTS_hit",
                 ]].copy()
+                # Shown because the reader is the only person who can
+                # tell these apart afterwards, and a what-if sitting
+                # unlabelled beside real saves is the kind of thing you
+                # misread your own record from. Same legacy inference as
+                # source below: a row with no value predates the
+                # scenario box, so it cannot have come from one.
+                display_log["hypothetical"] = display_log["hypothetical"].map(
+                    lambda v: "Yes" if is_hypothetical(v) else "No"
+                )
                 # Every row saved before Full Matchup tracking existed
                 # predates the source column entirely (NaN, not "" --
                 # this column never had an empty-string default the way
@@ -1522,7 +1533,8 @@ with st.sidebar:
                 # not a fabricated guess.
                 display_log["source"] = display_log["source"].fillna("single_player")
                 display_log = display_log.rename(columns={
-                    "saved_at": "Saved", "source": "Source", "player_full_name": "Player",
+                    "saved_at": "Saved", "source": "Source",
+                    "hypothetical": "What-if?", "player_full_name": "Player",
                     "opponent_full_name": "Opponent", "game_date": "Game Date",
                     "status": "Status", "PTS_low": "Pts Low", "PTS_mid": "Pts Mid",
                     "PTS_high": "Pts High", "PTS_actual": "Pts Actual", "PTS_hit": "Pts Hit?",

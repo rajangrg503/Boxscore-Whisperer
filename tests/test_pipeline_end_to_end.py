@@ -548,3 +548,116 @@ def test_the_card_is_chosen_before_the_games_not_after(pipeline):
         assert min(points[pid] for pid in chosen) >= \
             max(points[pid] for pid in left_out), (
                 "somebody left off the card outprojects somebody on it")
+
+
+# ---------------------------------------------------------------------
+# The public record and the visitor tracker are separate stores, and the
+# separation is load-bearing rather than incidental.
+#
+# results/ is written only by tools/score_forward_test.py, scoring
+# projections/ captures against real box scores. prediction_log.csv is
+# what visitors save from the browser, and since the scenario box exists
+# it can contain deliberate what-ifs. If the two ever met, a reader's
+# hypothesis could reach the headline accuracy figure.
+#
+# Nothing enforces that today except the absence of an import, which is
+# exactly the kind of guarantee that holds until somebody needs a helper
+# and reaches for the nearest module. So it is pinned here, with a
+# control proving the check can still fail -- an import checker that
+# quietly matched nothing would pass this forever.
+# ---------------------------------------------------------------------
+
+import ast as _ast
+
+TRACKER_MODULES = {"engine.tracker", "engine.log_store", "analytics.layer_accuracy"}
+
+
+def _module_path(module):
+    """Repo-relative file for a dotted module name, or None if it isn't
+    one of ours (stdlib, third party)."""
+    candidate = os.path.join(REPO_ROOT, *module.split(".")) + ".py"
+    return candidate if os.path.exists(candidate) else None
+
+
+def _imports_of(path):
+    """Every dotted module name `path` imports, at any depth in the file."""
+    found = set()
+    for node in _ast.walk(_ast.parse(open(path).read())):
+        if isinstance(node, _ast.Import):
+            found.update(a.name for a in node.names)
+        elif isinstance(node, _ast.ImportFrom) and node.module and node.level == 0:
+            found.add(node.module)
+            # `from engine import tracker` names the module in the alias,
+            # not in node.module -- miss this and the checker is blind to
+            # the single most likely way the import would actually appear.
+            found.update(f"{node.module}.{a.name}" for a in node.names)
+    return found
+
+
+def _reaches(start_module, targets):
+    """The first target `start_module` can reach through repo-local
+    imports, following them transitively, or None. Returns the chain so a
+    failure says which hop introduced it."""
+    seen, stack = set(), [(start_module, [start_module])]
+    while stack:
+        module, chain = stack.pop()
+        if module in seen:
+            continue
+        seen.add(module)
+        path = _module_path(module)
+        if path is None:
+            continue
+        for imported in sorted(_imports_of(path)):
+            if imported in targets:
+                return chain + [imported]
+            stack.append((imported, chain + [imported]))
+    return None
+
+
+def test_the_public_record_cannot_reach_the_visitor_tracker():
+    for module in ("engine.forward_record", "tools.score_forward_test"):
+        chain = _reaches(module, TRACKER_MODULES)
+        assert chain is None, (
+            f"{module} can now reach the visitor prediction log: "
+            f"{' -> '.join(chain)}. The public accuracy figure would be "
+            f"open to whatever a reader typed into the scenario box."
+        )
+
+
+def test_the_import_check_can_still_fail():
+    """The control. app.py legitimately imports engine.tracker, so the
+    checker must find it there. Without this, a typo in TRACKER_MODULES
+    or a walk that silently visits nothing would leave the test above
+    passing while checking for nothing at all."""
+    chain = _reaches("app", TRACKER_MODULES)
+    assert chain is not None, "the checker found no tracker import in app.py"
+    assert chain[0] == "app"
+    assert chain[-1] in TRACKER_MODULES
+
+
+def test_the_check_follows_imports_more_than_one_hop(tmp_path, monkeypatch):
+    """The other control, and the one the repo cannot supply itself.
+
+    Nothing in this codebase currently reaches engine.tracker in two hops
+    -- app.py and analytics/layer_accuracy.py both import it directly. So
+    the walk's whole reason for existing (catching a tracker import that
+    arrives through an innocent-looking helper) is exercised by no real
+    module, and a checker that only ever looked one level deep would pass
+    both tests above.
+
+    A synthetic package proves the hop, so the guarantee is about the
+    mechanism rather than about today's import graph.
+    """
+    pkg = tmp_path / "pretend"
+    pkg.mkdir()
+    (pkg / "entry.py").write_text("from pretend import middle\n")
+    (pkg / "middle.py").write_text("from engine import tracker\n")
+    monkeypatch.setattr(
+        sys.modules[__name__], "REPO_ROOT", str(tmp_path), raising=True)
+
+    chain = _reaches("pretend.entry", {"engine.tracker"})
+    assert chain == ["pretend.entry", "pretend.middle", "engine.tracker"], chain
+
+    # And it stops rather than looping when the graph has a cycle.
+    (pkg / "middle.py").write_text("from pretend import entry\n")
+    assert _reaches("pretend.entry", {"engine.tracker"}) is None
