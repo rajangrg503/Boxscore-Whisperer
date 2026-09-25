@@ -43,6 +43,7 @@ from engine.season import (
     before_opener as season_before_opener,
 )
 from engine.stat_columns import STAT_COLUMNS
+from engine import passing
 from engine import scenario
 from engine.tracker import (
     LOG_COLUMNS,
@@ -3084,6 +3085,81 @@ with tab1:
             f"Last {len(recent_games)} games ({trend_context}). Dashed red line marks the "
             f"line you entered for {trend_stat_label}, if any."
         )
+
+        # ---------- who he passes to ----------
+        # Karma, looking at a projection that said Shai scores 31.7 while
+        # being double teamed: "who's benefitting?" There is no
+        # double-team statistic anywhere in nba_api, so this does not
+        # guess at the scheme -- it reports where the ball actually went.
+        #
+        # DESCRIPTIVE, AND NOT A LAYER. Nothing here touches the
+        # projection. The temptation is obvious and worth naming: this
+        # data does not say WHY a teammate got open, so turning "McCain
+        # shot more threes" into an adjustment would smuggle a causal
+        # claim into a descriptive dataset. The reader can draw that
+        # conclusion; the model cannot measure it.
+        #
+        # Behind a checkbox because it costs two more nba.com calls per
+        # projection, on an endpoint that was timing out earlier today
+        # (see engine/cache.py's breaker). Default off, and the label
+        # says what it costs rather than hiding it.
+        section_heading("Who he passes to", "Where the ball goes, not why")
+        if st.checkbox("Look it up (two extra data fetches)", key="show_passing"):
+            _pass_team_id = _avatar_team_id
+            if _pass_team_id is None:
+                st.caption(
+                    "Couldn't work out which team he's on right now, and this "
+                    "endpoint needs it — nothing to show."
+                )
+            else:
+                _pass_season = str(r.get("baseline_season") or CURRENT_SEASON)
+                try:
+                    _season_df, _ = passing._fetch_passes(
+                        player_id, _pass_team_id, _pass_season)
+                    _recent_df, _ = passing._fetch_passes(
+                        player_id, _pass_team_id, _pass_season,
+                        date_from=passing.recent_cutoff())
+                except Exception:
+                    _season_df, _recent_df = None, None
+                    st.caption(
+                        "Passing data isn't reachable right now. Nothing else "
+                        "on this page depends on it."
+                    )
+
+                _roster_ids = [pid for pid, _n in get_team_roster(_pass_team_id)]
+                _season_rows = passing.feeds(_season_df, roster_ids=_roster_ids)
+                _recent_rows = passing.feeds(_recent_df, roster_ids=_roster_ids)
+
+                if not _season_rows:
+                    if _season_df is not None:
+                        st.caption(
+                            f"No passing data for {html.escape(_pass_season)} yet."
+                        )
+                else:
+                    _recent_by_id = {x["player_id"]: x for x in _recent_rows}
+                    _gone = [x["name"] for x in _season_rows if x["still_here"] is False]
+                    for _row in _season_rows:
+                        _bits = [f"**{_row['name']}** — {_row['passes']:.0f} passes"]
+                        if _row["assists"]:
+                            _bits.append(f"{_row['assists']:.0f} assists")
+                        _shot = passing.shooting_note(_row)
+                        if _shot:
+                            _bits.append(_shot)
+                        _r = _recent_by_id.get(_row["player_id"])
+                        if _r:
+                            _bits.append(f"last {passing.RECENT_DAYS} days: "
+                                         f"{_r['passes']:.0f} passes")
+                        if _row["still_here"] is False:
+                            _bits.append("_no longer on this roster_")
+                        st.write("- " + " · ".join(_bits))
+                    st.caption(
+                        f"From {html.escape(_pass_season)}. This is where his passes "
+                        "went and what they turned into — it does not say why anyone "
+                        "was open, and it does not change the projection above."
+                        + (f" {len(_gone)} of these players have since left the team, "
+                           "shown anyway so the shares still add up."
+                           if _gone else "")
+                    )
 
         # Head-to-head history vs this specific opponent, across the last
         # few seasons -- including seasons on a different team, since that
