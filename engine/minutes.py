@@ -132,24 +132,99 @@ def why_not(df, stat_columns):
     return None
 
 
-def minutes_aware_means(df, stat_columns):
+def minutes_aware_means(df, stat_columns, minutes_override=None):
     """{stat: projected mean} from per-minute rates times projected
     minutes, or None when the log can't support it (why_not says why).
 
     Returns None rather than falling back internally, so the caller
     decides what the fallback is and the fallback stays visible in one
-    place instead of two."""
+    place instead of two.
+
+    minutes_override replaces the projected minutes and NOTHING else.
+    The per-minute rates still come from his real games; only the
+    number they are multiplied by changes. That is the whole reason
+    this is a safe control to hand a reader: the worst they can do is
+    be wrong about a rotation, which they are often better placed to
+    know than we are (preseason, a back-to-back, a blowout, a minutes
+    restriction we have no feed for).
+
+    why_not() still governs. An override does not rescue a log too thin
+    to give rates -- there would be nothing to multiply. A reader who
+    sets minutes on a player with four games has still told us nothing
+    about his per-minute production.
+    """
     if why_not(df, stat_columns) is not None:
         return None
     played = _played(df)
     total_minutes = float(played[MINUTES_COLUMN].sum())
     projected = projected_minutes(df)
+    if minutes_override is not None:
+        projected = float(minutes_override)
 
     means = {}
     for col, _label in stat_columns:
         total = pd.to_numeric(played[col], errors="coerce").sum()
         means[col] = float(total) / total_minutes * projected
     return means
+
+
+def spread_at_minutes(df, stat_columns, minutes):
+    """{stat: std of the outcome} when the minutes are KNOWN to be
+    `minutes`, or None when the log can't support it.
+
+    WHY THIS EXISTS, WHICH IS A CORRECTION
+    The first version of the minutes override kept the player's raw
+    per-game standard deviation and moved only the mean, on the
+    reasoning that he is no more consistent because somebody told us his
+    minutes. That is half right and stops thinking too early.
+
+    A per-game spread is the spread of games he played for HIS USUAL
+    LENGTH. Keep it whole while halving the mean and the range stops
+    describing basketball: a 27-point scorer set to 20 minutes came out
+    at 15.5 with an 80% range of 3 to 32, and 32 points in 20 minutes is
+    1.6 points per minute against an elite rate of about 0.9. The top
+    half of that range was games that cannot happen.
+
+    The mistake was treating "don't narrow the range" as automatically
+    the honest choice. Asserting minutes removes a real source of
+    variation -- how long he plays -- and refusing to reflect that
+    manufactures uncertainty just as surely as narrowing without cause
+    would manufacture confidence.
+
+    THE MODEL, STATED AS A MODEL
+    Points accumulate over time, so the natural assumption is that
+    variance grows with minutes: var(stat | m minutes) = sigma^2 * m.
+    sigma^2 is estimated from the residuals of the rate model this
+    module already uses -- e_i = stat_i - rate * minutes_i -- as
+    sum(e_i^2) / sum(minutes_i), which weights a long game more than a
+    short one without a threshold anywhere.
+
+    This is an assumption and has NOT been backtested. It is chosen
+    because it is the standard model for something counted over an
+    interval, because it degrades sensibly (at his usual minutes it
+    lands near his real per-game spread), and because it is exact in the
+    one case where the answer is knowable: a player whose rate never
+    varies has no uncertainty left once his minutes are fixed. Whoever
+    backtests the override should check this first. Until then the page
+    does not claim the 80% calibration on an overridden projection --
+    that figure was measured with the model's own minutes.
+    """
+    if why_not(df, stat_columns) is not None or minutes is None:
+        return None
+    played = _played(df)
+    minutes_series = pd.to_numeric(played[MINUTES_COLUMN], errors="coerce")
+    total_minutes = float(minutes_series.sum())
+    if total_minutes <= 0:
+        return None
+
+    spreads = {}
+    for col, _label in stat_columns:
+        values = pd.to_numeric(played[col], errors="coerce").fillna(0.0)
+        rate = float(values.sum()) / total_minutes
+        residuals = values - rate * minutes_series
+        sigma_sq = float((residuals ** 2).sum()) / total_minutes
+        spreads[col] = (sigma_sq * float(minutes)) ** 0.5
+    return spreads
 
 
 def describe(df):

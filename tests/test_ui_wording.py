@@ -194,3 +194,70 @@ def test_that_ordering_check_is_looking_at_real_code():
     assert text.count('st.session_state[f"out_input_{team_a_id}"]') == 1
     assert text.count('st.session_state[f"out_input_{team_b_id}"]') == 1
     assert text.count("pick_out_players(") >= 3  # def + two calls
+
+
+def test_a_reader_supplied_minutes_row_is_marked_hypothetical():
+    """A minutes override is an input the model did not measure. The
+    layer track record compares each layer's direction against
+    {stat}_base, and with an override that base is built on an assumed
+    rotation -- scoring it would credit or blame a layer for a number
+    the reader typed. hypothetical=False here would be silent."""
+    text = source()
+    assert "hypothetical=bool(r.get(\"minutes_override\"))" in text, (
+        "the Single Player save no longer marks minutes-override rows; a "
+        "projection built on assumed minutes would enter the public layer "
+        "accuracy figure")
+
+
+def test_the_override_reaches_the_baseline_and_not_something_else():
+    """It has to arrive at the per-minute core. Wired to anything else
+    -- stored, displayed, passed to a layer -- the control would appear
+    to work and change no number, which is the failure mode a reader
+    would never report because the page would look fine."""
+    text = source()
+    assert "get_season_baseline(\n                    player_id, player_full_name, minutes_override=minutes_override)" in text, \
+        "minutes_override is no longer passed to get_season_baseline"
+    assert "minutes_override = minutes_input if minutes_input > 0 else None" in text, \
+        "0 must mean 'use his projected minutes', matching the line inputs"
+
+
+def test_the_page_says_when_the_minutes_are_the_readers(
+):
+    """The default sentence explains where the minutes came from. Left
+    up over a reader's own number it would be the app claiming its model
+    produced something the reader typed in."""
+    text = source()
+    assert 'elif r.get("minutes_override"):' in text
+    assert "yours, not " in text, "the override branch no longer says whose number it is"
+
+
+def test_preseason_is_said_on_both_tabs():
+    """3-16 October every projection assumes regular-season minutes. One
+    wrong number is a mistake; a whole projected box score of them reads
+    as authority, so the matchup tab needs it at least as much."""
+    text = source()
+    assert text.count("season_before_opener()") == 2, (
+        f"expected the preseason check on both tabs, found "
+        f"{text.count('season_before_opener()')}")
+
+
+def test_the_calibration_claim_is_not_made_over_reader_set_minutes():
+    """Three seasons of backtests measured the range built from the
+    MODEL's minutes. spread_at_minutes() has not been backtested at all,
+    so leaving that sentence up over an overridden projection would
+    borrow a measured figure to vouch for an unmeasured one."""
+    text = source()
+    assert 'if not r.get("minutes_override") else' in text, (
+        "the calibration sentence is no longer conditional on the override")
+    assert "has not been\n            backtested" in text or \
+           "not been backtested" in text, \
+        "the override branch no longer says the scaling is unbacktested"
+
+
+def test_the_calibration_claim_is_still_made_normally():
+    """The control. A conditional that dropped the sentence in both
+    branches would pass the test above while quietly deleting a true
+    and hard-won claim from every projection on the site."""
+    text = source()
+    assert "in three seasons of backtests the real result " in text
+    assert "landed inside an 80% range about 80% of the time" in text

@@ -163,3 +163,43 @@ def test_teammate_layer_does_not_sleep_on_cached_box_scores(monkeypatch):
     monkeypatch.setattr(teammates, "cached_or_live", box)
     teammates.get_teammate_availability_adjustment(1, ["Guard X"], "2025-26", df=games)
     assert sleeps == []
+
+
+# ---- before_opener: the fortnight the page has to explain itself ----------
+# 3-16 October the NBA plays exhibitions. Starters play about twenty
+# minutes, so a projection built from full-game rates runs high by about
+# a third, and 3 October is plausibly when the most people see the page
+# for the first time.
+
+def test_preseason_is_before_the_opener():
+    assert season_mod.before_opener("2026-10-03") is True
+    assert season_mod.before_opener("2026-10-19") is True
+
+
+def test_the_opener_itself_is_not_preseason():
+    """The boundary, spelled out: the opener counts as the season."""
+    assert season_mod.before_opener(season_mod.SEASON_OPENS) is False
+
+
+def test_it_stops_applying_on_its_own():
+    """The control, and the property that matters more than the others.
+
+    Left un-updated next year, SEASON_OPENS simply passes and every
+    restriction lapses into normal behaviour -- which is the documented
+    intent (see the comment above SEASON_OPENS). A helper that stayed
+    true after the opener would put a preseason warning on the page for
+    the rest of the season, and nobody would think to look here.
+    """
+    assert season_mod.before_opener("2026-10-20") is False
+    assert season_mod.before_opener("2026-12-25") is False
+    assert season_mod.before_opener("2027-06-01") is False
+
+
+def test_it_asks_the_us_date_not_the_local_one():
+    """This runs from Australia, where the local date is a day ahead for
+    most of the working day. date.today() would call the opener a day
+    early every year, and the date is the boundary of a claim."""
+    today = season_mod.tonight_eastern()
+    assert len(today) == 10 and today[4] == "-" and today[7] == "-"
+    # Whatever the answer, it is the answer before_opener() uses.
+    assert season_mod.before_opener() == (today < season_mod.SEASON_OPENS)
