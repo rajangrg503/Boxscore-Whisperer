@@ -2224,25 +2224,16 @@ with tab1:
                     "Off. rebounds line", min_value=0.0, value=0.0, step=0.5
                 )
 
-        # Deliberately ABOVE the Advanced options rather than inside
-        # them: this box fills those controls in, and a reader who never
-        # opens the expander would otherwise never learn it exists.
-        scenario_text = st.text_area(
-            "Or describe the game in your own words (optional)",
-            placeholder=(
-                "e.g. Chet is out so Jaylin Williams plays a lot, "
-                "and Shai gets double teamed"
-            ),
-            height=80,
-            help=(
-                "Fills in the Advanced options below from a sentence. It only "
-                "acts on what the model actually measures -- who is in and who "
-                "is out -- and lists everything else back to you unused rather "
-                "than pretending to have accounted for it. It never invents a "
-                "number of its own."
-            ),
-        )
-
+        # The typed-scenario box lives on the Full Matchup tab, not here.
+        # A scenario describes a TEAM state -- somebody out, somebody
+        # else picking up the slack -- and this tab projects one player,
+        # so the only thing it could ever show was that one line moving.
+        # That reads as pointless because it nearly is: here the box is
+        # the Advanced options below with extra steps. Full Matchup
+        # already projects the whole roster AND already shifts every
+        # remaining player from real games without the out player
+        # (get_out_redistribution_adjustment), which is what a scenario
+        # is actually asking to see.
         with st.expander("Advanced options (injuries, defender, scheme)"):
             adv1, adv2 = st.columns(2)
             with adv1:
@@ -2349,68 +2340,6 @@ with tab1:
             if opponent_id is None:
                 st.error(f"No team found for '{opponent_input}'. Use the full team name.")
                 st.stop()
-
-            # ---------- the typed scenario ----------
-            # Parsed HERE, on submit, rather than live as the reader
-            # types. Every widget on this tab sits inside st.form, and a
-            # form does not rerun when one of its fields changes -- so
-            # there is no moment before submit at which both the sentence
-            # and the two rosters are known. (Driving the multiselects
-            # through session_state was the first design and is a dead
-            # end for the same reason: Streamlit will not let a widget's
-            # key be written after the widget is instantiated.)
-            #
-            # The rosters are the two REAL rosters, never the league.
-            # Narrowing is not an optimisation: league-wide, "Williams is
-            # out" is ambiguous a dozen ways and the parser would refuse
-            # every one of them. See engine/scenario.py.
-            scenario_parsed = None
-            if scenario_text and scenario_text.strip():
-                player_team_id = get_player_team_and_number(player_id)[0]
-                teammate_roster = [
-                    (pid, nm)
-                    for pid, nm in (get_team_roster(player_team_id) if player_team_id else [])
-                    if pid != player_id  # he is the subject, not a missing teammate
-                ]
-                opponent_roster = get_team_roster(opponent_id)
-                scenario_parsed = scenario.parse(
-                    scenario_text,
-                    teammates=teammate_roster,
-                    opponents=opponent_roster,
-                    subject=(player_id, player_full_name),
-                )
-                # Resolve ids from the rosters the parser actually saw,
-                # not from the league list: a player on a current roster
-                # who is missing from get_active_players() would
-                # otherwise come back nameless.
-                roster_names = dict(teammate_roster)
-                roster_names.update(dict(opponent_roster))
-                missing_teammates, missing_opponents, _overflow = scenario.merge(
-                    scenario_parsed,
-                    manual_teammates=missing_teammates,
-                    manual_opponents=missing_opponents,
-                    name_of=roster_names.get,
-                )
-                scenario_parsed["unmatched"] = list(scenario_parsed["unmatched"]) + _overflow
-                if not teammate_roster and not opponent_roster:
-                    # Otherwise every clause comes back "no player from
-                    # either roster named here", which reads as a
-                    # spelling complaint when the real cause is that we
-                    # could not load a roster at all.
-                    scenario_parsed["unmatched"] = [{
-                        "clause": scenario_text.strip(),
-                        "reason": ("no roster available for either team right now, "
-                                   "so no name in this could be checked"),
-                    }]
-                    scenario_parsed["applied"] = []
-                    scenario_parsed["blocked"] = (
-                        "Couldn't check any names: no roster loaded for either "
-                        "team right now. Nothing from your description was used."
-                    )
-                # An explicit pick outranks a parsed sentence, same rule
-                # as the multiselects in scenario.merge().
-                if scenario_parsed["arriving"] and new_teammate_input is None:
-                    new_teammate_input = roster_names.get(scenario_parsed["arriving"])
 
             roster_change_active = roster_change_checked and roster_change_date is not None
             h2h_cutoff = roster_change_date if roster_change_active else None
@@ -2774,7 +2703,6 @@ with tab1:
             "effective_key_players_input": effective_key_players_input,
             "no_combo_data": no_combo_data,
             "valid_ids": valid_ids,
-            "scenario_parsed": scenario_parsed,
         }
 
     if "results" in st.session_state:
@@ -2784,10 +2712,6 @@ with tab1:
         opponent_full_name = r["opponent_full_name"]
         opponent_abbr = r["opponent_abbr"]
         source = r["source"]
-        # .get() rather than [], because a results dict written into
-        # session_state before this key existed is still there after a
-        # deploy -- Streamlit keeps session state across a script reload.
-        scenario_parsed = r.get("scenario_parsed")
         predictions = r["predictions"]
         line_inputs = r["line_inputs"]
         layer_results = r["layer_results"]
@@ -2940,51 +2864,6 @@ with tab1:
             "line above to also see the chance he clears it."
         )
 
-        # ---------- what the typed scenario did, and did not do ----------
-        # Rendered here, beside the number, and NOT inside the "See how
-        # this estimate was built" expander. The two-column split is the
-        # honest half of this feature: a reader who typed six clauses and
-        # got one applied has learned something true about the model.
-        # Behind a collapsed expander they would instead see an adjusted
-        # number and assume the sentence had been understood.
-        if scenario_parsed:
-            _applied = scenario_parsed["applied"]
-            _unmatched = scenario_parsed["unmatched"]
-            with st.container(border=True):
-                st.markdown("**From what you described**")
-                st.caption(scenario.summary(scenario_parsed))
-                sc1, sc2 = st.columns(2)
-                with sc1:
-                    st.markdown("**Applied**")
-                    if _applied:
-                        for item in _applied:
-                            st.markdown(
-                                f"- **{item['player']}** → {item['control']}  \n"
-                                f"  <span style='opacity:.6'>from “{html.escape(item['clause'])}”</span>",
-                                unsafe_allow_html=True,
-                            )
-                    else:
-                        st.markdown("_Nothing in this changed the projection._")
-                with sc2:
-                    st.markdown("**Not modelled**")
-                    if _unmatched:
-                        for item in _unmatched:
-                            st.markdown(
-                                f"- “{html.escape(item['clause'])}”  \n"
-                                f"  <span style='opacity:.6'>{html.escape(item['reason'])}</span>",
-                                unsafe_allow_html=True,
-                            )
-                    else:
-                        st.markdown("_Everything you described was used._")
-                if _applied:
-                    st.caption(
-                        "Because your scenario changed the inputs, this projection is "
-                        "yours rather than ours: it is never posted on the nightly card, "
-                        "and if you save it, it is left out of the public accuracy record. "
-                        "That record only measures the default projection, which is the "
-                        "only reason it means anything."
-                    )
-
         # Strong leans (engine/lean.py) -- only from the CURRENT season's
         # own gamelog (resolve_season_gamelog is cached; early in a season
         # it returns last season's log, and strong_lean_lines then says
@@ -3052,15 +2931,15 @@ with tab1:
                         player_id, player_full_name, opponent_full_name,
                         opponent_abbr, tracked_game_date, predictions,
                         layer_results=layer_results, saved_by_email=save_email,
-                        # A sentence that changed nothing leaves a
-                        # default projection, which belongs in the public
-                        # sample like any other. What disqualifies a row
-                        # is an input the reader supposed, so the test is
-                        # whether anything was APPLIED -- not whether the
-                        # box had text in it.
-                        hypothetical=bool(
-                            scenario_parsed and scenario_parsed["applied"]
-                        ),
+                        # Every input on this tab is one the reader
+                        # picked by hand, so nothing saved here is a
+                        # hypothesis in the sense the column means. The
+                        # typed scenario, which is what produces one,
+                        # lives on the Full Matchup tab. Passed
+                        # explicitly rather than left to the default so
+                        # that the day this tab gains a scenario of its
+                        # own, the line is already here to change.
+                        hypothetical=False,
                     )
                 except TrackerStorageError:
                     st.error(TRACKER_UNAVAILABLE_MSG)
@@ -3946,6 +3825,81 @@ with tab2:
         if teams_ready:
             team_a_id, team_a_full, team_a_abbr = get_team_id(team_a_input)
             team_b_id, team_b_full, team_b_abbr = get_team_id(team_b_input)
+
+            # ---------- describe the game in your own words ----------
+            # This belongs on THIS tab rather than Single Player. A
+            # scenario is a description of a team state, and what a
+            # reader wants back is the whole box score moving: somebody
+            # out, and everyone else's line shifting to match. That is
+            # exactly what build_team_projection already does with an
+            # out-list, using real games without the out player.
+            #
+            # Nothing here is inside an st.form -- deliberately, see
+            # pick_out_players' surrounding comment -- so unlike the
+            # Single Player tab the parse CAN drive the pickers through
+            # session_state. That matters for more than plumbing: the
+            # reader watches the names appear in the controls and can
+            # correct them before projecting, instead of being handed a
+            # number built from a sentence they have to take on trust.
+            #
+            # The write has to happen before pick_out_players() runs,
+            # because Streamlit forbids writing a widget's key after the
+            # widget is instantiated. The button sits above them, so on
+            # the click run this block writes and the pickers below read
+            # what it wrote.
+            scenario_text = st.text_area(
+                "Describe the game in your own words (optional)",
+                key="matchup_scenario_text",
+                placeholder=(
+                    "e.g. Chet is out so Jaylin Williams plays a lot, "
+                    "and Shai gets double teamed"
+                ),
+                height=80,
+                help=(
+                    "Fills in the who's-out pickers below from a sentence, then "
+                    "the whole box score is rebuilt around it. It only acts on "
+                    "what the model measures -- who plays and who doesn't -- and "
+                    "lists everything else back to you unused rather than "
+                    "pretending to have accounted for it."
+                ),
+            )
+            if st.button("Read my scenario", key="read_scenario_btn"):
+                roster_a = get_team_roster(team_a_id)
+                roster_b = get_team_roster(team_b_id)
+                parsed = scenario.parse(
+                    scenario_text, teammates=roster_a, opponents=roster_b,
+                )
+                if not roster_a and not roster_b:
+                    parsed["applied"] = []
+                    parsed["unmatched"] = [{
+                        "clause": (scenario_text or "").strip(),
+                        "reason": "no roster available for either team right now",
+                    }]
+                    parsed["blocked"] = (
+                        "Couldn't check any names: no roster loaded for either "
+                        "team right now. Nothing from your description was used."
+                    )
+                else:
+                    # An arriving player has no control on this tab --
+                    # the pickers mark people OUT. Said rather than
+                    # dropped.
+                    if parsed["arriving"]:
+                        name = dict(roster_a + roster_b).get(parsed["arriving"])
+                        parsed["applied"] = [
+                            a for a in parsed["applied"]
+                            if a["control"] != "New teammate arriving"
+                        ]
+                        parsed["unmatched"].append({
+                            "clause": name or str(parsed["arriving"]),
+                            "reason": ("this tab only marks players out, so an "
+                                       "arriving player can't be applied here"),
+                        })
+                    st.session_state[f"out_input_{team_a_id}"] = list(parsed["out_teammates"])
+                    st.session_state[f"out_input_{team_b_id}"] = list(parsed["out_opponents"])
+                st.session_state["matchup_scenario_parsed"] = parsed
+
+            matchup_scenario = st.session_state.get("matchup_scenario_parsed")
+
             pick_a, pick_b = st.columns(2)
             # Keyed by team id: switching a team gives a fresh, empty
             # picker instead of carrying over ids from another roster.
@@ -3963,6 +3917,44 @@ with tab2:
                 "adjusted from real games without him. The other team's lines "
                 "are noted but not changed."
             )
+
+            # What the sentence did, and did not do. Rendered right under
+            # the pickers it just filled, so the two halves are read
+            # together: a reader who typed six clauses and sees one
+            # applied has learned something true about the model.
+            if matchup_scenario:
+                with st.container(border=True):
+                    st.markdown("**From what you described**")
+                    st.caption(scenario.summary(matchup_scenario))
+                    sc1, sc2 = st.columns(2)
+                    with sc1:
+                        st.markdown("**Applied**")
+                        if matchup_scenario["applied"]:
+                            for item in matchup_scenario["applied"]:
+                                st.markdown(
+                                    f"- **{item['player']}** marked out  \n"
+                                    f"  <span style='opacity:.6'>from “{html.escape(item['clause'])}”</span>",
+                                    unsafe_allow_html=True,
+                                )
+                        else:
+                            st.markdown("_Nothing in this changed the box score._")
+                    with sc2:
+                        st.markdown("**Not modelled**")
+                        if matchup_scenario["unmatched"]:
+                            for item in matchup_scenario["unmatched"]:
+                                st.markdown(
+                                    f"- “{html.escape(item['clause'])}”  \n"
+                                    f"  <span style='opacity:.6'>{html.escape(item['reason'])}</span>",
+                                    unsafe_allow_html=True,
+                                )
+                        else:
+                            st.markdown("_Everything you described was used._")
+                    st.caption(
+                        "Names that landed in the pickers above are yours to correct "
+                        "before you project. Anything on the right was left out "
+                        "entirely -- there is no layer measuring it, so acting on it "
+                        "would be inventing a number rather than reading one."
+                    )
 
         matchup_submitted = st.button("Predict matchup", key="predict_matchup_btn",
                                       type="primary", width="stretch")
@@ -4019,12 +4011,33 @@ with tab2:
             elif not all_trackable:
                 st.warning("No players with enough data to save for this matchup.")
             else:
+                # Did this box score come from a typed sentence, or from
+                # names the reader picked? Not "was there text in the
+                # box" -- the reader can read a scenario, then clear the
+                # pickers and choose for themselves, and that is real
+                # news rather than a supposition. So it asks whether any
+                # name the scenario put in is still there when the save
+                # happens.
+                _scenario = st.session_state.get("matchup_scenario_parsed") or {}
+                _from_scenario_ids = set(_scenario.get("out_teammates", [])) | \
+                                     set(_scenario.get("out_opponents", []))
+                _still_selected = set(team_a_out_ids) | set(team_b_out_ids)
+                _matchup_from_scenario = bool(_from_scenario_ids & _still_selected)
+
                 rows_input = [
                     {
                         "player_id": t["player_id"], "player_full_name": t["player_full_name"],
                         "opponent_full_name": t["opponent_full_name"], "opponent_abbr": t["opponent_abbr"],
                         "game_date": matchup_game_date, "predictions": t["predictions"],
                         "layer_results": t["layer_results"],
+                        # Per row, though here it is the same for all of
+                        # them: if the out-list came from a typed
+                        # sentence, every line in this box score was
+                        # built on a supposition and none of them belong
+                        # in the public track record. A reader who
+                        # cleared the box and picked the names by hand
+                        # is stating real news, so those rows count.
+                        "hypothetical": _matchup_from_scenario,
                     }
                     for t in all_trackable
                 ]
