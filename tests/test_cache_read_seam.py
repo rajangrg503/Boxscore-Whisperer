@@ -194,3 +194,131 @@ def test_the_game_log_age_comes_from_the_pack_time_not_a_file_date(tmp_path):
     got = freshness._newest_gamelog(str(tmp_path / "absent"), SEASON,
                                     archive=ca.open_reader(archive_path))
     assert got == packed
+
+
+# ---------------------------------------------------------------------
+# The circuit breaker, which used to save time only where there was
+# none to save.
+#
+# Observed 25 Sep: twenty-five consecutive [_load_roster_df] timeouts
+# for ONE projection, long after the breaker had tripped, because it
+# fell through to a fresh live attempt whenever nothing was cached --
+# exactly the case where a 15-second wait is unaffordable.
+# ---------------------------------------------------------------------
+
+def _clear_breaker():
+    cache_module.st.session_state["_live_nba_api_blocked"] = False
+    cache_module.st.session_state["_live_nba_api_blocked_until"] = None
+
+
+def test_a_tripped_breaker_stops_waiting_when_nothing_is_cached(tmp_path, monkeypatch):
+    """The regression. Thirty rosters, an endpoint that is down, and
+    nothing on disk: the first call pays the timeout, and the rest must
+    not."""
+    monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+    _clear_breaker()
+    attempts = []
+
+    def slow_and_broken():
+        attempts.append(1)
+        raise TimeoutError("read timed out")
+
+    for i in range(30):
+        try:
+            cache_module.cached_or_live(f"roster_{i}", slow_and_broken)
+        except Exception:
+            pass
+
+    assert len(attempts) == 1, (
+        f"the endpoint was called {len(attempts)} times after it was known "
+        f"to be down; that is {(len(attempts)-1)*15}s of a reader's life")
+
+
+def test_it_still_fetches_before_anything_has_failed(tmp_path, monkeypatch):
+    """The control. A breaker that refused from the start would pass the
+    test above and leave the app unable to fetch anything at all."""
+    monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+    _clear_breaker()
+    calls = []
+
+    def works():
+        calls.append(1)
+        return pd.DataFrame([{"x": 1}])
+
+    for i in range(3):
+        df, label = cache_module.cached_or_live(f"fine_{i}", works)
+        assert label == "live" and not df.empty
+    assert len(calls) == 3
+
+
+def test_a_cached_copy_is_still_served_while_blocked(tmp_path, monkeypatch):
+    """Refusing fast must not cost the reader data we already hold. The
+    breaker's original purpose is preserved."""
+    monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+    _clear_breaker()
+    (tmp_path / "have_it.json").write_text(payload([{"x": 9}]))
+
+    def broken():
+        raise TimeoutError("read timed out")
+
+    try:
+        cache_module.cached_or_live("gone", broken)      # trips it, and raises
+    except Exception:
+        pass
+    df, label = cache_module.cached_or_live("have_it", broken)
+    assert not df.empty and df.iloc[0]["x"] == 9
+    assert "cached copy" in label
+
+
+def test_the_breaker_heals(tmp_path, monkeypatch):
+    """A permanent block turns one blip into a session that can never
+    fetch anything it does not already have. After the cooldown a call
+    is allowed through to probe."""
+    monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+    _clear_breaker()
+
+    def broken():
+        raise TimeoutError("read timed out")
+
+    try:
+        cache_module.cached_or_live("a", broken)
+    except Exception:
+        pass
+
+    # Wind the clock past the cooldown rather than sleeping through it.
+    monkeypatch.setattr(
+        cache_module.time, "monotonic",
+        lambda: cache_module.st.session_state["_live_nba_api_blocked_until"] + 1)
+
+    calls = []
+
+    def works():
+        calls.append(1)
+        return pd.DataFrame([{"x": 2}])
+
+    df, label = cache_module.cached_or_live("b", works)
+    assert label == "live" and len(calls) == 1
+    assert cache_module.st.session_state.get("_live_nba_api_blocked") is False
+
+
+def test_a_trip_from_another_module_is_adopted(tmp_path, monkeypatch):
+    """engine/game_log.py and engine/tracker.py set the same flag with no
+    cooldown of their own. Without adopting it, this function would keep
+    a second opinion about whether nba.com is up and go on waiting."""
+    monkeypatch.setattr(cache_module, "CACHE_DIR", str(tmp_path))
+    _clear_breaker()
+    cache_module.st.session_state["_live_nba_api_blocked"] = True   # as game_log does
+
+    attempts = []
+
+    def broken():
+        attempts.append(1)
+        raise TimeoutError("read timed out")
+
+    for i in range(5):
+        try:
+            cache_module.cached_or_live(f"k{i}", broken)
+        except Exception:
+            pass
+
+    assert attempts == [], "adopted trip should refuse without calling out at all"
