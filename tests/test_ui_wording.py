@@ -147,3 +147,50 @@ def test_the_parser_is_given_the_two_rosters_and_not_the_league():
     for arg, value in passed.items():
         assert not (isinstance(value, ast.Name) and value.id == "player_ids"), (
             f"scenario.parse() is being handed the league list as {arg}=")
+
+
+def test_a_saved_matchup_says_whether_it_came_from_a_scenario():
+    """The scenario box lives on the Full Matchup tab, so the batch save
+    is where a reader's hypothesis can now reach the public track record
+    -- append_prediction_to_log (Single Player) can no longer produce
+    one. A row dict missing this key defaults to not-hypothetical, which
+    is the silent direction."""
+    text = source()
+    calls = _calls_named(text, "append_predictions_batch")
+    assert calls, "app.py no longer saves matchups at all?"
+    assert '"hypothetical": _matchup_from_scenario' in text, (
+        "the Full Matchup save no longer marks scenario-driven rows. Every "
+        "line of a box score built from a typed sentence would be scored "
+        "into the layer accuracy figure shown to every visitor."
+    )
+
+
+def test_the_scenario_fills_the_pickers_before_they_are_built():
+    """Streamlit forbids writing a widget's key AFTER the widget is
+    instantiated -- it raises, loudly, but only on the run where somebody
+    actually clicks Read my scenario, which is exactly the path a smoke
+    test doesn't take. The whole design depends on this ordering, so the
+    ordering is pinned rather than remembered.
+    """
+    text = source()
+    marker = 'st.session_state[f"out_input_{team_a_id}"]'
+    assert marker in text, (
+        "the scenario no longer fills the out-pickers at all -- if that was "
+        "deliberate, this test and its control need rewriting, not deleting")
+    write = text.index(marker)
+    build = text.index("pick_out_players(\n")
+    assert write < build, (
+        "the scenario writes the out-pickers' session_state after "
+        "pick_out_players() builds them; Streamlit will raise on click"
+    )
+
+
+def test_that_ordering_check_is_looking_at_real_code():
+    """The control. Both markers have to exist for the test above to mean
+    anything -- if either string drifted, .index() would raise and the
+    failure would at least be loud, but a reader of this file deserves to
+    see both halves asserted."""
+    text = source()
+    assert text.count('st.session_state[f"out_input_{team_a_id}"]') == 1
+    assert text.count('st.session_state[f"out_input_{team_b_id}"]') == 1
+    assert text.count("pick_out_players(") >= 3  # def + two calls
