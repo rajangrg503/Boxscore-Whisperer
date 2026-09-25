@@ -31,11 +31,27 @@ not new coupling introduced by this move.
 import datetime
 import json
 import os
+import time
 
 import pandas as pd
 import streamlit as st
 
 from engine import cache_archive
+
+
+# How long a failed live call suppresses further live attempts. Long
+# enough that one dead endpoint cannot stall a page thirty times over,
+# short enough that a transient blip does not cost the reader the rest
+# of their session. Nothing measured this; it is a comfort number, and
+# the only thing it trades is how quickly the app notices nba.com came
+# back.
+LIVE_RETRY_COOLDOWN = 60.0
+
+
+class LiveSourceUnavailable(RuntimeError):
+    """Raised instead of waiting out a timeout we already know will
+    time out. Callers that already handle a failed fetch need no
+    change: this is that failure, delivered sooner."""
 
 # <repo_root>/data_cache -- this file lives at <repo_root>/engine/cache.py,
 # so going up two directories from here (not one) reaches the repo root.
@@ -137,21 +153,68 @@ def cached_or_live(key, fetch_fn):
     used. Re-raises the live error only if no cached copy exists
     either -- at that point there's genuinely nothing to show.
 
-    Once a live call has failed once in this session, subsequent calls
-    skip straight to a cached copy (when one exists) instead of
-    re-attempting and re-waiting-out a live call already known to be
-    unreachable this session (e.g. on Streamlit Cloud)."""
-    if st.session_state.get("_live_nba_api_blocked"):
+    THE BREAKER, AND WHY IT USED TO SAVE TIME ONLY WHERE THERE WAS NONE
+    TO SAVE. When a live call fails, the breaker trips and later calls
+    take a cached copy instead of waiting out an endpoint already known
+    to be unreachable. But the old version fell through to a fresh live
+    attempt whenever no cached copy existed -- which is exactly the case
+    where the wait is unaffordable.
+
+    get_player_team_and_number() walks up to thirty rosters. With
+    stats.nba.com timing out and a roster missing from the cache, that
+    was thirty more attempts at 5s then 10s each, one prediction
+    stalling for over half a minute with nothing on screen. Observed on
+    25 Sep: twenty-five consecutive [_load_roster_df] timeouts for a
+    single projection, long after the breaker had tripped. The breaker
+    was saving time only where a cached copy made the call cheap
+    anyway.
+
+    So a tripped breaker now refuses immediately when there is nothing
+    cached. The caller sees the same exception it would have seen after
+    fifteen seconds of waiting, just sooner, and the fifteen seconds
+    buys nothing: the endpoint is down, and it was not going to hand us
+    a roster.
+
+    IT HEALS. The trip lasts LIVE_RETRY_COOLDOWN seconds rather than the
+    session, because a permanent block turns one transient blip into a
+    session that can never fetch anything it does not already have.
+    After the cooldown a single call is allowed through to probe, and
+    either clears the breaker or re-trips it.
+    """
+    blocked_until = st.session_state.get("_live_nba_api_blocked_until")
+    if blocked_until is None and st.session_state.get("_live_nba_api_blocked"):
+        # engine/game_log.py and engine/tracker.py trip the same flag
+        # without a cooldown of their own. Adopt it the first time we
+        # see it rather than keeping a second opinion about whether the
+        # endpoint is up.
+        blocked_until = time.monotonic() + LIVE_RETRY_COOLDOWN
+        st.session_state["_live_nba_api_blocked_until"] = blocked_until
+    still_blocked = blocked_until is not None and time.monotonic() < blocked_until
+
+    if still_blocked:
         cached_df, cached_at = _load_df_cache(key)
         if cached_df is not None:
             label = f"cached copy from {cached_at}" if cached_at else "cached copy"
             return cached_df, label
+        # Nothing cached and the endpoint is known-down. Waiting out
+        # another timeout cannot produce what isn't there.
+        raise LiveSourceUnavailable(
+            f"{key}: live source unavailable and no cached copy "
+            f"(retrying in {blocked_until - time.monotonic():.0f}s)"
+        )
+
     try:
         df = fetch_fn()
         _save_df_cache(key, df)
+        # A success after a trip means the blip is over.
+        st.session_state["_live_nba_api_blocked_until"] = None
+        st.session_state["_live_nba_api_blocked"] = False
         return df, "live"
     except Exception as live_error:
-        st.session_state["_live_nba_api_blocked"] = True
+        st.session_state["_live_nba_api_blocked_until"] = (
+            time.monotonic() + LIVE_RETRY_COOLDOWN
+        )
+        st.session_state["_live_nba_api_blocked"] = True  # kept: read elsewhere
         cached_df, cached_at = _load_df_cache(key)
         if cached_df is not None:
             label = f"cached copy from {cached_at}" if cached_at else "cached copy"
