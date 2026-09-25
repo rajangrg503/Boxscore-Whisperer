@@ -71,3 +71,79 @@ def test_the_baseline_option_does_not_call_itself_an_average():
     assert "average" not in value.lower(), (
         f'the default baseline option is named "{value}", but the baseline '
         "is a per-minute rate times projected minutes, not an average")
+
+
+# ---------------------------------------------------------------------
+# THIRD: the scenario box's two wirings, which no unit test can reach
+# because they live in a Streamlit script.
+#
+# Both failures are silent and both are in the bad direction. If the save
+# call loses hypothetical=, a reader's what-if enters the public accuracy
+# record and the number quietly stops meaning what the page says it
+# means. If parse() is handed the league list instead of the two rosters,
+# "Williams is out" becomes ambiguous a dozen ways and the parser refuses
+# every name -- the box would appear to work and apply nothing.
+# ---------------------------------------------------------------------
+
+import ast
+
+
+def _calls_named(text, name):
+    """Every ast.Call in app.py whose callee ends in `name`."""
+    found = []
+    for node in ast.walk(ast.parse(text)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        attr = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if attr == name:
+            found.append(node)
+    return found
+
+
+def _kwargs(call):
+    return {kw.arg for kw in call.keywords if kw.arg}
+
+
+def test_a_saved_prediction_says_whether_it_came_from_a_scenario():
+    calls = _calls_named(source(), "append_prediction_to_log")
+    assert calls, "app.py no longer saves single predictions at all?"
+    for call in calls:
+        assert "hypothetical" in _kwargs(call), (
+            "append_prediction_to_log() in app.py does not pass hypothetical=. "
+            "A scenario-adjusted projection would be scored into the public "
+            "layer accuracy figure shown to every visitor."
+        )
+
+
+def test_the_source_check_can_still_find_arguments():
+    """The control. If _kwargs or _calls_named quietly matched nothing,
+    the test above would pass forever. These two keywords have been on
+    that call since long before the scenario box."""
+    calls = _calls_named(source(), "append_prediction_to_log")
+    names = _kwargs(calls[0])
+    assert "layer_results" in names and "saved_by_email" in names, names
+
+
+def test_the_parser_is_given_the_two_rosters_and_not_the_league():
+    calls = _calls_named(source(), "parse")
+    scenario_calls = [
+        c for c in calls
+        if isinstance(c.func, ast.Attribute)
+        and isinstance(c.func.value, ast.Name)
+        and c.func.value.id == "scenario"
+    ]
+    assert len(scenario_calls) == 1, f"expected one scenario.parse() call, got {len(scenario_calls)}"
+    call = scenario_calls[0]
+    assert {"teammates", "opponents"} <= _kwargs(call), _kwargs(call)
+
+    # player_ids is the whole league (every active player). Passing it
+    # here is the specific mistake this pins: it type-checks, it runs,
+    # and it makes the feature silently useless.
+    passed = {
+        kw.arg: kw.value for kw in call.keywords
+        if kw.arg in ("teammates", "opponents")
+    }
+    for arg, value in passed.items():
+        assert not (isinstance(value, ast.Name) and value.id == "player_ids"), (
+            f"scenario.parse() is being handed the league list as {arg}=")

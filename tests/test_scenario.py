@@ -195,3 +195,134 @@ def test_nothing_typed_produces_nothing():
     result = parse("")
     assert result == {"out_teammates": [], "out_opponents": [], "arriving": None,
                       "applied": [], "unmatched": []}
+
+
+# --------------------------------------------------------------------
+# merge(): what the reader clicked, plus what they typed
+# --------------------------------------------------------------------
+
+NAMES = dict(THUNDER + SPURS)
+
+
+def merged(text, manual_teammates=(), manual_opponents=()):
+    return scenario.merge(
+        parse(text), manual_teammates=manual_teammates,
+        manual_opponents=manual_opponents, name_of=NAMES.get,
+    )
+
+
+def test_a_typed_name_joins_the_ones_already_picked():
+    teammates, opponents, notes = merged("Chet is out", manual_teammates=["Alex Caruso"])
+    assert teammates == ["Alex Caruso", "Chet Holmgren"]
+    assert opponents == [] and notes == []
+
+
+def test_the_same_player_clicked_and_typed_takes_one_slot():
+    teammates, _opponents, notes = merged(
+        "Chet is out", manual_teammates=["Chet Holmgren"])
+    assert teammates == ["Chet Holmgren"]
+    assert notes == []
+
+
+def test_clicks_win_the_cap_and_the_overflow_is_reported():
+    """The reason merge() exists. Five clicks plus a typed sixth: the
+    clicks are unambiguous and the sentence was parsed, so the clicks
+    keep the slots -- but a player the reader believes is out who is
+    quietly not in the model is the exact wrong number this app is
+    supposed to not produce, so it is said out loud."""
+    clicked = ["Alex Caruso", "Isaiah Hartenstein", "Jalen Williams",
+               "Jaylin Williams", "Shai Gilgeous-Alexander"]
+    teammates, _opponents, notes = merged("Chet is out", manual_teammates=clicked)
+    assert teammates == clicked, "the five clicked names are untouched"
+    assert len(notes) == 1
+    assert notes[0]["clause"] == "Chet Holmgren"
+    assert "already holds 5" in notes[0]["reason"]
+
+
+def test_under_the_cap_the_typed_name_is_added():
+    """The control on the test above: four clicks leave room, so the
+    typed name goes in and nothing is reported. A merge that always
+    overflowed would pass the cap test while never applying anything."""
+    clicked = ["Alex Caruso", "Isaiah Hartenstein", "Jalen Williams",
+               "Jaylin Williams"]
+    teammates, _opponents, notes = merged("Chet is out", manual_teammates=clicked)
+    assert teammates == clicked + ["Chet Holmgren"]
+    assert notes == []
+
+
+def test_an_unresolvable_id_is_reported_not_passed_on_as_an_id():
+    """Downstream every consumer expects a name string. Letting an id
+    through would read as a player called "1628369"."""
+    teammates, _opponents, notes = scenario.merge(
+        {"out_teammates": ["9999999"], "out_opponents": []},
+        name_of=lambda pid: None,
+    )
+    assert teammates == []
+    assert len(notes) == 1 and "could not be matched" in notes[0]["reason"]
+
+
+def test_the_two_controls_stay_separate():
+    teammates, opponents, notes = merged("Chet is out and Wembanyama is out")
+    assert teammates == ["Chet Holmgren"]
+    assert opponents == ["Victor Wembanyama"]
+    assert notes == []
+
+
+def test_nothing_typed_leaves_the_clicks_exactly_as_they_were():
+    clicked = ["Alex Caruso", "Chet Holmgren"]
+    teammates, opponents, notes = merged("", manual_teammates=clicked)
+    assert teammates == clicked
+    assert opponents == [] and notes == []
+
+
+def test_a_blocked_summary_does_not_claim_nothing_was_measurable():
+    """When the page could not load a roster, nothing was CHECKED. Saying
+    "none of this maps to a layer the model measures" would be a
+    different claim and a false one, so a caller can supply its own line.
+    """
+    blocked = parse("")
+    blocked.update({
+        "unmatched": [{"clause": "Chet is out", "reason": "no roster available"}],
+        "blocked": "Couldn't check any names: no roster loaded.",
+    })
+    assert scenario.summary(blocked) == "Couldn't check any names: no roster loaded."
+
+
+def test_an_ordinary_summary_still_counts():
+    """The control: without a blocked line the count is unchanged, so the
+    early return cannot swallow the normal path."""
+    assert scenario.summary(parse("Chet is out and Shai gets double teamed")) == (
+        "1 of 2 applied. The rest are listed so you know they were left out.")
+    assert scenario.summary(parse("Shai gets double teamed")) == (
+        "None of the 1 thing(s) you described maps to a layer the model measures.")
+
+
+def test_the_player_being_projected_is_told_apart_from_a_stranger():
+    """The page removes the subject from the teammate roster -- he cannot
+    be his own missing teammate -- so without `subject` this comes back
+    as "no player from either roster named here". That is true of the
+    lists handed in and misleading about the world."""
+    result = scenario.parse(
+        "SGA is out", teammates=[p for p in THUNDER if p[0] != "2544"],
+        opponents=SPURS, subject=("2544", "Shai Gilgeous-Alexander"),
+    )
+    assert result["out_teammates"] == [] and result["out_opponents"] == []
+    reason = result["unmatched"][0]["reason"]
+    assert "being projected" in reason
+    assert "Shai Gilgeous-Alexander" in reason
+
+
+def test_a_genuine_stranger_still_gets_the_plain_message():
+    """The control. A subject check that fired for everybody would make
+    the message above useless and hide real typos."""
+    result = scenario.parse(
+        "LeBron James is out", teammates=THUNDER, opponents=SPURS,
+        subject=("2544", "Shai Gilgeous-Alexander"),
+    )
+    assert "either roster" in result["unmatched"][0]["reason"]
+
+
+def test_omitting_the_subject_changes_nothing_else():
+    """It is optional, so every existing caller keeps working."""
+    result = scenario.parse("Chet is out", teammates=THUNDER, opponents=SPURS)
+    assert result["out_teammates"] == ["1628369"]
