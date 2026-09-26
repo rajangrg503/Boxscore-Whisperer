@@ -3537,7 +3537,7 @@ def get_opponent_missing_adjustment_cached(missing_names, season):
 
 
 def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_ids=None,
-                               opponent_missing_result=None):
+                               opponent_missing_result=None, minutes_override=None):
     """MVP matchup-predictor engine: season baseline + opponent-defense
     adjustment, plus an optional out-redistribution adjustment when
     out_player_ids is given (Full Matchup's "mark players as out"
@@ -3595,7 +3595,13 @@ def predict_player_vs_opponent(player_id, player_name, opponent_id, out_player_i
     just the note strings tab2's table already showed.
     """
     try:
-        season_stats, season_source, season_n, _season_used = get_season_baseline(player_id, player_name)
+        # minutes_override is the reader's own number for tonight, and
+        # it reaches the per-minute core and nothing else -- the same
+        # single, narrow seam the Single Player tab uses. His rates
+        # still come from his real games; only the number they are
+        # multiplied by changes.
+        season_stats, season_source, season_n, _season_used = get_season_baseline(
+            player_id, player_name, minutes_override=minutes_override)
     except Exception:
         return None
     if not season_stats:
@@ -3672,7 +3678,8 @@ with tab2:
         row = df[df["TEAM_ID"] == team_id]
         return int(row["GP"].iloc[0]) if not row.empty else 0
 
-    def total_entry(player_id, predictions, layer_results, current_team_games):
+    def total_entry(player_id, predictions, layer_results, current_team_games,
+                    minutes_override=None):
         """This player's input to engine.team_total.expected_team_total:
         his line before any out-redistribution pickup, his minutes, and
         how often he can be expected to play. None if minutes are missing."""
@@ -3683,6 +3690,14 @@ with tab2:
         mpg, regular_games = minutes_profile(log_df)
         if not mpg:
             return None
+        if minutes_override is not None:
+            # The line above is ALREADY at these minutes, so the team
+            # total has to weight him at them too. Left at his log's
+            # mpg, expected_team_total would fit a twenty-minute line
+            # into a thirty-four-minute share of the 240 -- the row and
+            # the total would disagree about the same player, and only
+            # the total would look wrong.
+            mpg = float(minutes_override)
         if log_season == CURRENT_SEASON:
             team_games = current_team_games or regular_games
         else:
@@ -3695,7 +3710,7 @@ with tab2:
         return {"line": line, "mpg": mpg, "availability": availability(regular_games, team_games)}
 
     def build_team_projection(team_id, opponent_id, out_player_ids=None,
-                              opponent_missing_result=None):
+                              opponent_missing_result=None, minutes_overrides=None):
         """out_player_ids: a list -- each is excluded entirely from
         the projected rows (not called through
         predict_player_vs_opponent at all -- there's nothing to
@@ -3734,9 +3749,11 @@ with tab2:
             if pid in out_ids:
                 out_names.append(pname)
                 continue
+            his_minutes = (minutes_overrides or {}).get(pid)
             result = predict_player_vs_opponent(
                 pid, pname, opponent_id, out_player_ids=out_ids,
                 opponent_missing_result=opponent_missing_result,
+                minutes_override=his_minutes,
             )
             if result is None:
                 skipped.append(pname)
@@ -3745,7 +3762,14 @@ with tab2:
             redistribution_result = layer_results.get("out_redistribution")
             if redistribution_result is not None and not redistribution_result.applied:
                 unadjusted.append(pname)
-            row = {"Player": pname}
+            # A line built on a number the reader supplied says so in
+            # the row. Nine columns of a projected box score all look
+            # equally like the model's work; one of them being the
+            # reader's own assumption is exactly the kind of thing that
+            # is obvious while you are typing it and invisible an hour
+            # later, or to whoever you sent the screenshot to.
+            row = {"Player": pname if his_minutes is None
+                   else f"{pname} · {his_minutes:g} min"}
             for col, label in STAT_COLUMNS:
                 row[label] = round(predictions[col]["predicted"], 1)
             rows.append(row)
@@ -3753,7 +3777,8 @@ with tab2:
                 "player_id": pid, "player_full_name": pname,
                 "predictions": predictions, "layer_results": layer_results,
             })
-            entry = total_entry(pid, predictions, layer_results, current_team_games)
+            entry = total_entry(pid, predictions, layer_results, current_team_games,
+                                minutes_override=his_minutes)
             if entry is not None:
                 total_entries.append(entry)
         totals, _expected_minutes = expected_team_total(total_entries, [c for c, _ in STAT_COLUMNS])
@@ -3895,8 +3920,69 @@ with tab2:
         out_pairs = [(pid, pname) for pid, pname in roster if pid in chosen]
         return [pid for pid, _ in out_pairs], [pname for _, pname in out_pairs]
 
+    def pick_minutes(team_id, team_full, out_ids):
+        """Minutes for the players whose rotation the reader knows and
+        the model cannot. Returns {player_id: minutes}.
+
+        WHY THIS TAB NEEDED IT MOST. The Single Player tab has had this
+        since #68. Here every line in a projected box score assumes the
+        model's own minutes, so during the preseason the whole table is
+        wrong the same way at once -- and a page of numbers that are all
+        wrong in one direction reads as far more authoritative than a
+        single wrong number does. The banner below said so and offered
+        nothing to do about it.
+
+        The same empty-roster rule as pick_out_players, for the same
+        reason: st.multiselect silently drops any session_state value
+        not in `options`, so a bad minute on nba.com would un-set
+        minutes the reader had typed and the table would come back at
+        the model's own rotation looking perfectly normal. The warning
+        is already on screen from pick_out_players, so this one is
+        silent about it.
+        """
+        roster = get_team_roster(team_id)
+        if not roster:
+            return {}
+
+        roster_id_to_name = dict(roster)
+        chosen = st.multiselect(
+            f"Set minutes for {team_full} players (optional)",
+            options=[pid for pid, _pname in roster],
+            format_func=lambda pid: player_search_label(roster_id_to_name[pid]),
+            key=f"min_players_{team_id}",
+            help=(
+                "His per-minute rates still come from his real games -- only "
+                "the number they are multiplied by changes. Use it when you "
+                "know something the game log cannot: a minutes restriction, a "
+                "back-to-back, or preseason, when starters play about twenty."
+            ),
+        )
+
+        minutes = {}
+        for pid in chosen:
+            typed = st.number_input(
+                f"{roster_id_to_name[pid]} minutes",
+                min_value=0, max_value=48, step=1,
+                key=f"min_value_{team_id}_{pid}",
+                help="0 keeps the model's own projection for him.",
+            )
+            if typed > 0:
+                minutes[pid] = int(typed)
+
+        # Marked out AND given minutes. The out list wins -- he is not
+        # in the table at all -- so the minutes do nothing, and saying
+        # nothing would leave a control on screen that the reader set
+        # and the page ignored.
+        also_out = [roster_id_to_name[pid] for pid in minutes if pid in set(out_ids)]
+        if also_out:
+            st.caption(
+                f"{', '.join(also_out)} marked out, so the minutes set for "
+                f"{'them' if len(also_out) > 1 else 'him'} are not used."
+            )
+        return minutes
+
     def render_team_projection(team_id, team_full, opponent_id, opponent_full, opponent_abbr,
-                               out_ids, opponent_out_names):
+                               out_ids, opponent_out_names, minutes_overrides=None):
         section_heading(team_full, "Projected box score")
         # Same season rule as the Single Player tool's call: this season
         # once it has enough games, last season before that.
@@ -3909,6 +3995,7 @@ with tab2:
             rows, skipped, unadjusted, out_names, trackable, expected_total = build_team_projection(
                 team_id, opponent_id, out_player_ids=out_ids,
                 opponent_missing_result=opponent_missing_result,
+                minutes_overrides=minutes_overrides,
             )
 
         if rows:
@@ -3933,6 +4020,19 @@ with tab2:
                 },
             )
             pts_label = STAT_COLUMNS[0][1]
+            if minutes_overrides:
+                # Named here as well as in the row, because the row
+                # marker is four characters wide on a phone and this is
+                # the sentence that says whose number it is. The
+                # calibration claim is not made over these -- the same
+                # rule the Single Player tab follows, for the same
+                # reason: spread_at_minutes has not been backtested.
+                st.caption(
+                    "· min marks a line built on minutes you set rather than the "
+                    "model's projection for him. His per-minute rates are still "
+                    "his own; that scaling has not been backtested, so the 80% "
+                    "range calibration is not claimed for those rows."
+                )
             if expected_total is not None:
                 st.caption(
                     "Each row is that player's line if he plays. The expected team total "
@@ -3947,9 +4047,10 @@ with tab2:
                 if full_total is not None:
                     st.caption(
                         f"Expected team total: {expected_total[pts_label]:.1f} points with "
-                        f"these players out, vs {full_total[pts_label]:.1f} at full strength. "
-                        f"Their minutes go to the rest of the roster, so the difference "
-                        f"comes from who replaces them."
+                        f"these players out, vs {full_total[pts_label]:.1f} at full strength"
+                        + (" and the model's own minutes. " if minutes_overrides else ". ")
+                        + "Their minutes go to the rest of the roster, so the difference "
+                          "comes from who replaces them."
                     )
             if skipped:
                 st.caption(
@@ -4115,6 +4216,20 @@ with tab2:
                         })
                     st.session_state[f"out_input_{team_a_id}"] = list(parsed["out_teammates"])
                     st.session_state[f"out_input_{team_b_id}"] = list(parsed["out_opponents"])
+                    # And the minutes controls, under the same rule and
+                    # in the same breath: BEFORE pick_minutes() builds
+                    # them below, which is the only moment a widget's
+                    # session_state may be written. Both keys, because
+                    # the multiselect decides who has a box and the
+                    # number_input is what is in it -- writing one
+                    # without the other would show a player with a
+                    # minutes box reading zero, which means "use the
+                    # model's" and is not what the sentence said.
+                    for _side, _said in ((team_a_id, parsed["minutes_teammates"]),
+                                         (team_b_id, parsed["minutes_opponents"])):
+                        st.session_state[f"min_players_{_side}"] = list(_said)
+                        for _who, _long in _said.items():
+                            st.session_state[f"min_value_{_side}_{_who}"] = int(_long)
                 st.session_state["matchup_scenario_parsed"] = parsed
 
             matchup_scenario = st.session_state.get("matchup_scenario_parsed")
@@ -4126,10 +4241,12 @@ with tab2:
                 team_a_out_ids, team_a_out_names = pick_out_players(
                     team_a_id, team_a_full, f"out_input_{team_a_id}"
                 )
+                team_a_minutes = pick_minutes(team_a_id, team_a_full, team_a_out_ids)
             with pick_b:
                 team_b_out_ids, team_b_out_names = pick_out_players(
                     team_b_id, team_b_full, f"out_input_{team_b_id}"
                 )
+                team_b_minutes = pick_minutes(team_b_id, team_b_full, team_b_out_ids)
             st.caption(
                 "Optional: mark anyone who won't play. A player marked out is "
                 "removed from his team's table, and his teammates' lines are "
@@ -4146,9 +4263,9 @@ with tab2:
                 st.warning(
                     "The NBA is still playing preseason games. Every line below "
                     "assumes regular-season minutes — in exhibitions, starters "
-                    "often play about twenty, so the whole table runs high. There "
-                    "is no minutes control on this tab yet; the Single Player tab "
-                    "has one.",
+                    "often play about twenty, so the whole table runs high. If you "
+                    "know roughly how long someone will play, set it above and his "
+                    "line follows it.",
                     icon="🏀",
                 )
 
@@ -4202,11 +4319,11 @@ with tab2:
     if teams_ready and st.session_state.get("matchup_pair") == (team_a_id, team_b_id):
         team_a_trackable = render_team_projection(
             team_a_id, team_a_full, team_b_id, team_b_full, team_b_abbr,
-            team_a_out_ids, team_b_out_names,
+            team_a_out_ids, team_b_out_names, minutes_overrides=team_a_minutes,
         )
         team_b_trackable = render_team_projection(
             team_b_id, team_b_full, team_a_id, team_a_full, team_a_abbr,
-            team_b_out_ids, team_a_out_names,
+            team_b_out_ids, team_a_out_names, minutes_overrides=team_b_minutes,
         )
 
         render_matchup_reads(
@@ -4257,6 +4374,14 @@ with tab2:
                                      set(_scenario.get("out_opponents", []))
                 _still_selected = set(team_a_out_ids) | set(team_b_out_ids)
                 _matchup_from_scenario = bool(_from_scenario_ids & _still_selected)
+                # A minutes override is an assumption the model did not
+                # measure, exactly as on the Single Player tab (#68) --
+                # but unlike the out-list it changes ONE player's line
+                # and nobody else's, so it is marked per row rather than
+                # over the whole box score. Scoring his line would
+                # credit or blame a layer for a rotation the reader
+                # typed in.
+                _assumed_minutes = set(team_a_minutes) | set(team_b_minutes)
 
                 rows_input = [
                     {
@@ -4271,7 +4396,8 @@ with tab2:
                         # in the public track record. A reader who
                         # cleared the box and picked the names by hand
                         # is stating real news, so those rows count.
-                        "hypothetical": _matchup_from_scenario,
+                        "hypothetical": (_matchup_from_scenario
+                                         or t["player_id"] in _assumed_minutes),
                     }
                     for t in all_trackable
                 ]

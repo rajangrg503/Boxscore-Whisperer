@@ -193,8 +193,9 @@ def test_the_summary_says_how_much_was_used():
 
 def test_nothing_typed_produces_nothing():
     result = parse("")
-    assert result == {"out_teammates": [], "out_opponents": [], "arriving": None,
-                      "applied": [], "unmatched": []}
+    assert result == {"out_teammates": [], "out_opponents": [],
+                      "minutes_teammates": {}, "minutes_opponents": {},
+                      "arriving": None, "applied": [], "unmatched": []}
 
 
 # --------------------------------------------------------------------
@@ -350,11 +351,17 @@ def test_a_run_on_still_applies_the_half_it_measures():
                    "will only play 20 minutes due to minute restrictions")
 
     assert result["out_teammates"] == ["1628369"]
-    assert [a["clause"] for a in result["applied"]] == ["chet is out"]
+    assert result["applied"][0]["clause"] == "chet is out"
+
+    # The minutes clause applies too, since #73 gave this tab a minutes
+    # control. Before that it was refused with "no measured layer for
+    # this", which was true when it was written and stopped being true
+    # the day the control shipped.
+    assert result["minutes_teammates"] == {"1631114": 20}
 
     ignored = [u["clause"] for u in result["unmatched"]]
-    assert "sga will be double teamed" in ignored
-    assert any("20 minutes" in clause for clause in ignored)
+    assert ignored == ["sga will be double teamed"], (
+        "only the clause with no layer behind it should be refused now")
 
 
 def test_a_run_on_does_not_resolve_an_ambiguous_name():
@@ -434,3 +441,103 @@ def test_a_bare_ambiguous_name_in_a_list_is_still_refused():
     assert result["out_teammates"] == ["1628369"]
     assert any("Jalen Williams" in u["reason"] and "Jaylin Williams" in u["reason"]
                for u in result["unmatched"])
+
+
+# --------------------------------------------------------------------
+# Minutes, which are the one number a reader can assert without the
+# model inventing anything: the baseline is a per-minute rate times
+# projected minutes, so replacing the minutes replaces exactly one
+# input and leaves his real rates alone.
+#
+# The hazard here is the opposite of the ambiguous-name one. There the
+# risk was acting on a guess; here it is refusing an answer the reader
+# actually gave, because the phrase they gave it in ("minutes
+# restriction") is on a list of phrases that mean "we don't know".
+# --------------------------------------------------------------------
+
+def test_minutes_fill_the_control():
+    result = parse("Chet plays 24 minutes")
+    assert result["minutes_teammates"] == {"1628369": 24}
+    assert result["minutes_opponents"] == {}
+    assert result["applied"][0]["control"] == "Minutes for a player"
+    assert "24 minutes" in result["applied"][0]["player"]
+
+
+def test_an_opponent_gets_his_own_control():
+    result = parse("Wembanyama plays 30 mins")
+    assert result["minutes_opponents"] == {"1630170": 30}
+    assert result["minutes_teammates"] == {}
+
+
+def test_a_number_beats_the_phrase_that_says_we_do_not_know():
+    """"minutes restriction" is on the undecided list, and undecided is
+    checked before almost everything because "questionable" must never
+    be rounded to in or out. But a reader who writes "only 20 minutes
+    due to a minutes restriction" HAS given the number -- refusing that
+    as half-available is the app ignoring the answer while quoting the
+    question back."""
+    result = parse("Jalen Williams will only play 20 minutes due to a "
+                   "minutes restriction")
+    assert result["minutes_teammates"] == {"1631114": 20}
+    assert result["unmatched"] == []
+
+
+def test_the_phrase_without_a_number_is_still_undecided():
+    """The control. The reordering must not swallow the undecided list:
+    "on a minutes restriction" with no number still says nothing the
+    model can use, and guessing a number for him would be inventing the
+    one input this control exists to take from the reader."""
+    result = parse("Chet is on a minutes restriction")
+    assert result["minutes_teammates"] == {}
+    assert "half-available" in result["unmatched"][0]["reason"]
+
+
+def test_out_outranks_a_number_in_the_same_clause():
+    """"out for 20 minutes" is a contradiction, and the safe reading of
+    a contradiction is the one that removes a player rather than the one
+    that invents a rotation for him."""
+    result = parse("Chet is out for 20 minutes")
+    assert result["out_teammates"] == ["1628369"]
+    assert result["minutes_teammates"] == {}
+
+
+@pytest.mark.parametrize("typed,number", [
+    ("Chet plays 2 minutes", "2"),
+    ("Chet plays 60 minutes", "60"),
+])
+def test_a_number_that_is_not_a_rotation_says_so(typed, number):
+    """A per-minute rate multiplied by a nonsense number is a nonsense
+    line delivered with a straight face. And the reason has to name the
+    range: "no measured layer for this" would be false here -- the layer
+    exists and the number was the problem, which is a thing the reader
+    can fix."""
+    result = parse(typed)
+    assert result["minutes_teammates"] == {}
+    reason = result["unmatched"][0]["reason"]
+    assert number in reason and "4-48" in reason
+
+
+def test_an_ambiguous_name_is_not_resolved_by_a_number():
+    """The control this whole file exists for, applied to the new
+    branch. A minutes clause must refuse an ambiguous name exactly as
+    an out clause does -- setting minutes for the wrong Williams is the
+    same silent wrongness as marking the wrong one out."""
+    result = parse("Williams plays 20 minutes")
+    assert result["minutes_teammates"] == {}
+    reason = result["unmatched"][0]["reason"]
+    assert "Jalen Williams" in reason and "Jaylin Williams" in reason
+
+
+def test_more_players_than_the_control_holds_is_reported():
+    result = parse("Chet plays 20 minutes. Jalen Williams plays 21 minutes. "
+                   "Jaylin Williams plays 22 minutes. Alex Caruso plays 23 minutes. "
+                   "Isaiah Hartenstein plays 24 minutes. SGA plays 25 minutes.")
+    assert len(result["minutes_teammates"]) == scenario.MAX_PER_CONTROL
+    assert any("more than" in u["reason"] for u in result["unmatched"])
+
+
+def test_out_and_minutes_can_both_come_from_one_sentence():
+    result = parse("Chet is out, Jalen Williams plays 20 minutes")
+    assert result["out_teammates"] == ["1628369"]
+    assert result["minutes_teammates"] == {"1631114": 20}
+    assert len(result["applied"]) == 2
