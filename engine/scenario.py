@@ -390,35 +390,52 @@ def assertions(text, rosters=()):
     return [(clause, state) for (clause, _weak), state in zip(parts, states)]
 
 
-def _candidates(clause, roster):
-    """Everyone on `roster` this clause could be naming.
+def graded(clause, roster):
+    """[(player_id, name, strength)] for everyone this clause could be
+    naming, where strength is "full" (the whole name is in the clause)
+    or "partial" (a surname, a forename, or initials).
 
-    `roster` is (player_id, full_name) pairs. Returns the matches with
-    the strongest evidence only: a full-name hit beats a surname hit,
-    so "Jalen Williams is out" resolves even though "Williams" alone
-    would not.
+    Separated from _candidates() so the STRENGTHS can be compared
+    across both rosters rather than within one. See parse().
     """
     folded = _fold(clause)
     words = set(folded.split())
 
-    full, partial = [], []
+    found = []
     for player_id, name in roster:
         folded_name = _fold(name)
         if folded_name and folded_name in folded:
-            full.append((player_id, name))
+            found.append((player_id, name, "full"))
             continue
         parts = [p for p in folded_name.split() if len(p) > 1]
         if any(p in words for p in parts):
-            partial.append((player_id, name))
+            found.append((player_id, name, "partial"))
             continue
         # "SGA". Only as initials of a real name, never a wordlist --
         # a hand-kept nickname table would drift the day someone is
         # traded.
         letters = _initials(name)
         if len(letters) >= 2 and letters in words:
-            partial.append((player_id, name))
+            found.append((player_id, name, "partial"))
+    return found
 
-    return full or partial
+
+def strongest(graded_matches):
+    """The full-name hits if there are any, else everything.
+
+    A full name is better evidence than a surname, so "Jalen Williams
+    is out" resolves on a roster that also has Jaylin Williams.
+    """
+    full = [m for m in graded_matches if m[2] == "full"]
+    return full or list(graded_matches)
+
+
+def _candidates(clause, roster):
+    """Everyone on `roster` this clause could be naming, strongest
+    evidence only. One roster at a time -- parse() does not use this
+    for the two teams (see there), but the subject check and the
+    clause-shape helpers do, where there is only one list anyway."""
+    return [(pid, name) for pid, name, _s in strongest(graded(clause, roster))]
 
 
 def minutes_in(clause):
@@ -509,8 +526,27 @@ def parse(text, teammates=(), opponents=(), subject=None):
     applied, unmatched = [], []
 
     for clause, state in assertions(text, (teammates, opponents)):
-        here = _candidates(clause, teammates)
-        there = _candidates(clause, opponents)
+        # THE STRENGTH CONTEST RUNS ACROSS BOTH ROSTERS, NOT INSIDE EACH.
+        # Collapsing each team separately made a full name lose to a
+        # surname on the other team, which is the ordinary case rather
+        # than a corner: the two similar names in a real matchup are
+        # almost always on opposite sides. Observed on the live site --
+        # "mitchell robinson is out" in Thunder vs Celtics came back
+        # "could mean Ajay Mitchell, Mitchell Robinson", because OKC's
+        # Mitchell won his own roster's contest and was then weighed
+        # against a man whose whole name had been typed out.
+        #
+        # A refusal is the safe direction, and it was still wrong: it
+        # refuses a name the reader spelled in full, which is the one
+        # thing they can do to be unambiguous.
+        here_graded = graded(clause, teammates)
+        there_graded = graded(clause, opponents)
+        best = strongest(here_graded + there_graded)
+        keep = {(pid, name) for pid, name, _s in best}
+        here = [(pid, name) for pid, name, _s in here_graded
+                if (pid, name) in keep]
+        there = [(pid, name) for pid, name, _s in there_graded
+                 if (pid, name) in keep]
         matches = here + there
 
         if state is None:

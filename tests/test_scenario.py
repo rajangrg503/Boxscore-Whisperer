@@ -573,3 +573,91 @@ def test_no_applied_clause_is_missing_its_effect():
                    "Wembanyama is injured")
     assert len(result["applied"]) == 3
     assert all(item.get("effect") for item in result["applied"])
+
+
+# --------------------------------------------------------------------
+# A full name beats a surname ACROSS the two rosters, not just inside
+# one.
+#
+# The module has always promised that a full name resolves what a
+# surname cannot. It kept that promise per roster and broke it between
+# them, which is the ordinary case rather than a corner: two similar
+# names in a real matchup are almost always on opposite teams.
+#
+# These rosters are the real pairing that exposed it on the live site --
+# Oklahoma City's Ajay Mitchell against Boston's Mitchell Robinson.
+# --------------------------------------------------------------------
+
+THUNDER_MITCHELL = [
+    ("2544", "Shai Gilgeous-Alexander"),
+    ("1631260", "Ajay Mitchell"),
+    ("1631114", "Jalen Williams"),
+]
+CELTICS_MITCHELL = [
+    ("1629011", "Mitchell Robinson"),
+    ("1628369", "Jayson Tatum"),
+    ("1628401", "Grant Williams"),
+]
+
+
+def across(text):
+    return scenario.parse(text, teammates=THUNDER_MITCHELL,
+                          opponents=CELTICS_MITCHELL)
+
+
+def test_a_full_name_on_one_team_beats_a_surname_on_the_other():
+    """Typed on the live site, 26 Sep: "mitchell robinson is out" in
+    Thunder vs Celtics came back "could mean Ajay Mitchell, Mitchell
+    Robinson". The reader had spelled the name out in full, which is
+    the one thing they can do to be unambiguous, and it was refused --
+    because OKC's Mitchell won his own roster's contest first and was
+    then weighed as an equal against a whole name."""
+    result = across("Mitchell Robinson is out")
+    assert result["out_opponents"] == ["1629011"]
+    assert result["out_teammates"] == [], "Ajay Mitchell must not be touched"
+    assert result["unmatched"] == []
+
+
+def test_it_works_the_other_way_round_too():
+    """The control on direction. A rule that always preferred the
+    opponent, or always the longer roster, would pass the test above
+    while being nonsense."""
+    result = across("Ajay Mitchell is out")
+    assert result["out_teammates"] == ["1631260"]
+    assert result["out_opponents"] == []
+
+
+def test_the_minutes_branch_gets_the_same_resolution():
+    result = across("Mitchell Robinson plays 18 minutes")
+    assert result["minutes_opponents"] == {"1629011": 18}
+    assert result["minutes_teammates"] == {}
+
+
+def test_two_surnames_across_two_teams_are_still_refused():
+    """THE control, and the reason this is narrow. Nothing here makes a
+    weak match win -- when NEITHER side has a full name, both stay in
+    and the clause is refused exactly as before. "Mitchell" alone is
+    two men in this game and the reader has to say which."""
+    result = across("Mitchell is out")
+    assert result["out_teammates"] == [] and result["out_opponents"] == []
+    reason = result["unmatched"][0]["reason"]
+    assert "Ajay Mitchell" in reason and "Mitchell Robinson" in reason
+
+
+def test_a_shared_surname_across_three_players_still_refuses():
+    """Both Williamses are on the Thunder in the other fixture; here a
+    third is on the Celtics. A surname that matches three men across
+    two rosters is not resolved by the strength rule, because all three
+    matches are equally weak."""
+    result = across("Williams is out")
+    assert result["out_teammates"] == [] and result["out_opponents"] == []
+    reason = result["unmatched"][0]["reason"]
+    assert "Jalen Williams" in reason and "Grant Williams" in reason
+
+
+def test_the_within_roster_rule_is_unchanged():
+    """The original promise, still kept: Jalen and Jaylin Williams are
+    teammates, and a full name picks one of them out."""
+    assert parse("Jalen Williams is out")["out_teammates"] == ["1631114"]
+    assert parse("Jaylin Williams is out")["out_teammates"] == ["1630793"]
+    assert parse("Williams is out")["out_teammates"] == []
