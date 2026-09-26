@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boxscore Whisperer — NBA player statline projections, with the working shown</title>
+<meta name="description" content="Free NBA player stat projections built from real game logs. Every adjustment is shown, every projection is posted before tip-off and every result the next morning — hit or miss. Independent and unofficial. Not betting advice. 18+.">
+<link rel="canonical" href="https://boxscorewhisperer.com/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://boxscorewhisperer.com/">
+<meta property="og:title" content="Boxscore Whisperer — NBA statline projections">
+<meta property="og:description" content="Projections built from real game logs, with every adjustment shown. Posted before tip-off, results the next morning, hit or miss.">
+<meta property="og:site_name" content="Boxscore Whisperer">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:site" content="@BoxscoreWhisper">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0a0d12">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%23ff8c42'/><path d='M3 16h26M16 3v26' stroke='%230a0d12' stroke-width='2'/></svg>">
+<style>
+  :root{
+    --bg:#0a0d12; --panel:#111620; --line:#1e2635;
+    --ink:#e8edf5; --mute:#8b97ab; --faint:#5d6879;
+    --ball:#ff8c42; --go:#22c55e;
+    --max:720px;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.65 ui-sans-serif,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    letter-spacing:-.005em;
+  }
+  .wrap{max-width:var(--max); margin:0 auto; padding:0 16px}
+  a{color:var(--ink)}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--go); outline-offset:3px; border-radius:4px}
+
+  header{padding:56px 0 8px; text-align:center}
+  .mark{display:block; margin:0 auto 20px}
+  h1{
+    margin:0 0 6px; font-size:clamp(30px,7vw,44px); line-height:1.12;
+    font-weight:800; letter-spacing:-.03em;
+  }
+  .kicker{
+    display:inline-block; margin-bottom:22px; padding:4px 11px;
+    border:1px solid var(--line); border-radius:999px;
+    color:var(--mute); font-size:12.5px; letter-spacing:.02em;
+  }
+  .kicker b{color:var(--go); font-weight:600}
+  .lede{
+    margin:0 auto; max-width:38em; color:var(--mute);
+    font-size:clamp(16.5px,2.6vw,18.5px);
+  }
+  .lede strong{color:var(--ink); font-weight:600}
+
+  .cta{margin:30px 0 8px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap}
+  .btn{
+    display:inline-block; padding:13px 26px; border-radius:10px;
+    background:var(--go); color:#06210f; font-weight:700; text-decoration:none;
+    font-size:16.5px;
+  }
+  .btn:hover{filter:brightness(1.08)}
+  .btn.ghost{
+    background:transparent; color:var(--ink);
+    border:1px solid var(--line); font-weight:600;
+  }
+  .btn.ghost:hover{border-color:var(--faint)}
+  .free{margin:14px 0 0; color:var(--faint); font-size:13.5px; text-align:center}
+
+  section{padding:44px 0; border-top:1px solid var(--line); margin-top:52px}
+  h2{margin:0 0 20px; font-size:13px; letter-spacing:.09em; text-transform:uppercase; color:var(--faint); font-weight:700}
+  h3{margin:0 0 6px; font-size:16.5px; font-weight:650}
+
+  .grid{display:grid; gap:18px}
+  @media(min-width:620px){ .grid{grid-template-columns:1fr 1fr; gap:22px} }
+  .card{
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:12px; padding:18px 20px;
+  }
+  .card p{margin:0; color:var(--mute); font-size:15px}
+
+  .example{
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:20px; font-variant-numeric:tabular-nums;
+  }
+  .example .line{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+  .example .num{font-size:34px; font-weight:800; letter-spacing:-.02em}
+  .example .who{color:var(--mute); font-size:15px}
+  .example .range{margin:8px 0 0; color:var(--mute); font-size:15px}
+  .example .range b{color:var(--ink); font-weight:600}
+  .example .note{margin:14px 0 0; padding-top:14px; border-top:1px solid var(--line); color:var(--faint); font-size:13.5px}
+
+  ul.plain{margin:0; padding:0; list-style:none}
+  ul.plain li{padding:11px 0; border-bottom:1px solid var(--line); color:var(--mute); font-size:15px}
+  ul.plain li:last-child{border-bottom:0}
+  ul.plain b{color:var(--ink); font-weight:600}
+
+  .record{
+    background:linear-gradient(180deg,rgba(34,197,94,.07),transparent);
+    border:1px solid var(--line); border-radius:12px; padding:22px;
+  }
+  .record p{margin:0 0 12px; color:var(--mute); font-size:15.5px}
+  .record p:last-child{margin-bottom:0}
+  .record strong{color:var(--ink)}
+
+  footer{border-top:1px solid var(--line); margin-top:52px; padding:30px 0 56px}
+  footer p{margin:0 0 12px; color:var(--faint); font-size:12.5px; line-height:1.6}
+  footer p:last-child{margin-bottom:0}
+  footer a{color:var(--mute)}
+  .age{
+    display:inline-block; border:1px solid var(--line); border-radius:4px;
+    padding:1px 6px; margin-right:6px; color:var(--mute); font-weight:700; font-size:11.5px;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <svg class="mark" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Boxscore Whisperer">
+      <circle cx="32" cy="32" r="25" fill="#ff8c42"/>
+      <path d="M7 32h50M32 7v50" stroke="#0a0d12" stroke-width="3.5"/>
+      <path d="M14 14c12 8 12 28 0 36M50 14c-12 8-12 28 0 36" stroke="#0a0d12" stroke-width="3.5" fill="none"/>
+      <path d="M32 3a29 29 0 0 1 0 58" stroke="#22c55e" stroke-width="3" fill="none" opacity=".9"/>
+    </svg>
+
+    <h1>Boxscore&nbsp;Whisperer</h1>
+    <p class="kicker"><b>&#9679;</b>&nbsp; NBA statline estimates</p>
+    <p class="lede">
+      Player projections built from <strong>real game logs</strong>, not vibes.
+      Every adjustment is shown on the page, so you can disagree with the
+      working instead of trusting the number.
+    </p>
+
+    <div class="cta">
+      <a class="btn" href="https://boxscore-whisperer-9t5hpcdqyt7jmlsdbntljv.streamlit.app/">Open the projector</a>
+      <a class="btn ghost" href="https://x.com/BoxscoreWhisper" rel="me">Follow on X</a>
+    </div>
+    <p class="free">Free. No account, no email, nothing to install.</p>
+  </header>
+
+  <section>
+    <h2>What you get</h2>
+    <div class="example">
+      <div class="line">
+        <span class="num">26.2</span>
+        <span class="who">points &mdash; a starting guard tonight</span>
+      </div>
+      <p class="range">Likely range <b>21&ndash;31</b>. Not one number pretending to be certain.</p>
+      <p class="note">
+        Underneath: his per-minute rates, the minutes he is projected to play,
+        the opponent's defence, and who is out of the lineup &mdash; each one
+        listed with what it moved and why.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>How it works</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Built from his real games</h3>
+        <p>Per-minute production from his own game log, multiplied by the minutes he is likely to play. Not a season average pretending tonight is an average night.</p>
+      </div>
+      <div class="card">
+        <h3>A range, not a number</h3>
+        <p>Every projection comes with the band the result usually lands in. In three seasons of backtests, the real result landed inside the 80% range about 80% of the time.</p>
+      </div>
+      <div class="card">
+        <h3>Every adjustment is shown</h3>
+        <p>Opponent defence, minutes, teammates out. Each layer names what it changed, by how much, and how much data stands behind it.</p>
+      </div>
+      <div class="card">
+        <h3>It says what it can't do</h3>
+        <p>Describe the game in your own words and it applies only the parts it can actually measure &mdash; and lists the rest, unapplied, with the reason.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What it deliberately does not do</h2>
+    <ul class="plain">
+      <li><b>No picks.</b> No ranked slate, no units, no "locks". A projection and its range, and you decide what that is worth.</li>
+      <li><b>No invented numbers.</b> If there is no measured layer behind something &mdash; a double team, a change of role &mdash; it is named and left out rather than guessed at.</li>
+      <li><b>No odds and no bookmakers.</b> Nothing here is affiliated with, or paid by, anyone taking bets.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>The track record</h2>
+    <div class="record">
+      <p><strong>There isn't one yet.</strong> The 2026&ndash;27 season has not started.</p>
+      <p>From opening night, a projection goes out before tip-off and the result goes out the next morning &mdash; every one, hit or miss, whether it makes the model look good or not.</p>
+      <p>By December there will be a real record on this page, and it will be worth something precisely because it was published before anyone knew how it would turn out.</p>
+      <p><a href="https://x.com/BoxscoreWhisper">Watch it happen &rarr;</a></p>
+    </div>
+  </section>
+
+  <footer>
+    <p>
+      <a href="https://boxscore-whisperer-9t5hpcdqyt7jmlsdbntljv.streamlit.app/">Open the projector</a>
+      &nbsp;&middot;&nbsp;
+      <a href="https://x.com/BoxscoreWhisper">@BoxscoreWhisper</a>
+    </p>
+    <p>
+      <span class="age">18+</span>
+      Boxscore Whisperer is an independent, unofficial statistical tool and is not
+      affiliated with, endorsed by, or connected to the NBA, its teams, or the
+      National Basketball Players Association. All player and team data is sourced
+      from publicly available statistics. Projections are transparent statistical
+      estimates, not guarantees &mdash; for entertainment and informational purposes
+      only. <strong>Not betting advice.</strong>
+    </p>
+    <p>
+      If sports betting is a concern for you, help is available at
+      <a href="https://www.ncpgambling.org/">ncpgambling.org</a> or 1-800-GAMBLER
+      (US), and <a href="https://www.gamblinghelponline.org.au/">Gambling Help
+      Online</a> or 1800 858 858 (Australia). You must be 18+, or the legal age in
+      your jurisdiction, to use any information here in connection with wagering.
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>
