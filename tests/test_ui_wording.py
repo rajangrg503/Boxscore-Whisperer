@@ -158,7 +158,7 @@ def test_a_saved_matchup_says_whether_it_came_from_a_scenario():
     text = source()
     calls = _calls_named(text, "append_predictions_batch")
     assert calls, "app.py no longer saves matchups at all?"
-    assert '"hypothetical": _matchup_from_scenario' in text, (
+    assert '"hypothetical": (_matchup_from_scenario' in text, (
         "the Full Matchup save no longer marks scenario-driven rows. Every "
         "line of a box score built from a typed sentence would be scored "
         "into the layer accuracy figure shown to every visitor."
@@ -343,3 +343,135 @@ def test_the_panel_says_it_is_not_an_explanation():
     text = source()
     assert "it does not say why anyone " in text
     assert "does not change the projection above" in text
+
+
+# ---------------------------------------------------------------------
+# FOURTH: per-player minutes on Full Matchup. Every one of these pins a
+# seam that type-checks and runs while being quietly wrong -- a control
+# that changes no number, a row that does not say whose assumption it
+# is, a total that disagrees with the row above it.
+# ---------------------------------------------------------------------
+
+def test_the_matchup_override_reaches_the_per_minute_core():
+    """It has to arrive at get_season_baseline. Wired anywhere else --
+    stored, displayed, handed to a layer -- the control would appear to
+    work and change nothing, which is the failure a reader never
+    reports because the page looks fine."""
+    text = source()
+    # Spelled out in full, and this matters: the Single Player tab has
+    # its own get_season_baseline(..., minutes_override=minutes_override)
+    # call, so the short substring was satisfied by the OTHER tab and
+    # stayed green when this one was deleted outright. Mutation-tested
+    # after that was found.
+    assert ("get_season_baseline(\n"
+            "            player_id, player_name, minutes_override=minutes_override)"
+            ) in text, (
+        "predict_player_vs_opponent no longer passes the override to "
+        "get_season_baseline")
+    assert "minutes_override=his_minutes," in text, (
+        "build_team_projection no longer passes each player's minutes to "
+        "predict_player_vs_opponent")
+
+
+def test_the_team_total_is_weighted_at_the_minutes_the_row_used():
+    """expected_team_total fits every player into the team's 240
+    minutes by his mpg. With the row already built at the reader's
+    twenty and the fit still using his logged thirty-four, the row and
+    the total would describe different players -- and only the total
+    would look wrong, so nobody would know which one to believe."""
+    text = source()
+    assert "minutes_override=his_minutes)" in text, (
+        "total_entry is no longer told about the override")
+    # The CONDITION as well as the assignment. Pinning only the
+    # assignment left this green when the branch around it was turned
+    # off -- the line was still in the file and no longer ran, which is
+    # the dead-guard shape this repo keeps finding in its own tests.
+    assert "if minutes_override is not None:" in text, (
+        "the override no longer reaches total_entry's minutes at all")
+    assert "mpg = float(minutes_override)" in text, (
+        "total_entry no longer weights him at the minutes his line was built "
+        "from")
+    gap = text.index("mpg = float(minutes_override)") - text.index(
+        "if minutes_override is not None:")
+    assert 0 < gap < 700, (
+        "the assignment is no longer inside the branch that guards it")
+
+
+def test_a_row_built_on_the_readers_minutes_says_so():
+    """Nine columns of a projected box score all look equally like the
+    model's work. One of them being the reader's own assumption is
+    obvious while you type it and invisible an hour later -- or to
+    whoever you sent the screenshot to."""
+    text = source()
+    assert 'f"{pname} · {his_minutes:g} min"' in text, (
+        "the table no longer marks which lines were built on minutes the "
+        "reader supplied")
+
+
+def test_the_calibration_is_not_claimed_over_matchup_overrides():
+    """Same rule as the Single Player tab: three seasons of backtests
+    measured the range built from the MODEL's minutes, and
+    spread_at_minutes has not been backtested at all."""
+    text = source()
+    assert "has not been backtested, so the 80% " in text, (
+        "the matchup table no longer withdraws the calibration claim over "
+        "reader-supplied minutes")
+
+
+def test_an_assumed_rotation_does_not_enter_the_public_record():
+    """A minutes override is an input the model did not measure, so the
+    row cannot be scored into the layer accuracy figure every visitor
+    sees. Unlike the out-list it changes one player's line and nobody
+    else's, so it is marked per row rather than over the whole box
+    score -- and hypothetical=False here would be silent."""
+    text = source()
+    assert 't["player_id"] in _assumed_minutes' in text, (
+        "rows built on reader-supplied minutes are no longer marked "
+        "hypothetical")
+    assert "_assumed_minutes = set(team_a_minutes) | set(team_b_minutes)" in text
+
+
+def test_the_scenario_fills_the_minutes_controls_before_they_are_built():
+    """Streamlit forbids writing a widget's key AFTER the widget is
+    instantiated. Same ordering as the out-pickers, same reason it is
+    pinned rather than remembered: it raises only on the run where
+    somebody actually types a sentence with minutes in it."""
+    text = source()
+    marker = 'st.session_state[f"min_players_{_side}"] = list(_said)'
+    assert marker in text, "the scenario no longer fills the minutes controls"
+    # The CALL, not the def. pick_minutes is defined hundreds of lines
+    # above the scenario block and runs hundreds of lines below it --
+    # comparing against the def would pin the opposite of the rule and
+    # pass for the wrong reason.
+    assert text.index(marker) < text.index("team_a_minutes = pick_minutes("), (
+        "the scenario writes the minutes controls after pick_minutes builds "
+        "them; Streamlit will raise on the run that reads a sentence")
+    assert 'st.session_state[f"min_value_{_side}_{_who}"] = int(_long)' in text, (
+        "only the multiselect is filled, so the reader would see a player "
+        "with a minutes box reading zero -- which means 'use the model's' "
+        "and is not what the sentence said")
+
+
+def test_a_failed_roster_does_not_empty_the_minutes_picker():
+    """st.multiselect drops any session_state value not in `options`.
+    The out-picker learned this the hard way in #70; the minutes picker
+    is built from the same roster fetch and would lose a reader's typed
+    minutes to one bad minute on nba.com."""
+    text = source()
+    start = text.index("def pick_minutes(")
+    body = text[start:start + 2000]
+    assert "if not roster:" in body and "return {}" in body, (
+        "pick_minutes no longer refuses to build the widget on an empty "
+        "roster")
+    assert body.index("if not roster:") < body.index("st.multiselect(")
+
+
+def test_the_preseason_note_no_longer_says_there_is_nothing_to_do():
+    """It said 'There is no minutes control on this tab yet'. Leaving
+    that up beside the control would send readers to the other tab to
+    do something they can now do here."""
+    text = source()
+    assert "no minutes control on this tab" not in text, (
+        "the preseason banner still tells readers this tab has no minutes "
+        "control")
+    assert "set it above and his " in text  # wraps in the source

@@ -117,6 +117,25 @@ DENIALS = (
     r"\bnot\s+sitting\b", r"\bnot\s+resting\b", r"\bnot\s+missing\b",
 )
 
+# A number of minutes, which IS something the engine can act on: the
+# baseline is a per-minute rate times projected minutes, so replacing
+# the minutes is the one reader input that changes a projection without
+# inventing anything (engine/minutes.py::minutes_aware_means).
+#
+# Checked BEFORE the undecided list below, and this ordering is the
+# whole point. "only play 20 minutes due to minutes restriction"
+# contains "minutes restriction", which is undecided -- a phrase that
+# means "we do not know how long he plays". But the reader just SAID
+# how long: twenty. Refusing that as half-available would be the app
+# ignoring the answer while quoting the question.
+MINUTES_PATTERN = re.compile(r"\b(\d{1,2})\s*(?:minutes|minute|mins|min|mpg)\b")
+
+# Below this the number is not a rotation, and above it there is no
+# such game. A typo ("2 minutes", "90 minutes") is refused rather than
+# projected, because a per-minute rate multiplied by a nonsense number
+# is a nonsense line delivered with a straight face.
+MIN_MINUTES, MAX_MINUTES = 4, 48
+
 # States we cannot act on, because the layer takes a player in or out
 # and nothing in between. Named separately so the reason can say so.
 UNDECIDED = ("questionable", "doubtful", "game-time decision",
@@ -402,20 +421,46 @@ def _candidates(clause, roster):
     return full or partial
 
 
+def minutes_in(clause):
+    """The minutes this clause asserts, or None.
+
+    Out-of-range comes back as None as well, and parse() tells those
+    two apart by looking for the pattern itself -- a reader who typed
+    "plays 2 minutes" gets told what the range is, rather than the
+    generic "no measured layer for this", which would be false: there
+    IS a layer for minutes and the number just was not one.
+    """
+    found = MINUTES_PATTERN.search(_fold(clause))
+    if not found:
+        return None
+    value = int(found.group(1))
+    if not MIN_MINUTES <= value <= MAX_MINUTES:
+        return None
+    return value
+
+
 def _state(clause):
-    """out, arriving, undecided, denied, or None."""
+    """out, minutes, arriving, undecided, denied, or None."""
     folded = _fold(clause)
     padded = f" {folded} "
 
     for pattern in DENIALS:
         if re.search(pattern, folded):
             return "denied"
+
+    # An out-signal outranks a number. "he is out for 20 minutes" is
+    # not a rotation, it is a contradiction, and the safe reading of a
+    # contradiction is the one that removes a player rather than the
+    # one that invents minutes for him.
+    said_out = any(f" {_fold(phrase)} " in padded for phrase in OUT_SIGNALS)
+
+    if not said_out and minutes_in(clause) is not None:
+        return "minutes"
     for phrase in UNDECIDED:
         if f" {_fold(phrase)} " in padded:
             return "undecided"
-    for phrase in OUT_SIGNALS:
-        if f" {_fold(phrase)} " in padded:
-            return "out"
+    if said_out:
+        return "out"
     for phrase in ARRIVING_SIGNALS:
         if f" {_fold(phrase)} " in padded:
             return "arriving"
@@ -451,6 +496,7 @@ def parse(text, teammates=(), opponents=(), subject=None):
     subject_list = [subject] if subject else []
 
     out_teammates, out_opponents, arriving = [], [], None
+    minutes_teammates, minutes_opponents = {}, {}
     applied, unmatched = [], []
 
     for clause, state in assertions(text, (teammates, opponents)):
@@ -459,9 +505,18 @@ def parse(text, teammates=(), opponents=(), subject=None):
         matches = here + there
 
         if state is None:
+            # A number that looked like minutes but was refused. Saying
+            # "no measured layer for this" here would be a lie by
+            # omission: the layer exists, and the number is the problem.
+            refused = MINUTES_PATTERN.search(_fold(clause))
             unmatched.append({
                 "clause": clause,
-                "reason": "no measured layer for this",
+                "reason": (
+                    f"{refused.group(1)} minutes is outside "
+                    f"{MIN_MINUTES}-{MAX_MINUTES}, which is as long as a "
+                    f"player can be on the floor"
+                    if refused is not None else "no measured layer for this"
+                ),
             })
             continue
 
@@ -506,6 +561,24 @@ def parse(text, teammates=(), opponents=(), subject=None):
             })
             continue
 
+        if state == "minutes":
+            asserted = minutes_in(clause)
+            target = minutes_teammates if here else minutes_opponents
+            control = ("Minutes for a player" if here
+                       else "Minutes for an opponent player")
+            if player_id in target:
+                continue
+            if len(target) >= MAX_PER_CONTROL:
+                unmatched.append({
+                    "clause": clause,
+                    "reason": f"minutes set for more than {MAX_PER_CONTROL} players",
+                })
+                continue
+            target[player_id] = asserted
+            applied.append({"clause": clause, "control": control,
+                            "player": f"{name} — {asserted} minutes"})
+            continue
+
         if state == "arriving":
             if here and arriving is None:
                 arriving = player_id
@@ -538,6 +611,8 @@ def parse(text, teammates=(), opponents=(), subject=None):
     return {
         "out_teammates": out_teammates,
         "out_opponents": out_opponents,
+        "minutes_teammates": minutes_teammates,
+        "minutes_opponents": minutes_opponents,
         "arriving": arriving,
         "applied": applied,
         "unmatched": unmatched,
