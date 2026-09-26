@@ -487,9 +487,18 @@ def parse(text, teammates=(), opponents=(), subject=None):
     the person being projected. Optional; omitting it only costs that
     one message its precision.
 
-    Returns a dict. `out_teammates`, `out_opponents` and `arriving` are
-    ready for the widgets; `applied` and `unmatched` are what the page
-    shows the reader.
+    Returns a dict. `out_teammates`, `out_opponents`, the two minutes
+    maps and `arriving` are ready for the widgets; `applied` and
+    `unmatched` are what the page shows the reader.
+
+    Every entry in `applied` carries an `effect` -- what was actually
+    done to that player, in words. The page used to supply that phrase
+    itself, hardcoded as "marked out", which was true of every applied
+    clause until minutes existed and then read "Jalen Williams -- 20
+    minutes marked out" on the live site. A player playing twenty
+    minutes is not out, and the panel whose whole job is to say what
+    the app did with your sentence is the last place that can afford to
+    say it wrong. The branch that knows what it did now says so.
     """
     teammates = list(teammates)
     opponents = list(opponents)
@@ -576,14 +585,14 @@ def parse(text, teammates=(), opponents=(), subject=None):
                 continue
             target[player_id] = asserted
             applied.append({"clause": clause, "control": control,
-                            "player": f"{name} — {asserted} minutes"})
+                            "player": name, "effect": f"{asserted} minutes"})
             continue
 
         if state == "arriving":
             if here and arriving is None:
                 arriving = player_id
                 applied.append({"clause": clause, "control": "New teammate arriving",
-                                "player": name})
+                                "player": name, "effect": "added to the lineup"})
             else:
                 unmatched.append({
                     "clause": clause,
@@ -606,7 +615,8 @@ def parse(text, teammates=(), opponents=(), subject=None):
             })
             continue
         target.append(player_id)
-        applied.append({"clause": clause, "control": control, "player": name})
+        applied.append({"clause": clause, "control": control, "player": name,
+                        "effect": "marked out"})
 
     return {
         "out_teammates": out_teammates,

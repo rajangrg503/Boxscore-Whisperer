@@ -460,7 +460,8 @@ def test_minutes_fill_the_control():
     assert result["minutes_teammates"] == {"1628369": 24}
     assert result["minutes_opponents"] == {}
     assert result["applied"][0]["control"] == "Minutes for a player"
-    assert "24 minutes" in result["applied"][0]["player"]
+    assert result["applied"][0]["player"] == "Chet Holmgren"
+    assert result["applied"][0]["effect"] == "24 minutes"
 
 
 def test_an_opponent_gets_his_own_control():
@@ -541,3 +542,34 @@ def test_out_and_minutes_can_both_come_from_one_sentence():
     assert result["out_teammates"] == ["1628369"]
     assert result["minutes_teammates"] == {"1631114": 20}
     assert len(result["applied"]) == 2
+
+
+def test_every_applied_clause_says_what_was_done_to_him():
+    """The panel prints this phrase verbatim. It used to be hardcoded in
+    app.py as "marked out", which was true of every applied clause until
+    minutes existed -- and then told readers on the live site that
+    "Jalen Williams — 20 minutes" had been marked out. He is playing
+    twenty minutes. The panel whose job is to say what the app did with
+    your sentence is the last place that can afford to be wrong about
+    it, so the branch that knows now says so."""
+    out = parse("Chet is out")["applied"][0]
+    assert out["effect"] == "marked out"
+
+    minutes = parse("Chet plays 20 minutes")["applied"][0]
+    assert minutes["effect"] == "20 minutes"
+    assert "out" not in minutes["effect"]
+
+    arriving = parse("Chet just signed", )["applied"]
+    if arriving:  # the arriving branch needs a teammate slot free
+        assert arriving[0]["effect"] == "added to the lineup"
+
+
+def test_no_applied_clause_is_missing_its_effect():
+    """The control. app.py falls back to a bland "applied" when the key
+    is absent, so a branch that forgot it would render something
+    harmless-looking and this test is the only thing that would
+    notice."""
+    result = parse("Chet is out, Jalen Williams plays 20 minutes. "
+                   "Wembanyama is injured")
+    assert len(result["applied"]) == 3
+    assert all(item.get("effect") for item in result["applied"])
