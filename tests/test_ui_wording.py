@@ -475,3 +475,17 @@ def test_the_preseason_note_no_longer_says_there_is_nothing_to_do():
         "the preseason banner still tells readers this tab has no minutes "
         "control")
     assert "set it above and his " in text  # wraps in the source
+
+
+def test_the_applied_panel_does_not_hardcode_what_happened():
+    """It printed "marked out" after every applied clause. That was
+    true of every one of them until minutes shipped, and then the live
+    site told readers "Jalen Williams — 20 minutes marked out" about a
+    player who was playing twenty minutes. The phrase now comes from
+    the parser branch that did the thing."""
+    text = source()
+    assert "item.get('effect')" in text, (
+        "the applied panel no longer prints what the parser actually did")
+    assert "**{item['player']}** marked out" not in text, (
+        "the applied panel is back to asserting every clause marked "
+        "somebody out")

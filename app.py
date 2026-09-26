@@ -4282,8 +4282,15 @@ with tab2:
                         st.markdown("**Applied**")
                         if matchup_scenario["applied"]:
                             for item in matchup_scenario["applied"]:
+                                # What was done, from the branch that did
+                                # it. Hardcoding "marked out" here was
+                                # true of every applied clause until
+                                # minutes existed, and then said "Jalen
+                                # Williams — 20 minutes marked out" to
+                                # every reader who typed one.
                                 st.markdown(
-                                    f"- **{item['player']}** marked out  \n"
+                                    f"- **{item['player']}** — "
+                                    f"{html.escape(item.get('effect') or 'applied')}  \n"
                                     f"  <span style='opacity:.6'>from “{html.escape(item['clause'])}”</span>",
                                     unsafe_allow_html=True,
                                 )
