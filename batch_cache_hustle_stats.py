@@ -18,9 +18,17 @@ Usage:
     pip install nba_api
     python batch_cache_hustle_stats.py
 
-Safe to re-run: it skips any season that's already cached. Delete the
-relevant data_cache/hustle_team_stats_<season>.json file if you want to
-force a re-fetch (e.g. partway through a season, for fresher numbers).
+Safe to re-run: a finished season is skipped on sight, and the
+CURRENT season is skipped only if it was fetched in the last
+batch_freshness.DAILY hours.
+
+That parenthetical used to read "delete the file if you want to force a
+re-fetch (e.g. partway through a season, for fresher numbers)" -- which
+named the problem exactly and left it as a manual step nobody was ever
+going to remember. Skipping the live season on existence means the
+first fetch after opening night stands in for the whole year: a
+one-game sample behind every opponent-defence adjustment the app makes,
+until somebody deletes a file by hand.
 """
 
 import json
@@ -32,6 +40,8 @@ import pandas as pd
 from nba_api.stats.endpoints import leaguehustlestatsteam
 
 from data_watchdog.gate import require_valid
+
+from batch_freshness import settled_or_fresh
 
 CACHE_DIR = Path("data_cache")
 CURRENT_SEASON = "2026-27"   # keep in sync with app.py's CURRENT_SEASON
@@ -60,7 +70,9 @@ def cache_hustle_stats(season: str) -> str:
     cache_key = f"hustle_team_stats_{season}"
     cache_path = _cache_key_to_path(cache_key)
 
-    if cache_path.exists():
+    # A finished season reads the same in five years; the live one
+    # accrues every night. See batch_freshness.settled_or_fresh.
+    if settled_or_fresh(cache_path, season, CURRENT_SEASON):
         return "skipped"
 
     for attempt in range(1, MAX_RETRIES + 1):

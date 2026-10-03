@@ -29,6 +29,8 @@ from nba_api.stats.endpoints import playerestimatedmetrics
 
 from data_watchdog.gate import require_valid
 
+from batch_freshness import settled_or_fresh
+
 CACHE_DIR = Path("data_cache")
 CURRENT_SEASON = "2026-27"   # keep in sync with app.py's CURRENT_SEASON
 PREVIOUS_SEASON = "2025-26"  # keep in sync with app.py's PREVIOUS_SEASON
@@ -55,7 +57,9 @@ def _save_df_cache(key: str, df: pd.DataFrame) -> None:
 def cache_metrics(season: str) -> str:
     cache_key = f"player_estimated_metrics_{season}"
     cache_path = _cache_key_to_path(cache_key)
-    if cache_path.exists():
+    # A finished season reads the same in five years; the live one
+    # accrues every night. See batch_freshness.settled_or_fresh.
+    if settled_or_fresh(cache_path, season, CURRENT_SEASON):
         return "skipped"
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -90,7 +94,7 @@ def main():
         print(f"[{i}/{len(SEASONS)}] {season}: {result}")
         time.sleep(REQUEST_DELAY)
 
-    print(f"\nDone. {counts['cached']} newly cached, {counts['skipped']} already had data, {counts['failed']} failed.")
+    print(f"\nDone. {counts['cached']} newly cached, {counts['skipped']} still fresh, {counts['failed']} failed.")
     print("Now run tools/pack_cache.py and commit data_cache.zip so the deployed app picks it up.")
 
 
