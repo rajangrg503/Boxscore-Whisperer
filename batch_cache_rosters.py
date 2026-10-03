@@ -16,9 +16,25 @@ Usage:
     pip install nba_api
     python batch_cache_rosters.py
 
-Safe to re-run: it skips any team that's already cached today. Delete
-the relevant data_cache/roster_<team_id>.json file if you want to force
-a re-fetch for one team (e.g. after a trade).
+Safe to re-run: a team whose roster was fetched in the last
+batch_freshness.DAILY hours is skipped, so running this twice in a
+morning costs nothing and running it tomorrow actually refreshes.
+
+That sentence used to say "already cached today" and the code said
+
+    if cache_path.exists():
+        return "skipped"
+
+with no date check in it anywhere. Found on 3 Oct 2026: all thirty
+rosters in the cache were from 10 September, because every run since
+had skipped every team. Brandon Ingram was still listed as a Raptor,
+Kawhi Leonard was not listed at all, and the app had been projecting
+that lineup for three weeks while every log line read "skipping" and
+every run reported success.
+
+A roster is never finished, so there is no settled version of it to
+keep -- unlike boxscore_{game_id}, where skipping on existence is
+right, and is why a refresh costs two hours and not two days.
 """
 
 import json
@@ -31,6 +47,9 @@ from nba_api.stats.static import teams
 from nba_api.stats.endpoints import commonteamroster
 
 from data_watchdog.gate import require_valid
+
+import batch_freshness
+from batch_freshness import cached_within
 
 CACHE_DIR = Path("data_cache")
 CURRENT_SEASON = "2026-27"  # keep in sync with app.py's CURRENT_SEASON
@@ -60,7 +79,10 @@ def cache_team_roster(team_id: int, team_full_name: str) -> str:
     cache_key = f"roster_{team_id}"
     cache_path = _cache_key_to_path(cache_key)
 
-    if cache_path.exists():
+    # Fetched recently enough to leave alone. NOT merely present:
+    # a roster that exists is not a roster that is right, and the
+    # difference was three weeks of the wrong Toronto lineup.
+    if cached_within(cache_path, batch_freshness.DAILY):
         return "skipped"
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -104,7 +126,7 @@ def main():
             print(f"[{i}/{total}] Already cached {team['full_name']} -- skipping")
         time.sleep(REQUEST_DELAY)
 
-    print(f"\nDone. {counts['cached']} newly cached, {counts['skipped']} already had data, {counts['failed']} failed.")
+    print(f"\nDone. {counts['cached']} newly cached, {counts['skipped']} still fresh, {counts['failed']} failed.")
     if counts["failed"] > 0:
         print("Some teams failed -- re-run this script to retry just those (already-cached ones are skipped).")
     print("Now run tools/pack_cache.py and commit data_cache.zip so the deployed app picks it up.")
