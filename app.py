@@ -1371,7 +1371,38 @@ def prediction_entry(col, base_mean, base_std, multiplier, n_games, spread_multi
     calibrated range, and the distribution behind both (None when the
     player is outside the fitted population -- too few prior games or no
     usable spread -- in which case the old +/-0.6 x spread band is kept
-    as a clearly-labelled fallback rather than inventing a probability)."""
+    as a clearly-labelled fallback rather than inventing a probability).
+
+    TWO CENTRES, AND THEY ARE NOT THE SAME NUMBER
+    "predicted" is the mean: the base rate times the layer multipliers.
+    "median" is the middle of the fitted distribution -- the number he
+    finishes above half the time.
+
+    They differ because NBA counting stats are skewed right. A player
+    cannot score fewer than zero and can score forty, so the long tail
+    on one side pulls the mean above the middle. For a six-point bench
+    scorer the gap is small. For a high-variance volume shooter it is
+    not, and it is biggest exactly where it does the most damage.
+
+    Which one belongs on screen depends on the question being asked.
+    "How many points does he add to the team total" is a mean --
+    expectations add and medians do not, which is why
+    engine/team_total.py is right to keep using the mean. "Is he over
+    or under this number" is a median, because that is the number with
+    half the outcomes either side.
+
+    The stat card and the projected box score answer the second
+    question, so they show the median. Showing a mean against a
+    threshold is the best-sourced error in public prop analysis: it
+    makes every projection read high against any number set at the
+    middle of the distribution, which manufactures a steady drip of
+    edges that were never there. The quantity on screen has to be the
+    quantity the reader is comparing.
+
+    With no fitted distribution there is no honest median either, so
+    the mean stands in; those rows already carry the "Rough range"
+    label that says as much.
+    """
     predicted = base_mean * multiplier
     spread = base_std if pd.notna(base_std) else predicted * 0.2
     spread *= spread_multiplier
@@ -1379,12 +1410,15 @@ def prediction_entry(col, base_mean, base_std, multiplier, n_games, spread_multi
     if dist is not None:
         low, high = dist.interval(RANGE_NOMINAL)
         nominal = RANGE_NOMINAL
+        median = dist.quantile(0.5)
     else:
         low, high = max(0.0, predicted - spread * 0.6), predicted + spread * 0.6
         nominal = None
+        median = predicted
     return {
         "base": base_mean,
         "predicted": predicted,
+        "median": median,
         "low": low,
         "high": high,
         "range_nominal": nominal,
@@ -2875,6 +2909,24 @@ with tab1:
                         "Not enough games behind this projection to use the calibrated range, "
                         "so this is the old rough band — treat it as indicative only."
                     )
+                # The big number is the MIDDLE of his distribution, not
+                # his average, and the difference is worth a tooltip
+                # rather than a silent swap -- a reader who knows the
+                # old number was a mean deserves to be told it moved,
+                # and a reader comparing it to a line needs to know it
+                # is the number with half his nights either side.
+                if p.get("dist") is not None:
+                    value_title = (
+                        f'The number he finishes above about half the time — the middle of his '
+                        f'range, not his average. His average is {p["predicted"]:.1f}, which sits '
+                        f'higher because big games pull an average up and nothing pulls it down '
+                        f'below zero. Compare a threshold to this number, not to the average.'
+                    )
+                else:
+                    value_title = (
+                        "Not enough games for a fitted distribution, so this is his average "
+                        "rather than the middle of his range — indicative only."
+                    )
                 chance_html = ""
                 # Same threshold reading as the hit-rate row below, and
                 # from the same function: a card saying "Clears 20 74%"
@@ -2890,7 +2942,8 @@ with tab1:
                 row_html += (
                     f'<div class="stat-card{" lead" if col == lead else ""}">'
                     f'<div class="stat-title">{label}</div>'
-                    f'<div class="stat-value">{p["predicted"]:.1f}</div>'
+                    f'<div class="stat-value" title="{html.escape(value_title)}">'
+                    f'{p["median"]:.1f}</div>'
                     f'<div class="stat-midpoint" title="{html.escape(range_title)}">{range_label} '
                     f'<b>{p["low"]:.0f}–{p["high"]:.0f}</b></div>'
                     f'{chance_html}'
@@ -3771,7 +3824,11 @@ with tab2:
             row = {"Player": pname if his_minutes is None
                    else f"{pname} · {his_minutes:g} min"}
             for col, label in STAT_COLUMNS:
-                row[label] = round(predictions[col]["predicted"], 1)
+                # The middle of his range, not his average -- see
+                # prediction_entry(). A box score read against posted
+                # numbers has to be the number with half his nights
+                # either side of it.
+                row[label] = round(predictions[col]["median"], 1)
             rows.append(row)
             trackable.append({
                 "player_id": pid, "player_full_name": pname,
