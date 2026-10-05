@@ -333,7 +333,8 @@ def _build_row(player_id, player_full_name, opponent_full_name, opponent_abbr,
     append_prediction_to_log() so append_predictions_batch() can reuse
     the exact same per-row construction (stat columns, layers_json)
     without duplicating it. predictions is {col: {"low", "predicted",
-    "high", "base"}}. layer_results is {layer_name: AdjustmentResult}
+    "high", "base"}} plus an optional "median", which is what the app
+    actually displays and therefore what gets logged as _mid. layer_results is {layer_name: AdjustmentResult}
     for every layer that fired -- optional. source distinguishes which
     tool produced this row ("single_player" | "full_matchup"); see
     module docstring. hypothetical marks a row whose inputs were the
@@ -356,7 +357,13 @@ def _build_row(player_id, player_full_name, opponent_full_name, opponent_abbr,
     for col, _ in STAT_COLUMNS:
         p = predictions[col]
         row[f"{col}_low"] = round(p["low"], 1)
-        row[f"{col}_mid"] = round(p["predicted"], 1)
+        # The number the app actually showed, which is the middle of
+        # the fitted distribution rather than the mean (app.py's
+        # prediction_entry explains why they differ). A record of a
+        # number nobody was shown would score the wrong thing. Older
+        # callers that build prediction dicts by hand carry no median,
+        # and for them the mean is the only centre there is.
+        row[f"{col}_mid"] = round(p.get("median", p["predicted"]), 1)
         row[f"{col}_high"] = round(p["high"], 1)
         row[f"{col}_actual"] = None
         row[f"{col}_hit"] = None
