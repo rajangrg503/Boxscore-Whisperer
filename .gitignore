@@ -39,6 +39,15 @@ backtest_player_games.csv
 # produced on request rather than republished.
 line_snapshots/
 
+# The same rule, one join further along. A slate record is our own
+# projections joined to the book's posted lines, so the file carries
+# their numbers and cannot be committed for the reason above -- it
+# makes no difference that these came off a different book's feed.
+# What travels instead is the card (our numbers, our picture) and the
+# SHA-256 of the record, so a scored claim can be audited against a
+# file produced on request rather than republished.
+slate_lines/
+
 # Our own projections travel WITH the repo -- unlike the raw odds, they
 # are ours and they are the claim. Only the scratch output of a dry run
 # is ignored.
