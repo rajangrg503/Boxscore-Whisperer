@@ -1557,6 +1557,13 @@ with st.sidebar:
                     "opponent_full_name", "game_date",
                     "status", "PTS_low", "PTS_mid", "PTS_high", "PTS_actual", "PTS_hit",
                 ]].copy()
+                # One note per row, written offline by tools/whisper.py:
+                # the recap once the game is resolved, else the pre-game
+                # read. Blank until that script has been run for the row.
+                display_log["note"] = (
+                    my_log_df["whisper_recap"].where(my_log_df["status"] == "resolved")
+                    .fillna(my_log_df["whisper"]).fillna("")
+                )
                 # Shown because the reader is the only person who can
                 # tell these apart afterwards, and a what-if sitting
                 # unlabelled beside real saves is the kind of thing you
@@ -1581,6 +1588,7 @@ with st.sidebar:
                     "opponent_full_name": "Opponent", "game_date": "Game Date",
                     "status": "Status", "PTS_low": "Pts Low", "PTS_mid": "Pts Mid",
                     "PTS_high": "Pts High", "PTS_actual": "Pts Actual", "PTS_hit": "Pts Hit?",
+                    "note": "Note",
                 })
                 st.dataframe(display_log, use_container_width=True, hide_index=True)
                 st.caption(

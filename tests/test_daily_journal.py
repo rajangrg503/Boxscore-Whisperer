@@ -1,0 +1,238 @@
+"""tools/daily_journal.py on a hand-built game, with the API, the cache
+and the model all faked. What's pinned here is the bookkeeping the
+written reason depends on: who won, which gaps count as edges and
+which way they cut, who is listed as missing, what counts as a
+projection miss, and that a reason with an invented number never
+reaches the page."""
+
+import datetime
+import os
+import sys
+
+import pandas as pd
+import pytest
+
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+
+import daily_journal as dj  # noqa: E402
+
+DAY = datetime.date(2026, 10, 21)
+
+
+def _player(pid, team, first, last, minutes, pts, reb, ast, *, fgm=0, fga=0,
+            fg3m=0, fg3a=0, fta=0, oreb=0, tov=0, comment=""):
+    return {
+        "gameId": "0022600001", "teamTricode": team, "personId": pid,
+        "firstName": first, "familyName": last, "comment": comment,
+        "minutes": minutes, "points": pts, "reboundsTotal": reb, "assists": ast,
+        "fieldGoalsMade": fgm, "fieldGoalsAttempted": fga,
+        "threePointersMade": fg3m, "threePointersAttempted": fg3a,
+        "freeThrowsAttempted": fta, "reboundsOffensive": oreb, "turnovers": tov,
+    }
+
+
+BOX = pd.DataFrame([
+    # BOS: hot from three, careful with the ball
+    _player(1, "BOS", "Al", "Star", "36:00", 38, 6, 5, fgm=13, fga=24, fg3m=8, fg3a=14, fta=6, oreb=1, tov=2),
+    _player(2, "BOS", "Bo", "Wing", "30:00", 20, 4, 3, fgm=8, fga=16, fg3m=6, fg3a=10, fta=2, oreb=1, tov=2),
+    _player(3, "BOS", "Cy", "Out", "", 0, 0, 0, comment="DNP - Injury/Illness"),
+    # NYK: cold from three, more turnovers, more offensive boards
+    _player(4, "NYK", "Di", "Guard", "35:00", 25, 3, 8, fgm=10, fga=22, fg3m=2, fg3a=9, fta=6, oreb=4, tov=6),
+    _player(5, "NYK", "Ed", "Big", "33:00", 18, 14, 2, fgm=8, fga=12, fg3m=0, fg3a=1, fta=4, oreb=6, tov=4),
+    _player(6, "NYK", "Fi", "Bench", "4:00", 0, 0, 0, fga=1),
+])
+
+PROJ = {
+    1: {"PTS": (18.0, 24.0, 30.0), "REB": (3.0, 5.0, 8.0), "AST": (2.0, 4.0, 6.0)},   # 38 pts: big miss
+    2: {"PTS": (10.0, 15.0, 21.0), "REB": (2.0, 4.0, 6.0), "AST": (1.0, 2.0, 4.0)},
+    3: {"PTS": (12.0, 16.0, 22.0)},                                                    # notable, out
+    4: {"PTS": (18.0, 24.0, 31.0), "REB": (2.0, 4.0, 6.0), "AST": (4.0, 6.0, 8.0)},
+    5: {"PTS": (10.0, 14.0, 19.0), "REB": (6.0, 9.0, 12.0), "AST": (1.0, 2.0, 3.0)},   # 14 reb: 2 over
+    6: {"PTS": (0.5, 2.0, 4.0)},                                                       # 0 pts: under MIN_MISS
+}
+
+
+# NYK led at the half; BOS won the third 25-8 and pulled away.
+SUMMARY = {
+    "line": pd.DataFrame([
+        {"teamTricode": "BOS", "period1Score": 10, "period2Score": 12, "period3Score": 25, "period4Score": 11, "score": 58},
+        {"teamTricode": "NYK", "period1Score": 14, "period2Score": 13, "period3Score": 8, "period4Score": 8, "score": 43},
+    ]),
+    "other": pd.DataFrame([
+        {"teamTricode": "BOS", "pointsInThePaint": 20, "pointsFastBreak": 12, "pointsSecondChance": 2,
+         "pointsFromTurnovers": 9, "benchPoints": 0, "biggestLead": 17, "biggestScoringRun": 15,
+         "leadChanges": 5, "timesTied": 2},
+        {"teamTricode": "NYK", "pointsInThePaint": 34, "pointsFastBreak": 2, "pointsSecondChance": 6,
+         "pointsFromTurnovers": 4, "benchPoints": 0, "biggestLead": 9, "biggestScoringRun": 8,
+         "leadChanges": 5, "timesTied": 2},
+    ]),
+}
+
+
+@pytest.fixture(autouse=True)
+def fake_world(monkeypatch):
+    monkeypatch.setattr(dj, "list_games", lambda day: ({"0022600001": {"home": "NYK", "away": "BOS"}}, "test"))
+    monkeypatch.setattr(dj, "load_boxscore", lambda gid: BOX.copy())
+    monkeypatch.setattr(dj, "load_summary", lambda gid: {k: v.copy() for k, v in SUMMARY.items()})
+    monkeypatch.setattr(dj, "pregame_projection", lambda pid, day: PROJ.get(pid))
+
+
+def _game():
+    return dj.analyse_game("0022600001", "NYK", "BOS", DAY, project=lambda pid, d: PROJ.get(pid))
+
+
+def test_home_away_from_matchup_strings():
+    games = dj._home_away([("1", "BOS @ NYK"), ("1", "NYK vs. BOS"), ("2", "junk")])
+    assert games == {"1": {"home": "NYK", "away": "BOS"}}
+
+
+def test_winner_edges_and_which_way_they_cut():
+    g = _game()
+    assert (g["winner"], g["loser"], g["margin"]) == ("BOS", "NYK", 15)
+    edges = " | ".join(g["edges"])
+    assert "BOS made 14 threes to NYK's 2" in edges
+    assert "NYK turned it over 10 times to BOS's 4" in edges
+    # NYK out-rebounded BOS on the offensive glass and still lost
+    assert "NYK grabbed 10 offensive rebounds to BOS's 2 (BOS won despite it)" in edges
+    assert g["edges"][0].startswith("BOS made 14 threes")  # biggest gap first
+
+
+def test_absences_only_list_notable_players():
+    g = _game()
+    assert g["absent"] == [{"name": "Cy Out", "team": "BOS", "why": "DNP - Injury/Illness"}]
+
+
+def test_projection_misses_need_a_real_gap():
+    g = _game()
+    misses = {(s["name"], s["label"]): s for s in g["surprises"]}
+    assert ("Al Star", "points") in misses and misses[("Al Star", "points")]["direction"] == "above"
+    assert ("Ed Big", "rebounds") in misses
+    # 0 points against 0.5-4 is under MIN_MISS -- not worth a line
+    assert not any(name == "Fi Bench" for name, _ in misses)
+    assert g["surprises"][0]["name"] == "Al Star"  # biggest first
+
+
+def test_facts_contain_every_number_a_reason_may_use():
+    facts = dj.game_facts(_game())
+    text = " ".join(facts)
+    assert "Final: BOS 58, NYK 43, played at NYK. BOS won by 15." in text
+    assert "Al Star had 38 points in 36 minutes, above the projected range of 18 to 30" in text
+    ok = "BOS made 14 threes to NYK's 2 and won by 15; Al Star had 38 points."
+    assert dj.whisper.check_note(ok, facts, dj.REASON_MAX_WORDS) is None
+    assert "not in the facts" in dj.whisper.check_note(
+        "BOS won by 15 on a 27-0 run.", facts, dj.REASON_MAX_WORDS)
+
+
+def test_journal_day_writes_page_with_checked_reason(fake_world, tmp_path):
+    def fake(facts, temperature):
+        return "BOS made 14 threes to NYK's 2, and Al Star scored 38 points."
+
+    path = dj.journal_day(DAY, generate=fake, out_dir=str(tmp_path), log=lambda *a: None)
+    page = open(path).read()
+    assert page.startswith("# NBA journal — Wed 21 Oct 2026 (US date)")
+    assert "## BOS 58 – 43 NYK  ·  at NYK" in page
+    assert "**Why:** BOS made 14 threes to NYK's 2, and Al Star scored 38 points." in page
+    assert "**Didn't play:** Cy Out (BOS) — DNP - Injury/Illness" in page
+    assert "| BOS | 52.5% | 14/24 |" in page
+    assert dj.INCOMPLETE_MARKER not in page
+
+
+def test_rejected_reason_leaves_the_facts_in_place(fake_world, tmp_path):
+    path = dj.journal_day(DAY, generate=lambda f, t: "Lock of the night, they won by 30.",
+                          out_dir=str(tmp_path), log=lambda *a: None)
+    page = open(path).read()
+    assert "Lock of the night" not in page and "by 30" not in page
+    assert "**Why:** BOS came back from 27–22 down at halftime to win by 15." in page
+    assert "_(auto)_" in page
+
+
+def test_finished_night_is_not_redone_but_incomplete_one_is(fake_world, tmp_path, monkeypatch):
+    calls = []
+    log = calls.append
+    dj.journal_day(DAY, out_dir=str(tmp_path), log=log)
+    dj.journal_day(DAY, out_dir=str(tmp_path), log=log)
+    assert "already written" in calls[-1]
+
+    monkeypatch.setattr(dj, "load_boxscore", lambda gid: None)
+    other = DAY + datetime.timedelta(days=1)
+    path = dj.journal_day(other, out_dir=str(tmp_path), log=log)
+    assert dj.INCOMPLETE_MARKER in open(path).read()
+    monkeypatch.setattr(dj, "load_boxscore", lambda gid: BOX.copy())
+    dj.journal_day(other, out_dir=str(tmp_path), log=log)
+    assert dj.INCOMPLETE_MARKER not in open(path).read()
+
+
+def test_us_yesterday_uses_eastern_time():
+    from zoneinfo import ZoneInfo
+    # Saturday 6:36am in Sydney is Friday afternoon in New York
+    sydney = datetime.datetime(2026, 10, 31, 6, 36, tzinfo=ZoneInfo("Australia/Sydney"))
+    eastern = sydney.astimezone(ZoneInfo("America/New_York"))
+    assert dj.us_yesterday(eastern) == datetime.date(2026, 10, 29)
+
+
+def test_team_codes_come_from_the_box_score_not_the_game_list():
+    g = dj.analyse_game("0022600001", "LAL", "GSW", DAY, project=lambda pid, d: PROJ.get(pid))
+    assert (g["winner"], g["tw"]["pts"], g["tl"]["pts"]) == ("BOS", 58, 43)
+    assert g["home"] is None
+    assert "played at" not in dj.game_facts(g)[0]
+
+
+def test_game_flow_facts_tell_the_story():
+    facts = " | ".join(dj.flow_facts(_game()))
+    assert "NYK led 27–22 at halftime; BOS came back to win." in facts
+    assert "BOS won the third quarter 25–8." in facts
+    assert "BOS's biggest lead was 17." in facts
+    assert "The lead changed hands 5 times." in facts
+    assert "BOS had a 15-point run." in facts
+    assert "overtime" not in facts
+
+
+def test_summary_stats_become_edges_both_ways(monkeypatch):
+    assert len(_game()["edges"]) == dj.MAX_EDGES   # capped, biggest first
+    monkeypatch.setattr(dj, "MAX_EDGES", 10)
+    edges = " | ".join(_game()["edges"])
+    assert "BOS scored 12 fast-break points to NYK's 2" in edges
+    assert "NYK scored 34 points in the paint to BOS's 20 (BOS won despite it)" in edges
+
+
+def test_fallback_reason_uses_only_the_facts():
+    g = _game()
+    text = dj.fallback_reason(g)
+    assert text.startswith("BOS came back from 27–22 down at halftime to win by 15.")
+    assert "Al Star led BOS with 38 points." in text
+    assert dj.whisper.check_note(text, dj.game_facts(g), dj.REASON_MAX_WORDS) is None
+
+
+def test_overtime_is_noticed():
+    ot = {k: v.copy() for k, v in SUMMARY.items()}
+    ot["line"].loc[0, "score"] = 64   # 6 more than the four quarters
+    ot["line"].loc[1, "score"] = 49
+    flow = dj.game_flow(ot, "BOS", "NYK")
+    assert flow["overtime"] and (flow["otw"], flow["otl"]) == (6, 6)
+
+
+def test_no_summary_still_gives_a_why_and_retries_later(monkeypatch, tmp_path):
+    monkeypatch.setattr(dj, "load_summary", lambda gid: None)
+    path = dj.journal_day(DAY, out_dir=str(tmp_path), log=lambda *a: None)
+    page = open(path).read()
+    assert "**Why:** BOS won by 15. BOS made 14 threes to NYK's 2. Al Star led BOS with 38 points. _(auto)_" in page
+    assert dj.INCOMPLETE_MARKER in page and "Quarter scores for 1 game(s)" in page
+    assert "| Q1 |" not in page
+
+
+def test_page_shows_quarters_and_model_reason_untagged(tmp_path):
+    path = dj.journal_day(DAY, generate=lambda f, t: "BOS won the third quarter 25–8 and won by 15.",
+                          out_dir=str(tmp_path), log=lambda *a: None)
+    page = open(path).read()
+    assert "**Why:** BOS won the third quarter 25–8 and won by 15.\n" in page
+    assert "| BOS | 10 | 12 | 25 | 11 | **58** |" in page
+    assert "| Team | FG% | 3PT | FTA | OREB | AST | TOV | Paint | Fast break | 2nd chance | Bench |" in page
+
+
+def test_fallback_skips_edges_that_favoured_the_loser():
+    g = _game()
+    g["edges"] = ["NYK grabbed 10 offensive rebounds to BOS's 2 (BOS won despite it)",
+                  "BOS made 14 threes to NYK's 2"]
+    text = dj.fallback_reason(g)
+    assert "offensive rebounds" not in text and "BOS made 14 threes to NYK's 2." in text

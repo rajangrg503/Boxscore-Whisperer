@@ -166,6 +166,12 @@ LOG_COLUMNS += [
 # column is what lets that query exclude them. See is_hypothetical()
 # for why reading it back is fussier than a bool should be.
 LOG_COLUMNS += ["hypothetical"]
+# Plain-English notes written OFFLINE by tools/whisper.py (a local
+# Llama 3.2 run on the developer's Mac -- the deployed app never calls
+# a model). `whisper` is the pre-game read, `whisper_recap` the
+# post-game one. Display only: nothing scores, filters or computes from
+# them. Additive like every column above -- old rows read back as NaN.
+LOG_COLUMNS += ["whisper", "whisper_recap"]
 
 def is_hypothetical(value):
     """Whether one row's `hypothetical` cell means yes.
