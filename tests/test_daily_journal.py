@@ -126,13 +126,13 @@ def test_facts_contain_every_number_a_reason_may_use():
 
 def test_journal_day_writes_page_with_checked_reason(fake_world, tmp_path):
     def fake(facts, temperature):
-        return "BOS made 14 threes to NYK's 2, and Al Star scored 38 points."
+        return "BOS trailed 27–22 at halftime and won by 15. BOS made 14 threes to NYK's 2, and Al Star scored 38 points."
 
     path = dj.journal_day(DAY, generate=fake, out_dir=str(tmp_path), log=lambda *a: None)
     page = open(path).read()
     assert page.startswith("# NBA journal — Wed 21 Oct 2026 (US date)")
     assert "## BOS 58 – 43 NYK  ·  at NYK" in page
-    assert "**Why:** BOS made 14 threes to NYK's 2, and Al Star scored 38 points." in page
+    assert "**Why:** BOS trailed 27–22 at halftime and won by 15. BOS made 14 threes to NYK's 2, and Al Star scored 38 points.\n" in page
     assert "**Didn't play:** Cy Out (BOS) — DNP - Injury/Illness" in page
     assert "| BOS | 52.5% | 14/24 |" in page
     assert dj.INCOMPLETE_MARKER not in page
@@ -143,7 +143,7 @@ def test_rejected_reason_leaves_the_facts_in_place(fake_world, tmp_path):
                           out_dir=str(tmp_path), log=lambda *a: None)
     page = open(path).read()
     assert "Lock of the night" not in page and "by 30" not in page
-    assert "**Why:** BOS came back from 27–22 down at halftime to win by 15." in page
+    assert "**Why:** BOS trailed 27–22 at halftime and won by 15." in page
     assert "_(auto)_" in page
 
 
@@ -199,7 +199,7 @@ def test_summary_stats_become_edges_both_ways(monkeypatch):
 def test_fallback_reason_uses_only_the_facts():
     g = _game()
     text = dj.fallback_reason(g)
-    assert text.startswith("BOS came back from 27–22 down at halftime to win by 15.")
+    assert text.startswith("BOS trailed 27–22 at halftime and won by 15.")
     assert "Al Star led BOS with 38 points." in text
     assert dj.whisper.check_note(text, dj.game_facts(g), dj.REASON_MAX_WORDS) is None
 
@@ -216,16 +216,17 @@ def test_no_summary_still_gives_a_why_and_retries_later(monkeypatch, tmp_path):
     monkeypatch.setattr(dj, "load_summary", lambda gid: None)
     path = dj.journal_day(DAY, out_dir=str(tmp_path), log=lambda *a: None)
     page = open(path).read()
-    assert "**Why:** BOS won by 15. BOS made 14 threes to NYK's 2. Al Star led BOS with 38 points. _(auto)_" in page
+    assert ("**Why:** BOS won by 15; BOS made 14 threes to NYK's 2. "
+            "NYK turned it over 10 times to BOS's 4. Al Star led BOS with 38 points. _(auto)_") in page
     assert dj.INCOMPLETE_MARKER in page and "Quarter scores for 1 game(s)" in page
     assert "| Q1 |" not in page
 
 
 def test_page_shows_quarters_and_model_reason_untagged(tmp_path):
-    path = dj.journal_day(DAY, generate=lambda f, t: "BOS won the third quarter 25–8 and won by 15.",
+    path = dj.journal_day(DAY, generate=lambda f, t: "BOS trailed 27–22 at halftime and won by 15, then won the third quarter 25–8.",
                           out_dir=str(tmp_path), log=lambda *a: None)
     page = open(path).read()
-    assert "**Why:** BOS won the third quarter 25–8 and won by 15.\n" in page
+    assert "**Why:** BOS trailed 27–22 at halftime and won by 15, then won the third quarter 25–8.\n" in page
     assert "| BOS | 10 | 12 | 25 | 11 | **58** |" in page
     assert "| Team | FG% | 3PT | FTA | OREB | AST | TOV | Paint | Fast break | 2nd chance | Bench |" in page
 
@@ -236,3 +237,53 @@ def test_fallback_skips_edges_that_favoured_the_loser():
                   "BOS made 14 threes to NYK's 2"]
     text = dj.fallback_reason(g)
     assert "offensive rebounds" not in text and "BOS made 14 threes to NYK's 2." in text
+
+
+def _with_flow(**changes):
+    g = _game()
+    flow = dict(g["flow"])
+    flow.update(changes.pop("flow", {}))
+    g["flow"] = flow
+    for team, values in changes.items():
+        g[team] = {**g[team], **values}
+    return g
+
+
+def test_main_story_priority():
+    # A 10+ point comeback beats everything.
+    assert dj.main_story(_with_flow(tl={"biggest_lead": 15})) == "BOS came back from 15 down to win by 15."
+    # Then a halftime deficit (the fixture: NYK led 27-22, biggest lead 9).
+    assert dj.main_story(_game()) == "BOS trailed 27–22 at halftime and won by 15."
+    # Then a big quarter: "pulled away" only late in a game close at the half.
+    late = _with_flow(flow={"half": (40, 38), "decisive": ("fourth", 33, 20)})
+    assert dj.main_story(late) == "BOS pulled away in the fourth quarter, winning it 33–20, and won by 15."
+    early = _with_flow(flow={"half": (60, 38), "decisive": ("first", 35, 20)})
+    assert dj.main_story(early) == "BOS won the first quarter 35–20 and won by 15."
+    # Then the biggest edge that helped the winner.
+    small = _with_flow(flow={"half": (40, 38), "decisive": ("second", 30, 22)})
+    assert dj.main_story(small) == "BOS won by 15; BOS made 14 threes to NYK's 2."
+
+
+def test_reason_check_rules():
+    g = _game()
+    check = dj.reason_check(g, dj.game_facts(g))
+    good = "BOS trailed 27–22 at halftime and won by 15. BOS made 14 threes to NYK's 2."
+    assert check(good) is None
+    assert "left out the main story" in check("BOS made 14 threes to NYK's 2 and won by 15.")
+    assert "overclaimed" in check(good + " The threes were decisive.")
+    assert "team name 'Celtics'" in check(good + " The Celtics shot well.")
+    assert "repeated Al Star" in check(good + " Al Star scored 38. Al Star also had 5 assists.")
+
+
+def test_fallback_names_tied_top_scorers():
+    g = _game()
+    g["top"] = [{**g["top"][0], "pts": 20}] + g["top"][1:]   # Al Star now ties Bo Wing on 20
+    assert "Al Star and Bo Wing led BOS with 20 points each." in dj.fallback_reason(g)
+
+
+def test_lead_changed_hands_once():
+    assert "The lead changed hands once." in dj.flow_facts(_with_flow(tw={"lead_changes": 1}))
+
+
+def test_prompt_puts_main_story_first():
+    assert dj.game_facts(_game())[0] == "Main story: BOS trailed 27–22 at halftime and won by 15."

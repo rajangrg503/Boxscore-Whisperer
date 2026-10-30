@@ -45,6 +45,7 @@ import argparse
 import datetime
 import glob
 import os
+import re
 import sys
 from zoneinfo import ZoneInfo
 
@@ -107,12 +108,43 @@ ORDINAL = ["first", "second", "third", "fourth"]
 DECISIVE_QUARTER = 6
 NOTABLE_RUN = 12
 
+# A deficit this big that the winner overturned is the story of the game.
+COMEBACK_LEAD = 10
+# A quarter won by this much is the story when nothing bigger happened.
+STORY_QUARTER = 10
+
+# Words that crown one fact as THE cause. The main story is chosen in
+# Python; the model doesn't get to promote a different fact over it.
+OVERCLAIM = ["decisive", "crucial", "pivotal", "turning point", "key factor", "key to",
+             "the key", "sealed", "clinched"]
+
+
+def _team_words():
+    """Cities and nicknames ('Portland', 'Trail Blazers'). The facts call
+    teams by code only, so any of these in a note is something the model
+    brought in itself."""
+    try:
+        from nba_api.stats.static import teams
+    except ImportError:
+        return []
+    words = set()
+    for t in teams.get_teams():
+        words.update({t["city"], t["nickname"], t["full_name"]})
+        words.add(t["full_name"].rsplit(" ", 1)[-1])  # "Blazers"
+    return sorted(words, key=len, reverse=True)
+
+
+TEAM_WORDS = _team_words()
+
 REASON_PROMPT = f"""You write the "why" line in an NBA game journal.
 Rules:
 - Use ONLY the facts given. Never add injuries, momentum, coaching, effort or any cause that is not listed.
-- Copy numbers exactly as written in the facts. Do not calculate new ones.
+- The first fact is the Main story. Your first sentence must say it, with its numbers.
+- Then add one or two supporting facts from the list. Mention each player at most once.
+- Copy numbers exactly as written. Do not calculate new ones.
+- Call teams only by the three-letter codes in the facts (like MEM). No city names or nicknames.
+- Do not call anything {", ".join(repr(w) for w in OVERCLAIM[:5])} or similar.
 - 2 or 3 sentences, at most {REASON_MAX_WORDS} words, plain calm English.
-- Lead with the edge that mattered most, then a standout or missing player if one is listed.
 - Describe, never advise. Never use these words: {", ".join(whisper.BANNED_WORDS)}.
 - Output the sentences only. No title, no bullet points."""
 
@@ -437,7 +469,8 @@ def analyse_game(game_id, home, away, day, project=None):
 
 def game_facts(g):
     venue = f", played at {g['home']}" if g["home"] else ""
-    facts = [f"Final: {g['winner']} {g['tw']['pts']}, {g['loser']} {g['tl']['pts']}"
+    facts = [f"Main story: {main_story(g)}",
+             f"Final: {g['winner']} {g['tw']['pts']}, {g['loser']} {g['tl']['pts']}"
              f"{venue}. {g['winner']} won by {g['margin']}."]
     facts += flow_facts(g)
     facts += g["edges"] or ["No team stat gap stood out; the box score was close across the board."]
@@ -449,6 +482,63 @@ def game_facts(g):
         facts.append(f"{s['name']} had {_count(s['actual'], s['label'])} in {_count(s['min'], 'minutes')}, {s['direction']} "
                      f"the projected range of {_n(s['low'])} to {_n(s['high'])}")
     return facts
+
+
+def main_story(g):
+    """The one fact that best explains the result, chosen by rule, in
+    this order: a comeback from 10+ down, a halftime deficit overturned,
+    a quarter won by 10+, the biggest box-score edge that helped the
+    winner, a smaller decisive quarter, then the winner's top scorer."""
+    w, l, margin, f = g["winner"], g["loser"], g["margin"], g.get("flow")
+    win = f"won by {margin}"
+    behind = g["tl"].get("biggest_lead") or 0
+    if behind >= COMEBACK_LEAD:
+        return f"{w} came back from {behind} down to win by {margin}."
+    if f and f["half"][1] > f["half"][0]:
+        hw, hl = f["half"]
+        return f"{w} trailed {hl}–{hw} at halftime and {win}."
+    if f and f["decisive"] and f["decisive"][1] - f["decisive"][2] >= STORY_QUARTER:
+        name, a, b = f["decisive"]
+        if name in ("third", "fourth") and abs(f["half"][0] - f["half"][1]) <= 6:
+            return f"{w} pulled away in the {name} quarter, winning it {a}–{b}, and {win}."
+        return f"{w} won the {name} quarter {a}–{b} and {win}."
+    edge = next((e for e in g["edges"] if not e.endswith("won despite it)")), None)
+    if edge:
+        return f"{w} {win}; {edge}."
+    if f and f["decisive"]:
+        name, a, b = f["decisive"]
+        return f"{w} won the {name} quarter {a}–{b} and {win}."
+    lead = next((s for s in g["top"] if s["team"] == w), None)
+    if lead:
+        return f"{w} {win}, led by {lead['name']}'s {lead['pts']} points."
+    return f"{w} {win}."
+
+
+def reason_check(g, facts):
+    """Journal rules on top of whisper.check_note: the note must carry the
+    main story's numbers, crown nothing else, name teams by code only, and
+    not repeat a player."""
+    story_numbers = whisper._NUMBER.findall(main_story(g))
+    fact_text = " ".join(facts)
+    people = [s["name"] for s in g["top"]] + [s["name"] for s in g["surprises"]]
+
+    def check(note):
+        found = whisper._NUMBER.findall(note)
+        missing = [n for n in story_numbers if n not in found]
+        if missing:
+            return f"left out the main story ({', '.join(missing)})"
+        lowered = note.lower()
+        for word in OVERCLAIM:
+            if re.search(rf"\b{re.escape(word)}\b", lowered):
+                return f"overclaimed with '{word}'"
+        for word in TEAM_WORDS:
+            if re.search(rf"\b{re.escape(word)}\b", note) and word not in fact_text:
+                return f"used a team name '{word}' instead of the code"
+        for name in set(people):
+            if note.count(name) > 1:
+                return f"repeated {name}"
+        return None
+    return check
 
 
 def flow_facts(g):
@@ -475,7 +565,9 @@ def flow_facts(g):
     if (tl.get("biggest_lead") or 0) >= 10:
         out.append(f"{l} led by as many as {tl['biggest_lead']}.")
     if (tw.get("lead_changes") or 0) >= 1:
-        out.append(f"The lead changed hands {tw['lead_changes']} times.")
+        changes = tw["lead_changes"]
+        out.append("The lead changed hands once." if changes == 1
+                   else f"The lead changed hands {changes} times.")
     runs = [(t, d.get("run") or 0) for t, d in ((w, tw), (l, tl))]
     team, run = max(runs, key=lambda x: x[1])
     if run >= NOTABLE_RUN:
@@ -485,24 +577,23 @@ def flow_facts(g):
 
 def fallback_reason(g):
     """A plain 'why' built only from the game's own facts, for when the
-    model is off or its line was rejected. Never empty for a played game."""
-    w, margin, f = g["winner"], g["margin"], g.get("flow")
-    if f and f["half"][1] > f["half"][0]:
-        hw, hl = f["half"]
-        first = f"{w} came back from {hl}–{hw} down at halftime to win by {margin}"
-    elif f and f["decisive"]:
-        name, a, b = f["decisive"]
-        first = f"{w} won by {margin}, taking the {name} quarter {a}–{b}"
-    else:
-        first = f"{w} won by {margin}"
-    sentences = [first + "."]
-    # Only an edge that helped the winner explains the win.
-    edge = next((e for e in g["edges"] if not e.endswith("won despite it)")), None)
+    model is off or its line was rejected. Never empty for a played game.
+    Same main story the model is given, then one supporting fact."""
+    story = main_story(g)
+    sentences = [story]
+    # Only an edge that helped the winner explains the win, and not the
+    # one the main story already used.
+    edge = next((e for e in g["edges"]
+                 if not e.endswith("won despite it)") and e not in story), None)
     if edge:
         sentences.append(edge[0].upper() + edge[1:] + ".")
-    lead = next((s for s in g["top"] if s["team"] == w), None)
-    if lead:
-        sentences.append(f"{lead['name']} led {w} with {lead['pts']} points.")
+    mine = [s for s in g["top"] if s["team"] == g["winner"]]
+    if mine and mine[0]["name"] not in story:
+        tied = [s["name"] for s in mine if s["pts"] == mine[0]["pts"]]
+        if len(tied) > 1:
+            sentences.append(f"{' and '.join(tied)} led {g['winner']} with {mine[0]['pts']} points each.")
+        else:
+            sentences.append(f"{tied[0]} led {g['winner']} with {mine[0]['pts']} points.")
     return " ".join(sentences)
 
 
@@ -602,7 +693,9 @@ def journal_day(day, generate=None, out_dir=JOURNAL_DIR, force=False, log=print)
     for g in games:
         if g["missing"] or generate is None:
             continue
-        note, why_not = whisper.write_note(game_facts(g), generate, REASON_MAX_WORDS)
+        facts = game_facts(g)
+        note, why_not = whisper.write_note(facts, generate, REASON_MAX_WORDS,
+                                           extra_check=reason_check(g, facts))
         label = f"{g['winner']} over {g['loser']}"
         if note:
             reasons[g["game_id"]] = (note, "model")

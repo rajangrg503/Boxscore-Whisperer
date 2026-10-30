@@ -214,12 +214,15 @@ def make_generator(model, system_prompt=SYSTEM_PROMPT, max_tokens=120):
     return generate
 
 
-def write_note(facts, generate, max_words=MAX_WORDS):
-    """(note, None) or (None, reason). Two tries: normal, then fully greedy."""
+def write_note(facts, generate, max_words=MAX_WORDS, extra_check=None):
+    """(note, None) or (None, reason). Two tries: normal, then fully greedy.
+    extra_check(note) -> None or a reason, for caller-specific rules."""
     reason = None
     for temperature in (0.3, 0.0):
         note = generate(facts, temperature)
         reason = check_note(note, facts, max_words)
+        if reason is None and extra_check is not None:
+            reason = extra_check(note)
         if reason is None:
             return note, None
     return None, reason
