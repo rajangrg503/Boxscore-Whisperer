@@ -83,3 +83,18 @@ def test_misses_tab_offers_to_rebuild_old_nights(journal_dir):
     at = AppTest.from_file(APP, default_timeout=60).run()
     assert not at.exception
     assert any(b.label == "Rebuild 1 older night" for b in at.button)
+
+
+def test_picks_tab_empty_then_with_a_slip(journal_dir):
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    assert not at.exception
+    assert "Your picks" in _text(at)
+
+    import picks as pk
+    pk.save_slip({"source": "sportsbet", "price": 5.0, "placed_at": "2026-10-21T10:00:00+11:00",
+                  "legs": [{"player": "Al Star", "pid": None, "team": "BOS", "stat": "PTS",
+                            "line": 19.5, "us_date": DAY.isoformat(), "price": None}]},
+                 picks_dir=str(journal_dir / "picks"))
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    assert not at.exception
+    assert "1-leg multi at 5.00" in _text(at)

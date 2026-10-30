@@ -16,6 +16,10 @@ WHAT IT SHOWS
   Misses  -- where the projections go wrong across every night: by stat,
              whether the misses came from minutes or per-minute output,
              and the players who keep missing the same way.
+  Picks   -- your own bet slips: drop in Sportsbet screenshots, check what
+             was read, and every leg is graded against the box score and
+             the app's projection. Describes how picks went; never
+             suggests one.
   Season  -- how often the projections landed in their 80% range, night
              by night, and how many Why lines Llama wrote.
 
@@ -40,9 +44,11 @@ import streamlit as st  # noqa: E402
 
 import daily_journal as dj  # noqa: E402
 import journal_insights as ji  # noqa: E402
+import picks as pk  # noqa: E402
 import whisper  # noqa: E402
 
 JOURNAL_DIR = os.environ.get("BW_JOURNAL_DIR", "").strip() or dj.JOURNAL_DIR
+PICKS_DIR = os.path.join(JOURNAL_DIR, "picks")
 MODEL = whisper.DEFAULT_MODEL
 FAVICON = os.path.join(REPO_ROOT, "assets", "favicon.png")
 
@@ -141,6 +147,31 @@ section[data-testid="stSidebar"] .block-container { padding-top: 1.6rem; }
 .jr-key i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 .35rem 0 .9rem;
             vertical-align: -.05rem; }
 .jr-key i:first-child { margin-left: 0; }
+.stMarkdown table.jr-legs { width: 100%; border-collapse: collapse; border: none; font-size: .92rem;
+           font-variant-numeric: tabular-nums; margin: .6rem 0 .2rem; }
+.stMarkdown table.jr-legs tr, .stMarkdown table.jr-legs td { border: none; background: transparent; }
+.stMarkdown table.jr-legs td { padding: .34rem .7rem .34rem 0; border-top: 1px solid var(--jr-border);
+              vertical-align: top; color: var(--jr-muted); }
+.stMarkdown table.jr-legs tr:first-child td { border-top: none; }
+.stMarkdown table.jr-legs td.who { color: var(--jr-text); font-weight: 500; }
+.stMarkdown table.jr-legs td.num { text-align: right; white-space: nowrap; }
+.stMarkdown table.jr-legs td.num b { color: var(--jr-text); font-weight: 600; }
+.jr-legs .m-proj { display: none; }
+@media (max-width: 640px) {
+  .stMarkdown table.jr-legs td.proj { display: none; }
+  .jr-legs .m-proj { display: block; font-size: .8rem; color: var(--jr-faint); margin-top: .1rem; }
+  .stMarkdown table.jr-legs td.who { width: 40%; }
+}
+.jr-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: .1rem;
+          background: var(--jr-faint); vertical-align: .1rem; }
+.jr-dot.won { background: #22c55e; } .jr-dot.lost { background: #f87171; }
+.jr-slip-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: .2rem .8rem; }
+.jr-slip-head .title { font-weight: 700; font-size: 1.08rem; }
+.jr-slip-head .when { color: var(--jr-faint); font-size: .86rem; }
+.jr-chip { margin-left: auto; font-size: .82rem; font-weight: 600; padding: .12rem .55rem; border-radius: 999px;
+           border: 1px solid var(--jr-border); color: var(--jr-muted); }
+.jr-chip.won { color: #4ade80; border-color: rgba(34,197,94,.35); }
+.jr-chip.lost { color: #f87171; border-color: rgba(248,113,113,.3); }
 .jr-empty { border: 1px dashed var(--jr-border); border-radius: 12px; padding: 2rem 1.4rem;
             color: var(--jr-muted); max-width: 52ch; line-height: 1.6; }
 .jr-empty b { color: var(--jr-text); }
@@ -537,6 +568,259 @@ def render_misses(nights):
             st.rerun()
 
 
+STAT_CHOICES = {label.capitalize(): code for code, (_, label) in pk.STATS.items()}
+STAT_LABELS = {code: label for label, code in STAT_CHOICES.items()}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def graded(slip_json):
+    return pk.grade_slip(json.loads(slip_json))
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def roster_names():
+    return pk.known_players()
+
+
+def read_upload(upload):
+    """Recognise and parse one uploaded screenshot, once per file."""
+    data = upload.getvalue()
+    key = "ocr_" + pk.hashlib.sha1(data).hexdigest()[:12]
+    if key not in st.session_state:
+        os.makedirs(os.path.join(PICKS_DIR, "_incoming"), exist_ok=True)
+        path = os.path.join(PICKS_DIR, "_incoming", key + os.path.splitext(upload.name)[1].lower())
+        with open(path, "wb") as f:
+            f.write(data)
+        try:
+            lines = pk.read_image_lines(path)
+            st.session_state[key] = pk.parse_sportsbet(lines, roster_names())
+        except pk.TextRecognitionUnavailable as error:
+            st.session_state[key] = {"error": str(error)}
+        except Exception as error:
+            st.session_state[key] = {"error": f"Couldn't read this screenshot ({error})."}
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    return key, data
+
+
+def review_upload(upload, index):
+    """One screenshot's legs in an editable table. Returns the slip to save, or None."""
+    key, data = read_upload(upload)
+    parsed = st.session_state[key]
+    with st.container(border=True):
+        left, right = st.columns([1, 2.6], gap="medium")
+        with left:
+            st.image(data, use_container_width=True)
+        with right:
+            if "error" in parsed:
+                st.markdown(f"<div class='jr-note'>{esc(parsed['error'])}</div>", unsafe_allow_html=True)
+                return None
+            sid = pk.slip_id(parsed)
+            if os.path.exists(os.path.join(PICKS_DIR, f"{sid}.json")):
+                st.markdown("<p class='jr-p'>This slip is already saved.</p>", unsafe_allow_html=True)
+                return None
+            for problem in parsed.get("problems", []):
+                st.markdown(f"<div class='jr-note'>{esc(problem)}</div>", unsafe_allow_html=True)
+            price = st.number_input("Price on the slip", value=float(parsed.get("price") or 0.0),
+                                    min_value=0.0, step=0.01, format="%.2f", key=f"price_{key}")
+            frame = pd.DataFrame([{
+                "Player": l["player"], "Stat": STAT_LABELS.get(l["stat"], "Points"),
+                "Needs more than": l["line"],
+                "US date": datetime.date.fromisoformat(l["us_date"]) if l["us_date"] else None,
+                "Check": ", ".join(l.get("needs_review") or []),
+            } for l in parsed["legs"]])
+            if frame.empty:
+                frame = pd.DataFrame(columns=["Player", "Stat", "Needs more than", "US date", "Check"])
+            edited = st.data_editor(
+                frame, key=f"legs_{key}", num_rows="dynamic", hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Stat": st.column_config.SelectboxColumn(options=list(STAT_CHOICES), required=True),
+                    "Needs more than": st.column_config.NumberColumn(
+                        format="%.1f", help="16+ points is more than 15.5"),
+                    "US date": st.column_config.DateColumn(format="ddd D MMM",
+                                                           help="The US date the game was played"),
+                    "Check": st.column_config.TextColumn(disabled=True),
+                })
+            st.caption("Check each row against the screenshot and fix anything misread. "
+                       "Rows can be added or deleted.")
+    names = roster_names()
+    legs = []
+    for _, row in edited.iterrows():
+        if not str(row.get("Player") or "").strip():
+            continue
+        found = pk.match_player(str(row["Player"]), names)
+        when = row.get("US date")
+        legs.append({
+            "player": found[2] if found else str(row["Player"]).strip(),
+            "pid": found[0] if found else None, "team": found[1] if found else None,
+            "stat": STAT_CHOICES.get(row.get("Stat"), "PTS"),
+            "line": None if pd.isna(row.get("Needs more than")) else float(row["Needs more than"]),
+            "us_date": when.isoformat() if hasattr(when, "isoformat") and not pd.isna(when) else None,
+            "price": None,
+        })
+    return {**parsed, "price": price or None, "legs": legs}, data, upload.name
+
+
+def slip_card(slip):
+    g = graded(json.dumps(slip, sort_keys=True))
+    placed = datetime.datetime.fromisoformat(slip["placed_at"]) if slip.get("placed_at") else None
+    n = len(g["legs"])
+    title = f"{n}-leg multi" + (f" at {slip['price']:.2f}" if slip.get("price") else "")
+    if g["result"] == "won":
+        chip, cls = "Landed", "won"
+    elif g["result"] == "lost":
+        chip = ("Lost by 1 leg" if g["legs_lost"] == 1 else f"Lost by {g['legs_lost']} legs")
+        cls = "lost"
+    else:
+        waiting = sum(l["result"] == "pending" for l in g["legs"])
+        chip, cls = (f"Waiting on {waiting} leg{'s' if waiting != 1 else ''}" if waiting
+                     else "Needs checking"), ""
+    rows = []
+    for l in g["legs"]:
+        result = l["result"]
+        actual = ("" if l["actual"] is None else f"<b>{dj._n(l['actual'])}</b>"
+                  + (f" in {dj._n(l['min'])} min" if l.get("min") else ""))
+        if result == "void":
+            actual = "didn't play"
+        proj = ""
+        if l.get("proj"):
+            p = l["proj"]
+            proj = (f"{dj._n(p['low'])}–{dj._n(p['high'])}, mid {dj._n(p['mid'])}"
+                    + (" (rough)" if p["rough"] else ""))
+        elif result != "unreadable":
+            proj = "no projection"
+        rows.append(f"<tr><td style='width:1.1rem'><span class='jr-dot {result}'></span></td>"
+                    f"<td class='who'>{esc(l['player'])}</td>"
+                    f"<td>{esc(pk.leg_label(l))}<span class='m-proj'>{proj}</span></td>"
+                    f"<td class='num'>{actual}</td><td class='num proj'>{proj}</td></tr>")
+    with st.container(border=True):
+        st.markdown(
+            "<div class='jr-slip-head'>"
+            f"<span class='title'>{esc(title)}</span>"
+            + (f"<span class='when'>placed {placed.strftime('%a %-d %b, %-I:%M %p')}</span>" if placed else "")
+            + f"<span class='jr-chip {cls}'>{chip}</span></div>"
+            "<table class='jr-legs'>" + "".join(rows) + "</table>",
+            unsafe_allow_html=True)
+        cols = st.columns([1.3, 1.1, 3], gap="small")
+        if slip.get("image"):
+            with cols[0].popover("Screenshot", use_container_width=True):
+                st.image(os.path.join(PICKS_DIR, slip["image"]))
+        with cols[1].popover("Remove", use_container_width=True):
+            st.markdown("Remove this slip from your picks? This can't be undone.")
+            if st.button("Remove slip", key=f"rm_{slip['id']}", type="primary"):
+                pk.remove_slip(slip["id"], PICKS_DIR)
+                graded.clear()
+                st.rerun()
+
+
+def bar_row(name, won, total):
+    pct = 100 * won / total if total else 0
+    return ("<div class='jr-stat'>"
+            f"<span class='jr-stat-name'>{esc(name)}</span><div class='jr-split'>"
+            f"<span style='width:{pct}%;background:#22c55e'></span>"
+            f"<span style='width:{100 - pct}%;background:#f87171'></span></div>"
+            f"<span class='jr-stat-nums'><b>{won}</b> of <b>{total}</b> "
+            f"<span class='jr-faint'>({pct:.0f}%)</span></span></div>")
+
+
+def render_picks():
+    st.markdown("<h1 class='jr-date'>Your picks</h1>", unsafe_allow_html=True)
+    slips = pk.load_slips(PICKS_DIR)
+    gs = [graded(json.dumps(s, sort_keys=True)) for s in slips]
+    rec = pk.record(gs) if gs else None
+
+    if rec and rec["legs"]:
+        leg_pct = round(100 * rec["legs_won"] / rec["legs"])
+        line = (f"<b>{rec['slips']}</b> slip{'s' if rec['slips'] != 1 else ''}. Legs landed "
+                f"<b>{rec['legs_won']}</b> of <b>{rec['legs']}</b> ({leg_pct}%). Slips landed "
+                f"<b>{rec['slips_won']}</b> of <b>{rec['settled']}</b>")
+        line += (f", and <b>{rec['lost_by_one']}</b> lost by a single leg." if rec["lost_by_one"]
+                 else ".")
+        st.markdown(f"<p class='jr-summary'>{line}</p>", unsafe_allow_html=True)
+    else:
+        st.markdown("<p class='jr-summary'>Add Sportsbet screenshots below. Each leg is checked "
+                    "against the box score and the app's own projection for that night.</p>",
+                    unsafe_allow_html=True)
+
+    st.markdown("<p class='jr-h2'>Add slips</p>", unsafe_allow_html=True)
+    st.session_state.setdefault("upload_round", 0)
+    uploads = st.file_uploader("Sportsbet screenshots", type=["png", "jpg", "jpeg", "heic"],
+                               accept_multiple_files=True,
+                               key=f"uploads_{st.session_state.upload_round}",
+                               label_visibility="collapsed")
+    ready = [r for r in (review_upload(u, i) for i, u in enumerate(uploads or [])) if r]
+    if ready:
+        if st.button(f"Save {len(ready)} slip{'s' if len(ready) != 1 else ''}", type="primary"):
+            for slip, data, name in ready:
+                pk.save_slip(slip, data, name, picks_dir=PICKS_DIR)
+            st.session_state.upload_round += 1
+            st.session_state.saved_picks = len(ready)
+            graded.clear()
+            st.rerun()
+
+    if rec and rec["legs"]:
+        render_record(rec)
+    if slips:
+        st.markdown("<p class='jr-h2'>Slips</p>", unsafe_allow_html=True)
+        st.markdown("<p class='jr-p'>Each leg shows what the player did and, last, the app's "
+                    "projection built only from games before that night.</p>",
+                    unsafe_allow_html=True)
+        for slip in slips:
+            slip_card(slip)
+
+
+def render_record(rec):
+    leg_pct = round(100 * rec["legs_won"] / rec["legs"])
+    st.markdown("<p class='jr-h2'>Legs and slips</p>", unsafe_allow_html=True)
+    st.markdown(bar_row("Legs", rec["legs_won"], rec["legs"])
+                + bar_row("Slips", rec["slips_won"], rec["settled"]), unsafe_allow_html=True)
+    if rec["priced"]:
+        st.markdown(
+            f"<p class='jr-p'>A multi needs every leg, so slips land far less often than legs: "
+            f"at {leg_pct}% a leg, a 4-leg slip lands about {round(100 * (leg_pct / 100) ** 4)}% "
+            f"of the time. Sportsbet's own prices on these {rec['priced']} slips added up to about "
+            f"<b>{rec['implied_wins']}</b> expected wins, before its margin.</p>",
+            unsafe_allow_html=True)
+
+    st.markdown("<p class='jr-h2'>By leg type</p>", unsafe_allow_html=True)
+    order = ["points", "rebounds", "assists", "threes", "steals", "blocks", "combos"]
+    st.markdown("".join(bar_row(k.capitalize(), *rec["by_kind"][k])
+                        for k in order if k in rec["by_kind"]), unsafe_allow_html=True)
+    st.markdown("<p class='jr-key'><i style='background:#22c55e'></i>Landed"
+                "<i style='background:#f87171'></i>Lost</p>", unsafe_allow_html=True)
+
+    st.markdown("<p class='jr-h2'>Against your projections</p>", unsafe_allow_html=True)
+    agree, disagree, none = rec["agree"], rec["disagree"], rec["no_proj"]
+    won = lambda legs: sum(l["result"] == "won" for l in legs)
+    parts = []
+    if agree:
+        parts.append(f"When the app's projection was above the line, legs landed <b>{won(agree)}</b> "
+                     f"of <b>{len(agree)}</b> ({round(100 * won(agree) / len(agree))}%).")
+    if disagree:
+        parts.append(f"When it was below the line, <b>{won(disagree)}</b> of <b>{len(disagree)}</b> "
+                     f"({round(100 * won(disagree) / len(disagree))}%).")
+    if none:
+        parts.append(f"<b>{len(none)}</b> leg{'s' if len(none) != 1 else ''} had no projection "
+                     "(rookies, or too few games).")
+    if len(agree) + len(disagree) < 150:
+        parts.append("That's too few legs to say whether the projection tells landed and lost "
+                     "legs apart; it takes a few hundred.")
+    st.markdown(f"<p class='jr-p'>{' '.join(parts)} Combo legs use a rough range from the "
+                "player's recent games, since the app doesn't calibrate combos.</p>",
+                unsafe_allow_html=True)
+    if rec["shared_losses"]:
+        items = "".join(f"<li>{esc(p)} {esc(STAT_LABELS.get(s, s).lower())} on "
+                        f"{nice_date(d)} lost in <b>{n}</b> slips</li>"
+                        for (p, s, d), n in rec["shared_losses"])
+        st.markdown("<p class='jr-h2'>One result, several slips</p>"
+                    "<p class='jr-p'>The same leg in more than one slip means one game decides "
+                    f"all of them.</p><ul class='jr-list'>{items}</ul>", unsafe_allow_html=True)
+
+
 # ------------------------------------------------------------------ writing
 
 def pretty_log(message):
@@ -625,11 +909,14 @@ if clicked:
         st.session_state.just_wrote = day.isoformat()
         st.rerun()
 
+saved = st.session_state.pop("saved_picks", None)
+if saved:
+    st.toast(f"Saved {saved} slip{'s' if saved != 1 else ''}")
 wrote = st.session_state.pop("just_wrote", None)
 if wrote:
     st.toast(f"Wrote {nice_date(wrote, long=True)}")
 
-night_tab, misses_tab, season_tab = st.tabs(["Night", "Misses", "Season"])
+night_tab, misses_tab, picks_tab, season_tab = st.tabs(["Night", "Misses", "Picks", "Season"])
 with night_tab:
     if not nights:
         st.markdown(
@@ -640,5 +927,7 @@ with night_tab:
         render_night(nights[st.session_state.night])
 with misses_tab:
     render_misses(nights)
+with picks_tab:
+    render_picks()
 with season_tab:
     render_season(nights)
