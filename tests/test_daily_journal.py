@@ -6,6 +6,7 @@ projection miss, and that a reason with an invented number never
 reaches the page."""
 
 import datetime
+import json
 import os
 import sys
 
@@ -298,3 +299,60 @@ def test_long_model_line_keeps_its_main_story(tmp_path):
     assert why.startswith("**Why:** BOS trailed 27–22 at halftime and won by 15.")
     assert "_(auto)_" not in why
     assert len(why.split()) - 1 <= dj.REASON_MAX_WORDS
+
+
+# ---- every line, kept Llama lines, Llama not running ------------------
+
+def test_every_projection_line_is_recorded():
+    g = _game()
+    assert g["checked"] == len(g["lines"])
+    star = next(l for l in g["lines"] if l["name"] == "Al Star" and l["stat"] == "PTS")
+    assert (star["low"], star["high"], star["actual"], star["min"]) == (18.0, 30.0, 38.0, 36.0)
+
+
+def test_rewrite_without_llama_keeps_its_lines(tmp_path):
+    line = "BOS trailed 27–22 at halftime and won by 15. BOS made 14 threes to NYK's 2."
+    dj.journal_day(DAY, generate=lambda f, t: line, out_dir=str(tmp_path), log=lambda *a: None)
+    dj.journal_day(DAY, generate=None, out_dir=str(tmp_path), force=True, log=lambda *a: None)
+    night = json.loads((tmp_path / f"{DAY}.json").read_text())
+    assert night["games"][0]["why"] == {**night["games"][0]["why"], "text": line, "by": "model"}
+
+
+def test_kept_line_is_dropped_when_the_story_changes(tmp_path, monkeypatch):
+    line = "BOS trailed 27–22 at halftime and won by 15."
+    dj.journal_day(DAY, generate=lambda f, t: line, out_dir=str(tmp_path), log=lambda *a: None)
+    monkeypatch.setattr(dj, "main_story", lambda g: "BOS won by 15.")
+    dj.journal_day(DAY, generate=None, out_dir=str(tmp_path), force=True, log=lambda *a: None)
+    night = json.loads((tmp_path / f"{DAY}.json").read_text())
+    assert night["games"][0]["why"]["by"] == "auto"
+
+
+def test_llama_not_running_writes_plain_and_retries_next_time(tmp_path, monkeypatch):
+    def no_llama(*a, **k):
+        raise SystemExit("Can't reach Ollama.")
+    monkeypatch.setattr(dj.whisper, "make_generator", no_llama)
+    dj.main(["--date", DAY.isoformat(), "--llama-if-available", "--out-dir", str(tmp_path)])
+    night = json.loads((tmp_path / f"{DAY}.json").read_text())
+    assert night["llama_missing"] and not night["complete"]
+    assert dj.INCOMPLETE_MARKER in (tmp_path / f"{DAY}.md").read_text()
+
+    # Next morning Llama is up: the unfinished night is written again without --force.
+    monkeypatch.setattr(dj.whisper, "make_generator",
+                        lambda *a, **k: lambda f, t: "BOS trailed 27–22 at halftime and won by 15.")
+    dj.main(["--date", DAY.isoformat(), "--llama-if-available", "--out-dir", str(tmp_path)])
+    night = json.loads((tmp_path / f"{DAY}.json").read_text())
+    assert night["complete"] and night["games"][0]["why"]["by"] == "model"
+
+
+def test_without_the_flag_a_missing_llama_still_stops(tmp_path, monkeypatch):
+    monkeypatch.setattr(dj.whisper, "make_generator",
+                        lambda *a, **k: (_ for _ in ()).throw(SystemExit("Can't reach Ollama.")))
+    with pytest.raises(SystemExit):
+        dj.main(["--date", DAY.isoformat(), "--out-dir", str(tmp_path)])
+
+
+def test_quarter_scores_are_cached_with_the_journal_not_in_data_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(dj, "SUMMARY_CACHE_DIR", str(tmp_path / "_cache"))
+    dj._summary_write("boxsummary_line_1", SUMMARY["line"])
+    assert (tmp_path / "_cache" / "boxsummary_line_1.json").exists()
+    assert dj._summary_read("boxsummary_line_1")["data"][0]["teamTricode"] == "BOS"

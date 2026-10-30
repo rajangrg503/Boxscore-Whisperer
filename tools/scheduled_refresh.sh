@@ -225,6 +225,21 @@ else
         || say "nothing to settle yet"
 fi
 
+# ---- the game journal ----------------------------------------------
+# Last night's games, written once the cache has their box scores --
+# same ordering reason as the scoring above. --days 3 also finishes any
+# recent night left incomplete (a box score that wasn't out yet, or
+# Llama not running), and skips nights that are already complete.
+#
+# --llama-if-available: with Ollama running, Llama writes the Why lines;
+# without it the night gets plain summaries and is written again on the
+# next morning Llama is up. Never fatal, never published: journal/ is
+# gitignored and lives only on this Mac.
+say "writing the game journal"
+"$PYTHON" tools/daily_journal.py --days 3 --llama-if-available >>"$LOG" 2>&1
+JOURNAL_STATUS=$?
+[ $JOURNAL_STATUS -ne 0 ] && say "WARNING: journal exited $JOURNAL_STATUS (see $LOG) -- the cache is fine"
+
 if [ -n "$PARTIAL" ]; then
     # Deliberately not "=== refresh done ===" and deliberately non-zero:
     # that line is what a morning glance greps for, and

@@ -44,6 +44,7 @@ noise; engine/forward_record.py is where accuracy is actually claimed.
 import argparse
 import datetime
 import glob
+import json
 import os
 import re
 import sys
@@ -239,6 +240,34 @@ def load_boxscore(game_id):
     return df
 
 
+# Quarter scores live with the journal, not in data_cache/: the morning
+# refresh packs everything in data_cache/ into the archive the live app
+# deploys, and the app has no use for these. (Files an earlier version
+# put in data_cache/ are still read, so nothing is fetched twice.)
+SUMMARY_CACHE_DIR = os.path.join(JOURNAL_DIR, "_cache")
+
+
+def _summary_read(key):
+    path = os.path.join(SUMMARY_CACHE_DIR, f"{key}.json")
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            pass
+    return cache.read_payload(key)
+
+
+def _summary_write(key, df):
+    try:
+        os.makedirs(SUMMARY_CACHE_DIR, exist_ok=True)
+        with open(os.path.join(SUMMARY_CACHE_DIR, f"{key}.json"), "w") as f:
+            json.dump({"cached_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                       "data": df.to_dict(orient="records")}, f, default=_plain)
+    except (OSError, TypeError):
+        pass  # best effort: next run fetches again
+
+
 def load_summary(game_id):
     """{"line": DataFrame, "other": DataFrame} from BoxScoreSummaryV3 --
     quarter scores and the team stats the traditional box score lacks
@@ -246,7 +275,7 @@ def load_summary(game_id):
     changes). Cache first; live only caches a game that is final.
     None if neither has it: the journal just leaves those facts out."""
     line_key, other_key = f"boxsummary_line_{game_id}", f"boxsummary_other_{game_id}"
-    line, other = cache.read_payload(line_key), cache.read_payload(other_key)
+    line, other = _summary_read(line_key), _summary_read(other_key)
     if line and other and line.get("data") and other.get("data"):
         return {"line": pd.DataFrame(line["data"]), "other": pd.DataFrame(other["data"])}
     try:
@@ -260,8 +289,8 @@ def load_summary(game_id):
     if line_df.empty or other_df.empty:
         return None
     if not status.empty and int(status.iloc[0].get("gameStatus", 0) or 0) == 3:
-        cache._save_df_cache(line_key, line_df)
-        cache._save_df_cache(other_key, other_df)
+        _summary_write(line_key, line_df)
+        _summary_write(other_key, other_df)
     return {"line": line_df, "other": other_df}
 
 
@@ -316,6 +345,10 @@ def pregame_projection(player_id, day):
         return None
     stats, n_games = stats_from_gamelog(frame.drop(columns=["_date"], errors="ignore"))
     out = {}
+    if "MIN" in frame.columns:
+        minutes = pd.to_numeric(frame["MIN"], errors="coerce").dropna()
+        if len(minutes):
+            out["_usual_min"] = round(float(minutes.tail(10).median()), 1)
     for col, _label, _short in HEADLINE:
         mean, spread = stats.get(col, (None, None))
         dist = distribution_for(col, mean, spread, n_games)
@@ -323,7 +356,7 @@ def pregame_projection(player_id, day):
             continue
         low, high = dist.interval(0.8)
         out[col] = (round(low, 1), round(dist.quantile(0.5), 1), round(high, 1))
-    return out or None
+    return out if any(k in out for k, _, _ in HEADLINE) else None
 
 
 # ------------------------------------------------------------- one game
@@ -421,7 +454,7 @@ def analyse_game(game_id, home, away, day, project=None):
                         pass  # missing or NaN: that fact is simply left out
     flow = game_flow(summary, winner, loser)
 
-    stars, absent, surprises, checked, inside = [], [], [], 0, 0
+    stars, absent, surprises, lines, checked, inside = [], [], [], [], 0, 0
     for _, p in box.iterrows():
         name = f"{p['firstName']} {p['familyName']}".strip()
         proj = project(int(p["personId"]), day)
@@ -437,6 +470,11 @@ def analyse_game(game_id, home, away, day, project=None):
                 low, mid, high = proj[col]
                 actual = float(p[BOX_TO_STAT[col]])
                 checked += 1
+                lines.append({
+                    "pid": int(p["personId"]), "name": name, "team": p["teamTricode"],
+                    "stat": col, "low": low, "mid": mid, "high": high, "actual": actual,
+                    "min": round(float(p["min"]), 1), "usual_min": proj.get("_usual_min"),
+                })
                 if low <= actual <= high:
                     inside += 1
                     continue
@@ -466,7 +504,7 @@ def analyse_game(game_id, home, away, day, project=None):
         "edges": edges(winner, loser, tw, tl),
         "top": top, "absent": absent,
         "surprises": surprises[:SURPRISES_PER_GAME],
-        "checked": checked, "inside": inside,
+        "checked": checked, "inside": inside, "lines": lines,
     }
 
 
@@ -679,7 +717,24 @@ def render(day, games, source, reasons):
     return "\n".join(lines)
 
 
-def journal_day(day, generate=None, out_dir=JOURNAL_DIR, force=False, log=print):
+def previous_model_lines(day, out_dir):
+    """{game_id: (main story, Llama's line)} from the night's last data
+    file, so a rewrite without Llama doesn't throw away lines it wrote."""
+    path = os.path.join(out_dir, f"{day.isoformat()}.json")
+    try:
+        with open(path) as f:
+            night = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return {g["game_id"]: (g.get("main_story"), g["why"]["text"])
+            for g in night.get("games", [])
+            if (g.get("why") or {}).get("by") == "model"}
+
+
+def journal_day(day, generate=None, out_dir=JOURNAL_DIR, force=False, log=print,
+                llama_missing=False):
+    """Write one night. llama_missing: Llama was wanted but wasn't running,
+    so the night is marked unfinished and the next run writes it again."""
     path = os.path.join(out_dir, f"{day.isoformat()}.md")
     if os.path.exists(path) and not force:
         with open(path) as f:
@@ -692,9 +747,17 @@ def journal_day(day, generate=None, out_dir=JOURNAL_DIR, force=False, log=print)
         return None
 
     games = [analyse_game(gid, g["home"], g["away"], day) for gid, g in games_by_id.items()]
-    reasons = {}
+    reasons, rejected = {}, {}
+    kept = previous_model_lines(day, out_dir) if generate is None else {}
     for g in games:
-        if g["missing"] or generate is None:
+        if g["missing"]:
+            continue
+        old = kept.get(g["game_id"])
+        if old and old[0] == main_story(g):
+            # Same story as when Llama wrote it: its line still fits.
+            reasons[g["game_id"]] = (old[1], "model")
+            continue
+        if generate is None:
             continue
         facts = game_facts(g)
         note, why_not = whisper.write_note(facts, generate, REASON_MAX_WORDS,
@@ -704,12 +767,58 @@ def journal_day(day, generate=None, out_dir=JOURNAL_DIR, force=False, log=print)
             reasons[g["game_id"]] = (note, "model")
             log(f"  {label}: {note}")
         else:
+            rejected[g["game_id"]] = why_not
             log(f"  {label}: model line rejected ({why_not}) -- using the plain summary")
 
     os.makedirs(out_dir, exist_ok=True)
+    page = render(day, games, source, reasons)
+    if llama_missing and INCOMPLETE_MARKER not in page:
+        page = page.replace("\n\n", f"\n\n{INCOMPLETE_MARKER}\n\n", 1)
     with open(path, "w") as f:
-        f.write(render(day, games, source, reasons))
+        f.write(page)
+    write_data(day, games, source, reasons, rejected, used_model=generate is not None,
+               out_dir=out_dir, llama_missing=llama_missing)
     log(f"{day}: {len(games)} games -> {path}")
+    return path
+
+
+def _plain(value):
+    """numpy scalars and tuples -> plain JSON types."""
+    if hasattr(value, "item"):
+        return value.item()
+    raise TypeError(f"not JSON serialisable: {type(value).__name__}")
+
+
+def write_data(day, games, source, reasons, rejected, used_model, out_dir=JOURNAL_DIR,
+               llama_missing=False):
+    """journal/<date>.json -- the same night as the .md, as data, for the
+    journal app (tools/journal_app.py). Every game carries the facts the
+    model was given and who wrote its Why line, so the app can show both."""
+    out = []
+    for g in sorted(games, key=lambda g: g["game_id"]):
+        g = dict(g)
+        if not g["missing"]:
+            text, kind = reasons.get(g["game_id"]) or (fallback_reason(g), "auto")
+            g["why"] = {"text": text, "by": kind,
+                        "rejected": rejected.get(g["game_id"]),
+                        "model_on": used_model}
+            g["facts"] = game_facts(g)
+            g["main_story"] = main_story(g)
+        out.append(g)
+    played = [g for g in out if not g["missing"]]
+    body = {
+        "date": day.isoformat(), "source": source,
+        "written_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "complete": (len(played) == len(out) and all(g.get("flow") for g in played)
+                     and not llama_missing),
+        "llama_missing": llama_missing,
+        "checked": sum(g["checked"] for g in played),
+        "inside": sum(g["inside"] for g in played),
+        "games": out,
+    }
+    path = os.path.join(out_dir, f"{day.isoformat()}.json")
+    with open(path, "w") as f:
+        json.dump(body, f, default=_plain, ensure_ascii=False, indent=1)
     return path
 
 
@@ -719,17 +828,28 @@ def main(argv=None, generate=None):
                     help="US date YYYY-MM-DD (default: US Eastern yesterday)")
     ap.add_argument("--days", type=int, default=1, help="this many nights, ending at --date")
     ap.add_argument("--no-model", action="store_true", help="skip the written reason lines")
+    ap.add_argument("--llama-if-available", action="store_true",
+                    help="use Llama if it's running, otherwise write plain summaries and "
+                         "write the night again next time (for the morning job)")
     ap.add_argument("--model", default=whisper.DEFAULT_MODEL)
     ap.add_argument("--force", action="store_true", help="rewrite nights already written")
     ap.add_argument("--out-dir", default=JOURNAL_DIR)
     args = ap.parse_args(argv)
 
     end = args.date or us_yesterday()
+    llama_missing = False
     if generate is None and not args.no_model:
-        generate = whisper.make_generator(args.model, REASON_PROMPT, max_tokens=160)
+        try:
+            generate = whisper.make_generator(args.model, REASON_PROMPT, max_tokens=160)
+        except SystemExit as stop:
+            if not args.llama_if_available:
+                raise
+            print(f"{stop} Writing plain summaries; these nights will be written again "
+                  "next time Llama is running.")
+            generate, llama_missing = None, True
     for offset in range(args.days - 1, -1, -1):
         journal_day(end - datetime.timedelta(days=offset), generate if not args.no_model else None,
-                    out_dir=args.out_dir, force=args.force)
+                    out_dir=args.out_dir, force=args.force, llama_missing=llama_missing)
     return 0
 
 
