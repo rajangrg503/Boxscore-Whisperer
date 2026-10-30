@@ -71,7 +71,9 @@ _MONTHS = {m: i for i, m in enumerate(
 
 _THRESHOLD = re.compile(r"(?:to (?:score|record)\s+)?(\d{1,3})\s*\+\s*(.+)$", re.I)
 _NAME_DASH_STAT = re.compile(r"^(.*?[A-Za-z].*?)\s+[-–]\s+(?:alt\s+)?(.+)$", re.I)
-_OVER = re.compile(r"\bover\s*\(?\s*(\d{1,3}(?:\.\d)?)\s*\)?", re.I)
+_OVER = re.compile(r"\b(over|under)\s*\(?\s*(\d{1,3}(?:\.\d)?)\s*\)?", re.I)
+# "(23.5) @ 1.96" with the Over/Under word misread: the line is still there.
+_BARE_LINE = re.compile(r"\(\s*(\d{1,3}\.\d)\s*\)")
 _LEG_PRICE = re.compile(r"@\s*(\d{1,3}\.\d{2})\b")
 _GAME_DATE = re.compile(r"(?:mon|tues|wednes|thurs|fri|satur|sun)day,?\s+(\d{1,2})\s+([a-z]{3})\w*\s+"
                         r"(\d{1,2}):(\d{2})", re.I)
@@ -162,6 +164,33 @@ def match_player(text, players):
     return best
 
 
+_TEAM_NICKNAMES = None
+
+
+def _team_in(text):
+    """The team abbreviation named in a bit of slip text ('Portland Trail
+    Blazers', 'LA Clippers'), by nickname, or None."""
+    global _TEAM_NICKNAMES
+    if _TEAM_NICKNAMES is None:
+        try:
+            from nba_api.stats.static import teams
+            _TEAM_NICKNAMES = sorted(((t["nickname"].lower(), t["abbreviation"])
+                                      for t in teams.get_teams()), key=lambda x: -len(x[0]))
+        except ImportError:
+            _TEAM_NICKNAMES = []
+    low = text.lower()
+    return next((abbr for nick, abbr in _TEAM_NICKNAMES if nick in low), None)
+
+
+def _game_from(line):
+    """'Memphis Grizzlies @ Portland Trail Blazers' -> 'MEM@POR', or None."""
+    if "@" not in line:
+        return None
+    away, _, home = line.partition("@")
+    a, h = _team_in(away), _team_in(home)
+    return f"{a}@{h}" if a and h and a != h else None
+
+
 def _stat_from(text):
     squashed = re.sub(r"\s+", "", text.lower()).replace("alt", "")
     for words, stat in _STAT_WORDS:
@@ -193,7 +222,7 @@ def _title_above(lines, i, need_over=False):
         text = lines[j]
         if len(re.findall(r"[A-Za-z]", text)) < 4:
             continue
-        if need_over and not _OVER.search(text):
+        if need_over and not (_OVER.search(text) or _BARE_LINE.search(text)):
             continue
         return text
     return lines[i - 1] if i else ""
@@ -228,15 +257,19 @@ def parse_sportsbet(lines, players=None, today=None):
         slip["placed_at"] = None
         slip["problems"].append("Couldn't read when the bet was placed.")
 
-    # Where each game date sits in the text, as (line index, US date).
-    dates = []
+    # Where each game date sits in the text, as (line index, US date),
+    # and the game named just above it.
+    dates, games = [], {}
     for i, line in enumerate(lines):
         m = _GAME_DATE.search(line)
         if m:
             d, mon = int(m.group(1)), _MONTHS.get(m.group(2).lower()[:3])
             if mon:
-                dates.append((i, _us_date(d, mon, int(m.group(3)), int(m.group(4)),
-                                          _year_for(d, mon, today))))
+                when = _us_date(d, mon, int(m.group(3)), int(m.group(4)), _year_for(d, mon, today))
+                dates.append((i, when))
+                game = next((g for g in (_game_from(lines[j]) for j in range(i - 1, max(i - 3, -1), -1))
+                             if g), None)
+                games[i] = game
 
     for i, line in enumerate(lines):
         if _PLACED.search(line) or _GAME_DATE.search(line):
@@ -248,14 +281,17 @@ def parse_sportsbet(lines, players=None, today=None):
             # "Cedric Coward - Alt Pts + Reb": the line is on the row above.
             above = _title_above(lines, i, need_over=True)
             over = _OVER.search(above)
+            bare = None if over else _BARE_LINE.search(above)
             leg = {"stat": _stat_from(dash.group(2)),
-                   "line": float(over.group(1)) if over else None,
+                   "line": float(over.group(2)) if over else (float(bare.group(1)) if bare else None),
+                   "side": over.group(1).lower() if over else "over",
+                   "side_unsure": not over,
                    "who": dash.group(1), "title": above}
         elif threshold and _stat_from(threshold.group(2)) and not _PRICE.search(line):
             # "16+ Points" / "To Record 8+ Rebounds": the name is the row above.
             above = _title_above(lines, i)
             leg = {"stat": _stat_from(threshold.group(2)),
-                   "line": int(threshold.group(1)) - 0.5,
+                   "line": int(threshold.group(1)) - 0.5, "side": "over", "side_unsure": False,
                    "who": above, "title": above}
         if not leg:
             continue
@@ -264,20 +300,24 @@ def parse_sportsbet(lines, players=None, today=None):
         # A leg priced on its own (a single inside a multi) is followed by
         # its game; legs of a same-game multi come after theirs.
         if leg_price:
-            after = [d for j, d in dates if j > i]
-            when = after[0] if after else (dates[-1][1] if dates else None)
+            after = [(j, d) for j, d in dates if j > i]
+            pick = after[0] if after else (dates[-1] if dates else None)
         else:
-            before = [d for j, d in dates if j < i]
-            when = before[-1] if before else (dates[0][1] if dates else None)
+            before = [(j, d) for j, d in dates if j < i]
+            pick = before[-1] if before else (dates[0] if dates else None)
+        when = pick[1] if pick else None
+        game = games.get(pick[0]) if pick else None
         entry = {
             "player": found[2] if found else re.sub(r"[^A-Za-z.' -]", "", leg["who"]).strip(),
             "pid": found[0] if found else None, "team": found[1] if found else None,
-            "stat": leg["stat"], "line": leg["line"],
+            "stat": leg["stat"], "line": leg["line"], "side": leg["side"],
             "us_date": when.isoformat() if when else None,
             "price": float(leg_price.group(1)) if leg_price else None,
+            "game": game,
         }
         entry["needs_review"] = [msg for ok, msg in (
             (entry["pid"], "player not recognised"), (entry["line"] is not None, "line not read"),
+            (not (leg["side_unsure"] and entry["line"] is not None), "check over or under"),
             (entry["us_date"], "game date not read")) if not ok]
         slip["legs"].append(entry)
 
@@ -295,7 +335,8 @@ def parse_sportsbet(lines, players=None, today=None):
 
 def slip_id(slip):
     key = json.dumps([slip.get("placed_at"), slip.get("price"),
-                      [(l["player"], l["stat"], l["line"]) for l in slip["legs"]]])
+                      [(l["player"], l["stat"], l["line"]) + ((l["side"],) if l.get("side") == "under" else ())
+                       for l in slip["legs"]]])
     return hashlib.sha1(key.encode()).hexdigest()[:10]
 
 
@@ -349,7 +390,8 @@ def grade_leg(leg):
         row = played.iloc[0]
         out["actual"] = float(sum(float(row[c]) for c in cols))
         out["min"] = float(row.get("MIN") or 0)
-        out["result"] = "won" if out["actual"] > leg["line"] else "lost"
+        under = leg.get("side") == "under"
+        out["result"] = "won" if (out["actual"] < leg["line"] if under else out["actual"] > leg["line"]) else "lost"
     elif day < datetime.datetime.now(NEW_YORK).date() - datetime.timedelta(days=2):
         # The cache has days after this and no game: he didn't play.
         latest = frame["_d"].max() if not frame.empty else None
@@ -359,7 +401,7 @@ def grade_leg(leg):
     if proj:
         low, mid, high, rough = proj
         out["proj"] = {"low": low, "mid": mid, "high": high, "rough": rough,
-                       "agrees": mid > leg["line"]}
+                       "agrees": (mid < leg["line"]) if leg.get("side") == "under" else (mid > leg["line"])}
     return out
 
 
@@ -458,13 +500,83 @@ def record(graded):
     for s in settled:
         for l in s["legs"]:
             if l["result"] == "lost":
-                seen.setdefault((l["player"], l["stat"], l["us_date"]), set()).add(s["id"])
+                seen.setdefault((l["player"], l["stat"], l["us_date"]), set()).add(s["id"])  # either side
     out["shared_losses"] = [(k, len(v)) for k, v in seen.items() if len(v) > 1]
+    pickers = {}
+    for s in graded:
+        who = s.get("picked_by") or "you"
+        for l in s["legs"]:
+            if l["result"] in ("won", "lost"):
+                won, total = pickers.get(who, (0, 0))
+                pickers[who] = (won + (l["result"] == "won"), total + 1)
+    out["by_picker"] = pickers
     return out
 
 
 def leg_label(leg):
-    """'16+ points', '23+ pts + reb + ast' -- every leg as the number to reach."""
+    """'16+ points', '9 or fewer points' -- every leg as the number to reach
+    (Over) or stay at or under (Under)."""
     if leg.get("line") is None:
         return STATS.get(leg.get("stat"), ([], "?"))[1]
+    if leg.get("side") == "under":
+        return f"{int(leg['line'] - 0.5)} or fewer {STATS[leg['stat']][1]}"
     return f"{int(leg['line'] + 0.5)}+ {STATS[leg['stat']][1]}"
+
+
+# ------------------------------------------------------------------ money
+
+def update_slip(sid, picks_dir=None, **fields):
+    """Change saved fields (stake, paid, out) on one slip."""
+    picks_dir = picks_dir or PICKS_DIR
+    path = os.path.join(picks_dir, f"{sid}.json")
+    with open(path) as f:
+        slip = json.load(f)
+    slip.update(fields)
+    with open(path, "w") as f:
+        json.dump(slip, f, indent=1)
+    return slip
+
+
+def returned(slip):
+    """What a graded slip paid back: what you entered if you did (boosts,
+    cash-outs), otherwise stake x price for a winner and 0 for a loser.
+    None while it's still pending or when no stake is recorded."""
+    if slip.get("paid") is not None:
+        return float(slip["paid"])
+    if not slip.get("stake"):
+        return None
+    if slip.get("result") == "won" and slip.get("price"):
+        return round(float(slip["stake"]) * float(slip["price"]), 2)
+    if slip.get("result") == "lost":
+        return 0.0
+    return None
+
+
+def money(graded):
+    """Staked and returned, overall and week by week (weeks start Monday,
+    Sydney time), across slips that have a stake."""
+    rows = []
+    for s in graded:
+        if not s.get("stake") or not s.get("placed_at"):
+            continue
+        placed = datetime.datetime.fromisoformat(s["placed_at"]).astimezone(SYDNEY).date()
+        back = returned(s)
+        rows.append({"week": placed - datetime.timedelta(days=placed.weekday()),
+                     "stake": float(s["stake"]), "back": back, "settled": back is not None})
+    if not rows:
+        return None
+    frame = pd.DataFrame(rows)
+    settled = frame[frame["settled"]]
+    weeks = []
+    for week, part in frame.groupby("week"):
+        done = part[part["settled"]]
+        weeks.append({"week": week, "slips": len(part), "staked": part["stake"].sum(),
+                      "returned": done["back"].sum(), "net": done["back"].sum() - done["stake"].sum(),
+                      "open": int((~part["settled"]).sum())})
+    return {
+        "slips": len(frame), "staked": float(frame["stake"].sum()),
+        "settled_staked": float(settled["stake"].sum()), "returned": float(settled["back"].sum()),
+        "net": float(settled["back"].sum() - settled["stake"].sum()),
+        "open_staked": float(frame[~frame["settled"]]["stake"].sum()),
+        "weeks": sorted(weeks, key=lambda w: w["week"], reverse=True),
+    }

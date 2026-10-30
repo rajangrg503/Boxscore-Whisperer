@@ -165,3 +165,38 @@ def test_save_load_remove(tmp_path, fake_logs):
     assert len(loaded) == 1 and (tmp_path / loaded[0]["image"]).read_bytes() == b"png-bytes"
     pk.remove_slip(sid, str(tmp_path))
     assert pk.load_slips(str(tmp_path)) == [] and not list((tmp_path / "images").iterdir())
+
+
+UNDERS = """Multi @ 42.56
+6 Legs
+Bet Return - 1 leg fails, get a Bonus Bet
+TAY Alpha Guard oe (23.5) @ 1.96
+Alpha Guard - Points
+New York Knicks @ Philadelphia 76ers
+Saturday, 31 Oct 10:40
+) Bravo Wing Under (9.5) @ 1.96
+Bravo Wing - Points
+Los Angeles Clippers @ Minnesota Timberwolves
+Saturday, 31 Oct 11:10
+Bet Placed On: Fri, 30 Oct 19:48:23 AEDT""".splitlines()
+
+
+def test_under_legs_and_a_misread_over():
+    slip = pk.parse_sportsbet(UNDERS, PLAYERS, TODAY)
+    a, b = slip["legs"]
+    assert (a["side"], a["line"], a["game"]) == ("over", 23.5, "NYK@PHI")
+    assert "check over or under" in a["needs_review"]          # "Over" read as "oe"
+    assert (b["side"], b["line"], b["game"], b["needs_review"]) == ("under", 9.5, "LAC@MIN", [])
+    assert pk.leg_label(b) == "9 or fewer points"
+
+
+def test_under_grades_the_other_way(fake_logs):
+    assert pk.grade_leg(dict(_leg("PTS", 15.5), side="under"))["result"] == "won"   # 14 < 15.5
+    assert pk.grade_leg(dict(_leg("PTS", 13.5), side="under"))["result"] == "lost"
+
+
+def test_record_splits_by_who_picked(fake_logs):
+    mine = pk.grade_slip({"id": "a", "price": 2.0, "legs": [_leg("PTS", 10.5)]})
+    theirs = pk.grade_slip({"id": "b", "price": 2.0, "picked_by": "boxscore whisperer",
+                            "legs": [_leg("PTS", 15.5)]})
+    assert pk.record([mine, theirs])["by_picker"] == {"you": (1, 1), "boxscore whisperer": (0, 1)}
