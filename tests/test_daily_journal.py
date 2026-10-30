@@ -287,3 +287,14 @@ def test_lead_changed_hands_once():
 
 def test_prompt_puts_main_story_first():
     assert dj.game_facts(_game())[0] == "Main story: BOS trailed 27–22 at halftime and won by 15."
+
+
+def test_long_model_line_keeps_its_main_story(tmp_path):
+    long_line = ("BOS trailed 27–22 at halftime and won by 15. BOS made 14 threes to NYK's 2. "
+                 + "Al Star scored 38 points. " + "NYK turned it over 10 times to BOS's 4. " * 6)
+    path = dj.journal_day(DAY, generate=lambda f, t: long_line, out_dir=str(tmp_path), log=lambda *a: None)
+    page = open(path).read()
+    why = next(line for line in page.splitlines() if line.startswith("**Why:**"))
+    assert why.startswith("**Why:** BOS trailed 27–22 at halftime and won by 15.")
+    assert "_(auto)_" not in why
+    assert len(why.split()) - 1 <= dj.REASON_MAX_WORDS

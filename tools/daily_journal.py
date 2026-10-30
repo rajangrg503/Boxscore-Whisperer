@@ -67,7 +67,10 @@ JOURNAL_DIR = os.path.join(REPO_ROOT, "journal")
 MIN_PRIOR_GAMES = 5          # same floor as tools/slate_projections.py
 NOTABLE_PROJECTED_PTS = 10   # "a rotation player worth mentioning if out"
 SURPRISES_PER_GAME = 3
-REASON_MAX_WORDS = 60
+REASON_MAX_WORDS = 60   # what the checker accepts
+# What the model is asked for. Lower than the limit on purpose: a 3B
+# model overshoots a word count, and asking for 60 got 70-80.
+REASON_ASK_WORDS = 40
 INCOMPLETE_MARKER = "<!-- incomplete -->"
 
 HEADLINE = [("PTS", "points", "pts"), ("REB", "rebounds", "reb"), ("AST", "assists", "ast")]
@@ -144,7 +147,7 @@ Rules:
 - Copy numbers exactly as written. Do not calculate new ones.
 - Call teams only by the three-letter codes in the facts (like MEM). No city names or nicknames.
 - Do not call anything {", ".join(repr(w) for w in OVERCLAIM[:5])} or similar.
-- 2 or 3 sentences, at most {REASON_MAX_WORDS} words, plain calm English.
+- 2 short sentences, at most {REASON_ASK_WORDS} words in total, plain calm English.
 - Describe, never advise. Never use these words: {", ".join(whisper.BANNED_WORDS)}.
 - Output the sentences only. No title, no bullet points."""
 

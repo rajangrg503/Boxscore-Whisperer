@@ -214,18 +214,51 @@ def make_generator(model, system_prompt=SYSTEM_PROMPT, max_tokens=120):
     return generate
 
 
+# Split after . ! ? followed by a capital -- but not after "Jr.", "Sr."
+# or a lone initial ("J. Smith"), which end in a full stop mid-sentence.
+_SENTENCE_END = re.compile(r"(?<!\bJr)(?<!\bSr)(?<!\b[A-Z])([.!?])\s+(?=[A-Z\"'])")
+
+
+def sentences(text):
+    parts = _SENTENCE_END.split(text or "")
+    # split() keeps each captured terminator as its own item; stitch back.
+    out = []
+    for i in range(0, len(parts), 2):
+        out.append(parts[i] + (parts[i + 1] if i + 1 < len(parts) else ""))
+    return [p.strip() for p in out if p.strip()]
+
+
+def trimmed_versions(note):
+    """The note, then the note with its last sentence dropped, and so on
+    down to one sentence. A cut-off final fragment (the model hit its token
+    limit mid-sentence) is dropped up front, since it is never usable."""
+    parts = sentences(note)
+    if parts and parts[-1][-1] not in ".!?":
+        parts = parts[:-1]
+    return [" ".join(parts[:n]) for n in range(len(parts), 0, -1)]
+
+
 def write_note(facts, generate, max_words=MAX_WORDS, extra_check=None):
     """(note, None) or (None, reason). Two tries: normal, then fully greedy.
-    extra_check(note) -> None or a reason, for caller-specific rules."""
-    reason = None
+    extra_check(note) -> None or a reason, for caller-specific rules.
+
+    A draft that fails is not thrown away whole: its trailing sentences are
+    dropped one at a time and each shorter version is checked the same way.
+    The model writes its most important sentence first, so a draft that
+    ran long, or went wrong in its last sentence, usually still has a good
+    line at the front. Nothing is ever added or reworded -- only cut."""
+    first_reason = None
     for temperature in (0.3, 0.0):
-        note = generate(facts, temperature)
-        reason = check_note(note, facts, max_words)
-        if reason is None and extra_check is not None:
-            reason = extra_check(note)
-        if reason is None:
-            return note, None
-    return None, reason
+        draft = generate(facts, temperature)
+        for note in trimmed_versions(draft) or [draft]:
+            reason = check_note(note, facts, max_words)
+            if reason is None and extra_check is not None:
+                reason = extra_check(note)
+            if reason is None:
+                return note, None
+            if first_reason is None:
+                first_reason = reason
+    return None, first_reason
 
 
 # ---------------------------------------------------------------- run

@@ -128,3 +128,30 @@ def test_dry_run_saves_nothing(temp_log):
     _save([_row("p1")])
     whisper.main(["--dry-run"], generate=lambda f, t: "Projected near 24.5 points.")
     assert pd.isna(tracker.load_prediction_log().iloc[0]["whisper"])
+
+
+def test_sentences_ignore_jr_initials_and_decimals():
+    assert whisper.sentences("A won by 3. Darius Acuff Jr. had 34. NOP shot 58.8% here! J. Smith scored 5.") == [
+        "A won by 3.", "Darius Acuff Jr. had 34.", "NOP shot 58.8% here!", "J. Smith scored 5."]
+
+
+def test_trimmed_versions_drop_a_cut_off_fragment():
+    assert whisper.trimmed_versions("One. Two. Three and") == ["One. Two.", "One."]
+
+
+def test_long_draft_is_trimmed_not_thrown_away():
+    facts = ["MEM won by 21.", "MEM's bench scored 56 points to POR's 32."]
+    draft = "MEM won by 21. MEM's bench scored 56 points to POR's 32. " + "Filler words here. " * 12
+    note, reason = whisper.write_note(facts, lambda f, t: draft, max_words=20)
+    assert reason is None
+    # The longest version that fits: front sentences kept, the rest cut.
+    assert note.startswith("MEM won by 21. MEM's bench scored 56 points to POR's 32.")
+    assert len(note.split()) <= 20 and len(note.split()) + 3 > 20
+
+
+def test_bad_last_sentence_is_cut_but_bad_first_sentence_is_not_saved():
+    facts = ["MEM won by 21."]
+    note, _ = whisper.write_note(facts, lambda f, t: "MEM won by 21. Easy over next time.")
+    assert note == "MEM won by 21."
+    note, reason = whisper.write_note(facts, lambda f, t: "MEM won by 40. Fine.")
+    assert note is None and "not in the facts" in reason
