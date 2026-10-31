@@ -200,3 +200,55 @@ def test_record_splits_by_who_picked(fake_logs):
     theirs = pk.grade_slip({"id": "b", "price": 2.0, "picked_by": "boxscore whisperer",
                             "legs": [_leg("PTS", 15.5)]})
     assert pk.record([mine, theirs])["by_picker"] == {"you": (1, 1), "boxscore whisperer": (0, 1)}
+
+
+# A PROPOSED (unplaced) slip, 31 Oct 2026. Three things in this layout
+# broke the parser at once and every leg came back "Over", no line, no
+# date:
+#   1. Sportsbet writes the handicap signed -- "Under (+22.5)". Neither
+#      _OVER nor _BARE_LINE allowed a sign, so the side fell through to
+#      its "over" default and the line read as None.
+#   2. An unplaced slip dates a game "Tomorrow 1 Nov 06:10", with no
+#      weekday, and _GAME_DATE required one.
+#   3. A proposed bet has no "Bet Placed On" row, which was reported as
+#      a reading failure rather than as the ordinary thing it is.
+PROPOSED = """PROPOSED BET
+Multi @ 42.98
+3 Legs
+Same Game Multi @ 3.75
+2 Legs
+Memphis Grizzlies @ Portland Trail Blazers
+Tomorrow 1 Nov 10:10
+Alpha Guard Under (+22.5)
+Alpha Guard - Points
+Bravo Wing Over (+12.5)
+Bravo Wing - Points
+Charlie Big Over (+13.5) @ 1.72
+Charlie Big - Rebounds
+Sacramento Kings @ Oklahoma City Thunder
+Tomorrow 1 Nov 11:10
+THINK. IS THIS A BET YOU REALLY WANT TO
+PLACE?""".splitlines()
+
+
+def test_proposed_slip_reads_signed_lines_and_a_tomorrow_date():
+    slip = pk.parse_sportsbet(PROPOSED, PLAYERS, TODAY)
+    assert slip["proposed"] is True
+    assert slip["problems"] == []                      # nothing to place yet is not a failure
+    assert slip["placed_at"] is None
+    assert slip["price"] == 42.98
+
+    a, b, c = slip["legs"]
+    assert (a["player"], a["side"], a["line"]) == ("Alpha Guard", "under", 22.5)
+    assert (b["player"], b["side"], b["line"]) == ("Bravo Wing", "over", 12.5)
+    assert (c["player"], c["side"], c["line"], c["price"]) == ("Charlie Big", "over", 13.5, 1.72)
+    for leg in slip["legs"]:
+        assert leg["needs_review"] == []
+        assert leg["us_date"] == "2026-10-31"          # 1 Nov AEDT tip is 31 Oct in the US
+
+
+def test_a_placed_slip_still_wants_its_placed_row():
+    without = [l for l in PROPOSED if "PROPOSED" not in l]
+    slip = pk.parse_sportsbet(without, PLAYERS, TODAY)
+    assert slip["proposed"] is False
+    assert "Couldn't read when the bet was placed." in slip["problems"]

@@ -71,12 +71,19 @@ _MONTHS = {m: i for i, m in enumerate(
 
 _THRESHOLD = re.compile(r"(?:to (?:score|record)\s+)?(\d{1,3})\s*\+\s*(.+)$", re.I)
 _NAME_DASH_STAT = re.compile(r"^(.*?[A-Za-z].*?)\s+[-–]\s+(?:alt\s+)?(.+)$", re.I)
-_OVER = re.compile(r"\b(over|under)\s*\(?\s*(\d{1,3}(?:\.\d)?)\s*\)?", re.I)
+# Sportsbet writes the handicap signed: "Jalen Johnson Under (+22.5)".
+# Without [+-]? here the match failed, the leg fell through to the "over"
+# default below, and the line came back None -- every leg on a slip read
+# as Over with no line. 31 Oct 2026.
+_OVER = re.compile(r"\b(over|under)\s*\(?\s*([+-]?\d{1,3}(?:\.\d)?)\s*\)?", re.I)
 # "(23.5) @ 1.96" with the Over/Under word misread: the line is still there.
-_BARE_LINE = re.compile(r"\(\s*(\d{1,3}\.\d)\s*\)")
+_BARE_LINE = re.compile(r"\(\s*[+-]?(\d{1,3}\.\d)\s*\)")
 _LEG_PRICE = re.compile(r"@\s*(\d{1,3}\.\d{2})\b")
-_GAME_DATE = re.compile(r"(?:mon|tues|wednes|thurs|fri|satur|sun)day,?\s+(\d{1,2})\s+([a-z]{3})\w*\s+"
-                        r"(\d{1,2}):(\d{2})", re.I)
+# A placed slip dates a game by weekday ("Sunday, 1 Nov 10:10"); an
+# unplaced one says "Tomorrow 1 Nov 06:10" or "Today 1 Nov 11:10". Only
+# the weekday form was accepted, so a proposed slip lost every date.
+_GAME_DATE = re.compile(r"(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|today|tomorrow),?\s+"
+                        r"(\d{1,2})\s+([a-z]{3})\w*\s+(\d{1,2}):(\d{2})", re.I)
 _PLACED = re.compile(r"bet\s+placed\s+on:?\s*\w{3},?\s+(\d{1,2})\s+([a-z]{3})\w*\s+"
                      r"(\d{1,2}):(\d{2})(?::(\d{2}))?", re.I)
 _PRICE = re.compile(r"multi\+?\s*@\s*(\d{1,4}\.\d{2})", re.I)
@@ -246,6 +253,7 @@ def parse_sportsbet(lines, players=None, today=None):
     slip["status_on_slip"] = ("lost" if "NORETURN" in letters else
                               "won" if any(w in letters for w in ("WINNER", "PAIDOUT", "COLLECT"))
                               else None)
+    slip["proposed"] = False
     placed = _PLACED.search(blob)
     if placed:
         d, mon = int(placed.group(1)), _MONTHS.get(placed.group(2).lower()[:3])
@@ -255,7 +263,9 @@ def parse_sportsbet(lines, players=None, today=None):
             tzinfo=SYDNEY).isoformat()
     else:
         slip["placed_at"] = None
-        slip["problems"].append("Couldn't read when the bet was placed.")
+        slip["proposed"] = bool(re.search(r"proposed\s+bet", blob, re.I))
+        if not slip["proposed"]:
+            slip["problems"].append("Couldn't read when the bet was placed.")
 
     # Where each game date sits in the text, as (line index, US date),
     # and the game named just above it.
@@ -283,7 +293,7 @@ def parse_sportsbet(lines, players=None, today=None):
             over = _OVER.search(above)
             bare = None if over else _BARE_LINE.search(above)
             leg = {"stat": _stat_from(dash.group(2)),
-                   "line": float(over.group(2)) if over else (float(bare.group(1)) if bare else None),
+                   "line": abs(float(over.group(2))) if over else (float(bare.group(1)) if bare else None),
                    "side": over.group(1).lower() if over else "over",
                    "side_unsure": not over,
                    "who": dash.group(1), "title": above}
