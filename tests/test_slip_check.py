@@ -15,6 +15,7 @@ import picks as pk  # noqa: E402
 import slip_check as sc  # noqa: E402
 
 NIGHT = "2026-10-30"
+DAY = datetime.date(2026, 10, 30)
 
 
 def _games(points, minutes, start=datetime.date(2026, 10, 1)):
@@ -166,3 +167,59 @@ def test_thin_current_season_is_flagged():
     c = sc.check_leg(_leg(9, 15.5))
     assert c["thin"] == 6 and any("only 6 games this season" in f for f in c["flags"])
     assert sc.check_slip({"price": 2.0, "legs": [_leg(9, 15.5)]})["thin"] == 1
+
+
+def test_the_five_game_cliff_is_gone(monkeypatch):
+    """Last season is scaled to this season's minutes and kept in
+    proportion to how much the role carried over, instead of being
+    switched off the moment a fifth game is played.
+
+    The cliff produced, from one slip on one night: a player with four
+    games projected purely from last season at minutes he no longer
+    plays, and a player with five projected purely from five games at
+    minutes he had never played before. One game either side of the
+    boundary moved the whole projection.
+    """
+    prev = _games([30] * 40, [34] * 40, start=datetime.date(2025, 11, 1))
+    this_four = _games([12] * 4, [20] * 4)
+    this_five = _games([12] * 5, [20] * 5)
+
+    def log(pid, season):
+        frame = {("a", "2026-27"): this_four, ("b", "2026-27"): this_five,
+                 ("a", "2025-26"): prev, ("b", "2025-26"): prev}.get((pid, season))
+        if frame is None:
+            return pd.DataFrame()
+        f = frame.copy()
+        f["_d"] = f["GAME_DATE"].map(pk.parse_game_date)
+        return f
+    monkeypatch.setattr(pk, "_log", log)
+
+    four, five = sc.role_read("a", DAY), sc.role_read("b", DAY)
+    assert four["similarity"] == five["similarity"]      # four games or five, same role
+    assert four["similarity"] < 0.75                     # 34 minutes to 20 is a different job
+    assert four["mpg_prev"] == 34.0 and four["mpg_cur"] == 20.0
+
+    c4, _, _, _ = sc.blended_stats("a", DAY, ["PTS"])
+    c5, _, _, _ = sc.blended_stats("b", DAY, ["PTS"])
+    assert abs(c4 - c5) < 1.0                            # no step across the old boundary
+
+    # And it sits between this season and the SCALED prior, not on either.
+    scaled_prior = 30.0 * (20.0 / 34.0)                  # 17.6, not last season's 30
+    assert 12.0 < c4 < scaled_prior + 1.0
+
+
+def test_a_player_with_no_prior_season_still_needs_five_games(monkeypatch):
+    """Blending two seasons must not become a way to project a rookie
+    from two games, which is what dropping the old gate quietly did."""
+    assert sc.check_leg(_leg(3, 9.5))["chance"] is None   # the two-game rookie
+    assert any("Too few games" in f for f in sc.check_leg(_leg(3, 9.5))["flags"])
+
+
+def test_matchup_read_rides_alongside_and_is_absent_without_a_slate():
+    """Where the bodies are is a fact about a roster, not a prediction, so
+    it is reported beside the chance and never folded into it. With no
+    slate captured for that night there is no opponent, and the read is
+    absent rather than guessed."""
+    out = sc.check_leg(_leg(1, 15.5))
+    assert out.get("matchup") is None
+    assert out["chance"] is not None

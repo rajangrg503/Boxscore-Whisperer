@@ -30,6 +30,7 @@ night. Everything else is strictly games before the date.
 """
 
 import datetime
+import json
 import math
 import os
 import sys
@@ -47,7 +48,9 @@ from engine.season import season_for_date  # noqa: E402
 from engine.team_ids import TEAM_ID_BY_ABBR  # noqa: E402
 
 import daily_journal as dj  # noqa: E402
-import picks as pk  # noqa: E402
+import picks as pk
+import role_blend as rb
+import matchup_edge as mx  # noqa: E402
 
 RECENT = 10
 THIN_SEASON = 10              # fewer current-season games than this: ranges run narrow
@@ -86,6 +89,105 @@ def projection_frame(pid, day):
         return cur, season
     prev = pk._log(pid, _prev_season(season))
     return prev, _prev_season(season)
+
+
+def _season_parts(pid, day):
+    """(this season's games before `day`, last season's games)."""
+    season = season_for_date(day)
+    cur = pk._log(pid, season)
+    if not cur.empty:
+        cur = cur[cur["_d"].map(lambda d: d is not None and d < day)]
+    prev = pk._log(pid, _prev_season(season))
+    return cur, prev
+
+
+def _mpg_and_rate(frame):
+    """(minutes per game, shot attempts per 36) -- the two numbers that say
+    whether a role is the same role."""
+    if frame is None or frame.empty or "MIN" not in frame:
+        return None, None
+    mins = pd.to_numeric(frame["MIN"], errors="coerce").dropna()
+    if mins.empty or mins.sum() <= 0:
+        return None, None
+    fga = pd.to_numeric(frame.get("FGA"), errors="coerce").dropna() if "FGA" in frame else None
+    rate = float(fga.sum()) / float(mins.sum()) * 36 if fga is not None and len(fga) else None
+    return float(mins.mean()), rate
+
+
+def _out_ids(team, out_names):
+    """Tonight's absentees on `team`, as player ids, so a team is not
+    credited with coverage it will not have on the floor."""
+    if not team or not out_names:
+        return ()
+    from engine.cache import read_payload
+    from engine.team_ids import TEAM_ID_BY_ABBR
+    wanted = {pk._norm(n) for n in out_names}
+    ids = []
+    for row in ((read_payload(f"roster_{TEAM_ID_BY_ABBR.get(team, 0)}") or {}).get("data") or []):
+        if pk._norm(row["PLAYER"]) in wanted:
+            ids.append(int(row["PLAYER_ID"]))
+    return tuple(ids)
+
+
+def role_read(pid, day):
+    """How much of last season still describes this player.
+
+    Returned on every leg so the reason a projection moved is visible
+    rather than buried: minutes then and now, and the similarity that
+    sets how much weight last season keeps.
+    """
+    cur, prev = _season_parts(pid, day)
+    mpg_cur, rate_cur = _mpg_and_rate(cur)
+    mpg_prev, rate_prev = _mpg_and_rate(prev)
+    if mpg_cur is None or mpg_prev is None:
+        return {"similarity": 1.0 if mpg_prev is None else 0.5,
+                "mpg_cur": mpg_cur, "mpg_prev": mpg_prev,
+                "n_cur": 0 if cur is None or cur.empty else len(cur),
+                "minutes_up": False, "only": "this" if mpg_prev is None else "last"}
+    sim = rb.role_similarity(mpg_cur, mpg_prev, rate_cur, rate_prev)
+    return {"similarity": round(sim, 2), "mpg_cur": round(mpg_cur, 1),
+            "mpg_prev": round(mpg_prev, 1), "n_cur": len(cur),
+            "minutes_up": mpg_cur > mpg_prev * 1.12, "only": None}
+
+
+def blended_stats(pid, day, cols):
+    """(center, sd, apart) for `cols`, from BOTH seasons.
+
+    Replaces the five-game cliff in projection_frame: last season is
+    scaled to this season's minutes and kept in proportion to how much
+    the role carried over, instead of being switched off the moment a
+    fifth game is played.
+    """
+    cur, prev = _season_parts(pid, day)
+    role = role_read(pid, day)
+    sim = role["similarity"]
+    mpg_cur, mpg_prev = role.get("mpg_cur"), role.get("mpg_prev")
+
+    def parts(frame):
+        if frame is None or frame.empty or not all(c in frame for c in cols):
+            return None, None, 0
+        stats, n = stats_from_gamelog(frame.drop(columns=["_d"], errors="ignore"))
+        if len(cols) == 1:
+            mean, spread = stats.get(cols[0], (None, None))
+            if mean is None or pd.isna(mean):
+                return None, None, 0
+            return float(mean), float(spread or 0.0), n
+        totals = sum(frame[c].astype(float) for c in cols)
+        return float(sum(float(stats[c][0]) for c in cols)), float(totals.std() or 0.0), n
+
+    c_mean, c_sd, c_n = parts(cur)
+    p_mean, p_sd, _ = parts(prev)
+    if p_mean is not None and mpg_cur and mpg_prev:
+        p_mean = rb.scale_to_minutes(p_mean, mpg_cur, mpg_prev)
+        p_sd = rb.scale_to_minutes(p_sd, mpg_cur, mpg_prev)
+    if c_mean is None and p_mean is None:
+        return None, None, None, role
+    apart = abs(c_mean - p_mean) if (c_mean is not None and p_mean is not None) else 0.0
+    center = rb.blend_value(c_n, c_mean, p_mean, sim)
+    base = c_sd if c_sd else p_sd
+    if c_sd and p_sd:
+        base = rb.blend_value(c_n, c_sd, p_sd, sim)
+    return center, rb.widen(base, sim, apart), apart, role
 
 
 _defense_cache = {}
@@ -145,6 +247,32 @@ def _normal_over(line, mean, sd):
     return 0.5 * math.erfc((line - mean) / (sd * math.sqrt(2)))
 
 
+_slate_cache = {}
+
+
+def _slate_opponent(team, day):
+    """The other team in `team`'s game that night, from the availability
+    feed. Returns None when the slate for that date was never captured --
+    an unknown opponent is better than a guessed one."""
+    if not team:
+        return None
+    key = day.isoformat()
+    if key not in _slate_cache:
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "slate_lines", f"availability_{day.strftime('%Y%m%d')}.json")
+        pairs = {}
+        try:
+            with open(path) as handle:
+                for game in (json.load(handle).get("games") or []):
+                    home, away = game.get("home"), game.get("away")
+                    if home and away:
+                        pairs[home], pairs[away] = away, home
+        except (OSError, ValueError):
+            pairs = {}
+        _slate_cache[key] = pairs
+    return _slate_cache[key].get(team)
+
+
 def opponent_for(leg):
     """The other team in the leg's game, from the slip (or, for a game
     already played, his game log)."""
@@ -158,6 +286,10 @@ def opponent_for(leg):
         row = f[f["_d"] == day] if not f.empty else f
         if len(row):
             return str(row.iloc[0]["MATCHUP"]).split()[-1]
+        # Not played yet, so no log row exists -- the same trap that dated
+        # a 31 Oct slip to 29 Oct. For a game still to come the opponent
+        # comes from the night's slate, written by tools/availability.py.
+        return _slate_opponent(leg.get("team"), day)
     return None
 
 
@@ -193,44 +325,47 @@ def check_leg(leg, out_names=None):
         out["flags"].append(f"{'Stayed under' if under else 'Cleared'} this line in only {over} of "
                             f"his last {len(values)}.")
 
-    # The engine's projection.
-    frame, used_season = projection_frame(leg["pid"], day)
-    if used_season == season_for_date(day) and len(frame) < THIN_SEASON:
-        out["thin"] = len(frame)
-        out["flags"].append(
-            f"Projected from only {len(frame)} games this season (the engine drops last season "
-            "at 5). Ranges this early run too narrow, so the chance is likely overstated.")
-    if len(frame) < dj.MIN_PRIOR_GAMES:
+    # The projection, from BOTH seasons rather than whichever side of the
+    # five-game cliff the player happens to sit on.
+    center, sd, apart, role = blended_stats(leg["pid"], day, cols)
+    out["role"] = role
+    thin_prior = not role.get("mpg_prev")
+    if center is None or (thin_prior and role.get("n_cur", 0) < dj.MIN_PRIOR_GAMES):
         out["flags"].append("Too few games for a projection (a rookie, or back from a long "
                             "absence).")
         return out
+    if role.get("n_cur", 0) < THIN_SEASON:
+        out["thin"] = role.get("n_cur", 0)
+        carrying = (f"; last season carries the rest, scaled from {role.get('mpg_prev')} to "
+                    f"{role.get('mpg_cur')} minutes" if role.get("mpg_prev") else "")
+        out["flags"].append(
+            f"Projected from only {role.get('n_cur', 0)} games this season{carrying}.")
+    if role.get("similarity", 1.0) < 0.75:
+        out["flags"].append(
+            f"His role has moved ({role.get('mpg_prev')} to {role.get('mpg_cur')} minutes), so "
+            f"last season only part-describes him and this chance is pulled toward a coin flip.")
+    if role.get("minutes_up"):
+        out["flags"].append(
+            "Minutes are up on last season. Scaling the prior is linear, but production is "
+            "damped on the way up, so this projection reads a little high.")
     opponent = opponent_for(leg)
     d_mult, d_note = defense_multiplier(opponent, day)
     t_mults, t_note = teammates_multipliers(leg["pid"], day, out_names)
     out["notes"] = [n for n in (d_note, t_note) if n]
     out["opponent"] = opponent
-    stats, n_games = stats_from_gamelog(frame.drop(columns=["_d"], errors="ignore"))
-    if len(cols) == 1:
-        mean, spread = stats.get(cols[0], (None, None))
-        if mean is None or pd.isna(mean):
-            return out
-        mult = d_mult * t_mults.get(cols[0], 1.0)
-        dist = distribution_for(cols[0], mean * mult, spread, n_games)
-        if dist is not None:
-            low, high = dist.interval(0.8)
-            out["proj"] = {"low": round(low, 1), "mid": round(dist.quantile(0.5), 1),
-                           "high": round(high, 1)}
-            over_chance = float(dist.sf(leg["line"]))
-            out["chance"] = round(1 - over_chance if under else over_chance, 3)
-            return out
-        sd, center = float(spread or 0), mean * mult
-    else:
-        # Combos: the engine's per-stat means, summed and adjusted; the
-        # spread from his own game totals, which carries how the stats
-        # move together. The engine doesn't calibrate combos: rough.
-        center = sum(float(stats[c][0]) * d_mult * t_mults.get(c, 1.0) for c in cols)
-        totals = sum(frame[c].astype(float) for c in cols)
-        sd = float(totals.std()) if len(totals) > 1 else 0.0
+
+    # Karma's question, asked of every leg: does this player have an
+    # advantage in THIS matchup? Shown beside the chance, never folded
+    # into it -- where the bodies are is a fact about the opponent's
+    # roster, not a prediction about tonight.
+    out["matchup"] = mx.read(leg["pid"], leg.get("team"), opponent,
+                             season_for_date(day), exclude=_out_ids(opponent, out_names))
+    if out["matchup"]:
+        out["notes"].append(out["matchup"]["verdict"].capitalize() + ".")
+    mult = d_mult * (t_mults.get(cols[0], 1.0) if len(cols) == 1
+                     else sum(t_mults.get(c, 1.0) for c in cols) / len(cols))
+    center = center * mult
+    if len(cols) > 1:
         out["rough"] = True
     out["proj"] = {"low": round(max(center - 1.2816 * sd, 0), 1), "mid": round(center, 1),
                    "high": round(center + 1.2816 * sd, 1)}
