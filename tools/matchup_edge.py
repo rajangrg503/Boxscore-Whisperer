@@ -58,6 +58,22 @@ def player_archetype(player_id, team):
     return None
 
 
+def archetype_anywhere(player_id):
+    """guard / wing / big, looked up across every roster.
+
+    player_archetype() takes a team and is right for the man you are
+    betting on. It is wrong for a former teammate: Jerami Grant was
+    looked up on Portland, where he no longer plays, came back None, and
+    was filed as "plays a different position" from Deni Avdija -- the
+    one teammate whose absence actually moves Avdija's shot volume.
+    """
+    for abbr in TEAM_ID_BY_ABBR:
+        kind = player_archetype(player_id, abbr)
+        if kind:
+            return kind
+    return None
+
+
 def read(player_id, team, opponent, season, exclude=()):
     """{kind, gap, verdict, share, league} -- or None when it cannot be said.
 

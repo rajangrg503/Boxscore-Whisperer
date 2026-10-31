@@ -259,7 +259,7 @@ def _shared_games(pid, mate_pid, day):
     return together, apart
 
 
-def teammate_evidence(pid, out_names, day):
+def teammate_evidence(pid, out_names, day, team=None):
     """What the missing-teammates layer actually has to go on.
 
     Avdija, 31 Oct 2026: Ja Morant was out and the layer returned a
@@ -275,6 +275,19 @@ def teammate_evidence(pid, out_names, day):
     Returns one verdict per absent teammate so the difference between
     no effect, no evidence, and already-priced-in is visible instead of
     arriving as the same number.
+
+    A fourth case, karma's, 31 Oct: "sharpe being there or not shouldnt
+    affect avdija number in any way. they dont eat into eachother." His
+    71 games last season say it exactly --
+
+        with / without Sharpe (G, 6-5)   FGA/36  17.3 -> 17.3
+        with / without Holiday (G, 6-4)  FGA/36  17.4 -> 17.1
+        with / without Grant (F, 6-7)    FGA/36  16.9 -> 18.1
+
+    Shot volume does not move for the guards and moves a full attempt
+    for the forward. An absent teammate only redistributes shots if he
+    was eating from the same plate, so the adjustment is gated on
+    archetype rather than applied to whoever happens to be out.
     """
     from engine.team_ids import TEAM_ID_BY_ABBR
     from engine.cache import read_payload
@@ -296,7 +309,13 @@ def teammate_evidence(pid, out_names, day):
             theirs = pk._log(mate, season_for_date(day))
             mate_days = set() if theirs is None or theirs.empty else set(theirs["_d"])
             cur_together = sum(1 for d in cur["_d"] if d in mate_days)
-        if together == 0 and apart == 0:
+        mine = mx.player_archetype(pid, team) if team else None
+        theirs = mx.archetype_anywhere(mate)
+        if mine and theirs and mine != theirs:
+            verdicts.append((name, "elsewhere", f"{name} is a {theirs} and he is a {mine}, so "
+                             f"they do not take shots from each other (this says nothing about "
+                             f"who creates them)"))
+        elif together == 0 and apart == 0:
             verdicts.append((name, "none", f"{name} has never been his teammate in a game on "
                              f"record, so there is nothing measuring what changes without him"))
         elif apart == 0:
@@ -307,7 +326,8 @@ def teammate_evidence(pid, out_names, day):
             verdicts.append((name, "priced", f"{name} has missed all {cur_n} of his games this "
                              f"season, so his absence is already in these numbers"))
         else:
-            verdicts.append((name, "measured", f"measured from {apart} game(s) without {name}"))
+            verdicts.append((name, "measured", f"measured from {apart} game(s) without {name}, "
+                             f"who plays the same position"))
     return verdicts
 
 
@@ -442,9 +462,9 @@ def check_leg(leg, out_names=None):
 
     # A multiplier of 1.0 from the teammates layer reads like "checked,
     # no difference" and can mean "nothing to check". Say which.
-    out["teammates"] = teammate_evidence(leg["pid"], out_names, day)
+    out["teammates"] = teammate_evidence(leg["pid"], out_names, day, leg.get("team"))
     for name, kind, text in out["teammates"]:
-        if kind in ("none", "priced"):
+        if kind in ("none", "priced", "elsewhere"):
             # Not .capitalize(): these sentences start with a player's name
             # and it lowercases the rest of it ("Ja morant").
             out["flags"].append(text[0].upper() + text[1:] + ".")
