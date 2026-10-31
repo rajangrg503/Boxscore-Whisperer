@@ -701,10 +701,18 @@ def read_upload(upload):
         except Exception as error:
             st.session_state[key] = {"error": f"Couldn't read this screenshot ({error})."}
         finally:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+            # Keep the screenshot when something could not be read. It is
+            # the only evidence of what recognition actually returned, and
+            # deleting it meant a parsing failure could not be diagnosed
+            # afterwards -- which is exactly what happened on 31 Oct.
+            parsed = st.session_state.get(key) or {}
+            unread = bool(parsed.get("error") or parsed.get("problems")
+                          or any(leg.get("needs_review") for leg in parsed.get("legs", [])))
+            if not unread:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
     return key, data
 
 

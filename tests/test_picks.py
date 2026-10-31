@@ -252,3 +252,25 @@ def test_a_placed_slip_still_wants_its_placed_row():
     slip = pk.parse_sportsbet(without, PLAYERS, TODAY)
     assert slip["proposed"] is False
     assert "Couldn't read when the bet was placed." in slip["problems"]
+
+
+# The tip time sits in small grey type and recognition does not reliably
+# return the word in front of it. Requiring "Tomorrow"/"Today"/a weekday
+# lost the date, and with it the leg's game and every check that needs
+# one. The shape -- day, month name, clock time -- is what is always
+# there, and is specific enough on its own.
+@pytest.mark.parametrize("when", [
+    "Tomorrow 1 Nov 10:10",      # unplaced slip, as Sportsbet writes it
+    "Today 1 Nov 11:10",         # same slip, later in the day
+    "Sunday, 1 Nov 10:10",       # a placed slip
+    "1 Nov 10:10",               # the word dropped entirely
+    "Tomorow 1 Nov 06:10",       # the word misread
+])
+def test_a_game_date_survives_whatever_precedes_it(when):
+    lines = ["PROPOSED BET", "Multi @ 42.98", "1 Legs",
+             "Memphis Grizzlies @ Portland Trail Blazers", when,
+             "Alpha Guard Under (+22.5)", "Alpha Guard - Points"]
+    leg = pk.parse_sportsbet(lines, PLAYERS, TODAY)["legs"][0]
+    assert (leg["side"], leg["line"]) == ("under", 22.5)
+    assert leg["us_date"] == "2026-10-31"      # a 1 Nov AEDT tip is 31 Oct in the US
+    assert leg["needs_review"] == []

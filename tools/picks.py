@@ -80,10 +80,16 @@ _OVER = re.compile(r"\b(over|under)\s*\(?\s*([+-]?\d{1,3}(?:\.\d)?)\s*\)?", re.I
 _BARE_LINE = re.compile(r"\(\s*[+-]?(\d{1,3}\.\d)\s*\)")
 _LEG_PRICE = re.compile(r"@\s*(\d{1,3}\.\d{2})\b")
 # A placed slip dates a game by weekday ("Sunday, 1 Nov 10:10"); an
-# unplaced one says "Tomorrow 1 Nov 06:10" or "Today 1 Nov 11:10". Only
-# the weekday form was accepted, so a proposed slip lost every date.
-_GAME_DATE = re.compile(r"(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|today|tomorrow),?\s+"
-                        r"(\d{1,2})\s+([a-z]{3})\w*\s+(\d{1,2}):(\d{2})", re.I)
+# unplaced one says "Tomorrow 1 Nov 06:10" or "Today 1 Nov 11:10".
+# Requiring the weekday lost every date on a proposed slip, and then
+# requiring one of the three words still lost them, because recognition
+# does not reliably return that word from the small grey type the tip
+# time is set in. What is always there is the shape: a day, a month
+# name, a clock time. That is specific enough on its own -- the prefix
+# is now optional and only the shape is required.
+_GAME_DATE = re.compile(r"(?:(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|today|tomorrow),?\s+)?"
+                        r"\b(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+"
+                        r"(\d{1,2}):(\d{2})", re.I)
 _PLACED = re.compile(r"bet\s+placed\s+on:?\s*\w{3},?\s+(\d{1,2})\s+([a-z]{3})\w*\s+"
                      r"(\d{1,2}):(\d{2})(?::(\d{2}))?", re.I)
 _PRICE = re.compile(r"multi\+?\s*@\s*(\d{1,4}\.\d{2})", re.I)
