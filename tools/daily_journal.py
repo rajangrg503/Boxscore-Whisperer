@@ -328,6 +328,49 @@ def _gamelog(player_id, season):
     return frame
 
 
+# Minutes: a player is "down" when he plays this many fewer than his usual
+# (the same 6 as the Misses tab), and teammates who played at least
+# GAINED_GAP more are the ones who absorbed them -- minutes spread across
+# several players, so each one's share is smaller.
+ROTATION_GAP = 6
+GAINED_GAP = 3
+ROTATION_PLAYER_MIN = 10   # a DNP only counts as lost minutes if he usually plays this many
+
+
+def usual_minutes(player_id, day):
+    """Median minutes over his last 10 games before `day` (this season,
+    then last season's end), or None if there are none."""
+    season = season_for_date(day)
+    start = int(season[:4])
+    frames = []
+    for s in (season, f"{start - 1}-{str(start)[-2:]}"):
+        f = _gamelog(player_id, s)
+        if not f.empty and "MIN" in f.columns:
+            f = f[f["_date"].map(lambda d: d is not None and d < day)].sort_values("_date", ascending=False)
+            frames.append(pd.to_numeric(f["MIN"], errors="coerce").dropna())
+    minutes = pd.concat(frames).head(10) if frames else pd.Series(dtype=float)
+    return round(float(minutes.median()), 1) if len(minutes) else None
+
+
+def rotation(minutes_table):
+    """{team: {"down": [...], "up": [...]}} -- who lost minutes against his
+    usual (DNPs included, if he's a rotation player) and who gained them."""
+    out = {}
+    for m in minutes_table:
+        if m["delta"] is None:
+            continue
+        side = out.setdefault(m["team"], {"down": [], "up": []})
+        if m["delta"] <= -ROTATION_GAP and (m["played"] or (m["usual"] or 0) >= ROTATION_PLAYER_MIN):
+            side["down"].append({"name": m["name"], "pid": m["pid"], "delta": m["delta"],
+                                 "dnp": not m["played"]})
+        elif m["delta"] >= GAINED_GAP:
+            side["up"].append({"name": m["name"], "pid": m["pid"], "delta": m["delta"]})
+    for side in out.values():
+        side["down"].sort(key=lambda x: x["delta"])
+        side["up"].sort(key=lambda x: -x["delta"])
+    return out
+
+
 def pregame_projection(player_id, day):
     """{stat: (low, mid, high)} from games strictly before `day`, or None.
 
@@ -455,6 +498,17 @@ def analyse_game(game_id, home, away, day, project=None):
     flow = game_flow(summary, winner, loser)
 
     stars, absent, surprises, lines, checked, inside = [], [], [], [], 0, 0
+    minutes_table = []
+    for _, p in box.iterrows():
+        usual = usual_minutes(int(p["personId"]), day)
+        played = float(p["min"]) > 0
+        minutes_table.append({
+            "pid": int(p["personId"]), "name": f"{p['firstName']} {p['familyName']}".strip(),
+            "team": p["teamTricode"], "min": round(float(p["min"]), 1), "usual": usual,
+            "delta": None if usual is None else round(float(p["min"]) - usual, 1),
+            "played": played, "comment": str(p.get("comment") or "").strip() or None,
+        })
+    usual_by_pid = {m["pid"]: m["usual"] for m in minutes_table}
     for _, p in box.iterrows():
         name = f"{p['firstName']} {p['familyName']}".strip()
         proj = project(int(p["personId"]), day)
@@ -470,10 +524,12 @@ def analyse_game(game_id, home, away, day, project=None):
                 low, mid, high = proj[col]
                 actual = float(p[BOX_TO_STAT[col]])
                 checked += 1
+                usual = usual_by_pid.get(int(p["personId"]))
                 lines.append({
                     "pid": int(p["personId"]), "name": name, "team": p["teamTricode"],
                     "stat": col, "low": low, "mid": mid, "high": high, "actual": actual,
-                    "min": round(float(p["min"]), 1), "usual_min": proj.get("_usual_min"),
+                    "min": round(float(p["min"]), 1), "usual_min": usual,
+                    "min_delta": None if usual is None else round(float(p["min"]) - usual, 1),
                 })
                 if low <= actual <= high:
                     inside += 1
@@ -492,6 +548,18 @@ def analyse_game(game_id, home, away, day, project=None):
                       "reb": int(p["reboundsTotal"]), "ast": int(p["assists"]),
                       "min": round(p["min"])})
 
+    rot = rotation(minutes_table)
+    for line in lines:
+        side = rot.get(line["team"], {"down": [], "up": []})
+        d = line["min_delta"]
+        line["side"] = ("inside" if line["low"] <= line["actual"] <= line["high"]
+                        else "above" if line["actual"] > line["high"] else "below")
+        # Who took his minutes, or whose minutes he took.
+        line["absorbed_by"] = ([u for u in side["up"] if u["pid"] != line["pid"]]
+                               if d is not None and d <= -ROTATION_GAP else [])
+        line["minutes_from"] = ([u for u in side["down"] if u["pid"] != line["pid"]]
+                                if d is not None and d >= ROTATION_GAP else [])
+
     top = []
     for team in (winner, loser):
         top += sorted((s for s in stars if s["team"] == team), key=lambda s: -s["pts"])[:2]
@@ -505,6 +573,7 @@ def analyse_game(game_id, home, away, day, project=None):
         "top": top, "absent": absent,
         "surprises": surprises[:SURPRISES_PER_GAME],
         "checked": checked, "inside": inside, "lines": lines,
+        "minutes": minutes_table, "rotation": rot,
     }
 
 
@@ -812,6 +881,7 @@ def write_data(day, games, source, reasons, rejected, used_model, out_dir=JOURNA
         "complete": (len(played) == len(out) and all(g.get("flow") for g in played)
                      and not llama_missing),
         "llama_missing": llama_missing,
+        "schema": SCHEMA_VERSION,
         "checked": sum(g["checked"] for g in played),
         "inside": sum(g["inside"] for g in played),
         "games": out,
@@ -819,7 +889,53 @@ def write_data(day, games, source, reasons, rejected, used_model, out_dir=JOURNA
     path = os.path.join(out_dir, f"{day.isoformat()}.json")
     with open(path, "w") as f:
         json.dump(body, f, default=_plain, ensure_ascii=False, indent=1)
+    write_field_guide(out_dir)
     return path
+
+
+SCHEMA_VERSION = 2
+FIELD_GUIDE = f"""# Journal data: field guide (schema {{version}})
+
+One file per night: `journal/<US date>.json` (for example `2026-10-30.json`),
+written by tools/daily_journal.py -- every morning by the 08:30 job, or from
+the journal app. Nights with `"complete": false` are rewritten on the next run.
+All projections use only games before that night.
+
+## Night
+- `date`, `source` (where the game list came from), `written_at`, `schema`
+- `complete`: every box score and quarter score was in, and Llama ran if wanted
+- `checked` / `inside`: projection lines this night / how many landed in range
+- `games`: list, below
+
+## Game
+- `game_id`, `home`, `away`, `winner`, `loser`, `margin`, `missing` (no box score yet)
+- `tw` / `tl`: winner's / loser's team totals (pts, fg_pct, fg3m, fta, oreb, ast, tov,
+  paint, fastbreak, second, off_tov, bench, biggest_lead, run, lead_changes)
+- `flow`: quarters (`qw`, `ql`), `half`, `decisive` quarter, `overtime`
+- `main_story`, `why` (`text`, `by`: "model" or "auto", `rejected`), `facts` (what Llama saw)
+- `minutes`: EVERY player in the box score: `pid`, `name`, `team`, `min`, `usual`
+  (median of his last 10 games before this night), `delta` (= min - usual), `played`,
+  `comment` (the NBA's DNP/inactive note)
+- `rotation`: per team, `down` = played {ROTATION_GAP}+ fewer than usual (DNPs count if
+  usually {ROTATION_PLAYER_MIN}+ minutes), `up` = played {GAINED_GAP}+ more
+- `lines`: one per projected player and stat (PTS, REB, AST), below
+
+## Line
+- `pid`, `name`, `team`, `stat`, `low` / `mid` / `high` (80% range and median),
+  `actual`, `side` ("inside", "above", "below")
+- `min`, `usual_min`, `min_delta` (= min - usual_min; negative = fewer minutes)
+- `absorbed_by`: when he played {ROTATION_GAP}+ fewer, the teammates who played more
+  (`name`, `pid`, `delta`), biggest first
+- `minutes_from`: when he played {ROTATION_GAP}+ more, the teammates who played fewer
+"""
+
+
+def write_field_guide(out_dir=JOURNAL_DIR):
+    try:
+        with open(os.path.join(out_dir, "FIELDS.md"), "w") as f:
+            f.write(FIELD_GUIDE.replace("{version}", str(SCHEMA_VERSION)))
+    except OSError:
+        pass
 
 
 def main(argv=None, generate=None):

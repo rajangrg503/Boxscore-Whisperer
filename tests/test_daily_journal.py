@@ -356,3 +356,35 @@ def test_quarter_scores_are_cached_with_the_journal_not_in_data_cache(tmp_path, 
     dj._summary_write("boxsummary_line_1", SUMMARY["line"])
     assert (tmp_path / "_cache" / "boxsummary_line_1.json").exists()
     assert dj._summary_read("boxsummary_line_1")["data"][0]["teamTricode"] == "BOS"
+
+
+# ---- minutes delta and rotation ----------------------------------------
+
+USUAL = {1: 30.0, 2: 22.0, 3: 28.0, 4: 34.0, 5: 25.0, 6: 4.0}
+
+
+def test_minutes_delta_and_who_absorbed_them(monkeypatch):
+    monkeypatch.setattr(dj, "usual_minutes", lambda pid, day: USUAL.get(pid))
+    g = _game()
+    by_pid = {m["pid"]: m for m in g["minutes"]}
+    assert by_pid[2]["delta"] == 8.0 and by_pid[3]["played"] is False   # Cy Out: DNP
+    bos = g["rotation"]["BOS"]
+    assert [d["name"] for d in bos["down"]] == ["Cy Out"] and bos["down"][0]["dnp"]
+    assert [u["name"] for u in bos["up"]] == ["Bo Wing", "Al Star"]      # +8, +6: biggest first
+    assert [u["delta"] for u in bos["up"]] == [8.0, 6.0]
+    nyk = g["rotation"]["NYK"]
+    assert nyk["down"] == []       # Fi Bench: 4 vs 4 usual
+    star = next(l for l in g["lines"] if l["name"] == "Al Star" and l["stat"] == "PTS")
+    assert (star["min_delta"], star["side"]) == (6.0, "above")
+    assert [m["name"] for m in star["minutes_from"]] == ["Cy Out"]
+    assert star["absorbed_by"] == []
+
+
+def test_night_file_has_schema_and_field_guide(tmp_path, monkeypatch):
+    monkeypatch.setattr(dj, "usual_minutes", lambda pid, day: USUAL.get(pid))
+    dj.journal_day(DAY, None, out_dir=str(tmp_path), log=lambda *a: None)
+    night = json.loads((tmp_path / f"{DAY}.json").read_text())
+    assert night["schema"] == dj.SCHEMA_VERSION
+    assert "rotation" in night["games"][0] and "min_delta" in night["games"][0]["lines"][0]
+    guide = (tmp_path / "FIELDS.md").read_text()
+    assert "absorbed_by" in guide and "{" not in guide
