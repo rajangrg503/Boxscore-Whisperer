@@ -274,3 +274,68 @@ def test_a_game_date_survives_whatever_precedes_it(when):
     assert (leg["side"], leg["line"]) == ("under", 22.5)
     assert leg["us_date"] == "2026-10-31"      # a 1 Nov AEDT tip is 31 Oct in the US
     assert leg["needs_review"] == []
+
+
+def test_reasons_save_trimmed_and_survive_a_resave(tmp_path, fake_logs):
+    slip = {"price": 3.0, "legs": [_leg("PTS", 15.5), _leg("REB", 8.5)]}
+    sid = pk.save_slip(dict(slip, legs=[dict(l) for l in slip["legs"]]), picks_dir=str(tmp_path))
+    pk.save_reasons(sid, str(tmp_path), slip={"idea": "  pace game  ", "after": ""},
+                    legs=[{"sure": "Strong", "why": "starting now", "miss": " "},
+                          {"sure": None, "why": "", "miss": ""}])
+    saved = pk.load_slips(str(tmp_path))[0]
+    assert saved["reasons"]["slip"] == {"idea": "pace game"}
+    assert saved["reasons"]["legs"] == [{"sure": "Strong", "why": "starting now"}, {}]
+    assert pk.has_reasons(saved)
+    # Uploading the same screenshot again keeps what you wrote.
+    pk.save_slip(dict(slip, legs=[dict(l) for l in slip["legs"]]), picks_dir=str(tmp_path))
+    assert pk.load_slips(str(tmp_path))[0]["reasons"]["slip"] == {"idea": "pace game"}
+
+
+def test_empty_reasons_count_as_none():
+    assert not pk.has_reasons({"legs": []})
+    assert not pk.has_reasons({"reasons": {"slip": {}, "legs": [{}, {}]}})
+
+
+def test_record_splits_by_how_sure(fake_logs):
+    g = pk.grade_slip({"id": "a", "price": 2.0, "legs": [_leg("PTS", 10.5), _leg("PTS", 15.5),
+                                                          _leg("PR", 22.5)],
+                       "reasons": {"legs": [{"sure": "Strong"}, {"sure": "Strong"}, {}]}})
+    assert pk.record([g])["by_sure"] == {"Strong": (1, 2)}
+
+
+# A US "7 Pick Parlay" shared on X, 1 Nov 2026, as Vision reads it: each
+# threshold alone on its row, the name and stat under it, then the game
+# dated "Today". American odds, the boosted price after the struck one.
+US_PARLAY = """Bet Placed
+7 Pick Parlay
+CASH OUT +3098 +4649
++50% PARLAY BOOST
+7+
+Alpha Guard Assists
+MEM Grizzlies @ POR Trail Blazers • Today 3:10 PM
+5+
+Bravo Wing Rebounds
+MEM Grizzlies @ POR Trail Blazers • Today 3:10 PM
+3+
+Alpha Guard Three Pointers Made
+MEM Grizzlies @ POR Trail Blazers • Today 3:10 PM""".splitlines()
+
+
+def test_us_parlay_layout():
+    slip = pk.parse_sportsbet(US_PARLAY, PLAYERS, TODAY, us_today=datetime.date(2026, 10, 31))
+    assert slip["source"] == "parlay" and slip["price"] == 47.49
+    assert [(l["player"], l["stat"], l["line"], l["us_date"], l["game"]) for l in slip["legs"]] == [
+        ("Alpha Guard", "AST", 6.5, "2026-10-31", "MEM@POR"),
+        ("Bravo Wing", "REB", 4.5, "2026-10-31", "MEM@POR"),
+        ("Alpha Guard", "FG3M", 2.5, "2026-10-31", "MEM@POR"),
+    ]
+    assert all(not l["needs_review"] for l in slip["legs"])
+    assert slip["legs_on_slip"] == 7          # this cut-down copy has 3, so it's flagged
+    assert any("says 7 legs but 3" in p for p in slip["problems"])
+    assert any('says "Today"' in p for p in slip["problems"])
+    assert not any("placed" in p for p in slip["problems"])
+
+
+def test_american_odds():
+    assert pk.american_to_decimal("+4649") == 47.49
+    assert pk.american_to_decimal("-137") == 1.73

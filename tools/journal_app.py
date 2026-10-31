@@ -178,6 +178,18 @@ section[data-testid="stSidebar"] .block-container { padding-top: 1.6rem; }
            border-radius: 1px; }
 @media (max-width: 640px) { .jr-cal { grid-template-columns: 8rem minmax(0, 1fr); } }
 .jr-warn li { color: var(--jr-text); }
+.jr-sure { display: inline-block; margin-left: .45rem; font-size: .74rem; font-weight: 600;
+           padding: .02rem .45rem; border-radius: 999px; border: 1px solid var(--jr-border);
+           color: var(--jr-muted); vertical-align: .05rem; }
+.jr-sure.strong { color: #4ade80; border-color: rgba(34,197,94,.35); }
+.jr-sure.lean { color: #60a5fa; border-color: rgba(96,165,250,.35); }
+.jr-reason { border-left: 2px solid #60a5fa; padding: .05rem 0 .05rem .9rem; margin: .7rem 0 .2rem;
+             color: var(--jr-text); line-height: 1.55; max-width: 64ch; }
+.jr-reason .lbl { display: block; font-size: .74rem; letter-spacing: .08em; text-transform: uppercase;
+                  color: var(--jr-faint); margin-bottom: .1rem; }
+.jr-why-leg { margin: 1.1rem 0 .3rem; padding-top: .8rem; border-top: 1px solid var(--jr-border);
+              color: var(--jr-muted); }
+.jr-why-leg b { color: var(--jr-text); font-weight: 600; margin-right: .35rem; }
 .jr-warn li::marker { color: #fbbf24; }
 .jr-empty { border: 1px dashed var(--jr-border); border-radius: 12px; padding: 2rem 1.4rem;
             color: var(--jr-muted); max-width: 52ch; line-height: 1.6; }
@@ -801,7 +813,8 @@ def review_upload(upload, open_slips, cal):
                                min_value=0.0, step=0.01, format="%.2f", key=f"price_{key}")
         stake = b.number_input("Stake (A$, optional)", value=0.0, min_value=0.0, step=1.0,
                                format="%.2f", key=f"stake_{key}")
-        picker = d.selectbox("Picked by", ["You", "Boxscore Whisperer"], key=f"by_{key}")
+        picker = d.selectbox("Picked by", ["You", "Boxscore Whisperer", "Someone else"],
+                             key=f"by_{key}", help="Someone else: a tipster or a friend's slip.")
         out = c.multiselect("Out tonight (optional)", team_players(teams), key=f"out_{key}",
                              help="Players ruled out. The engine measures how each leg's player "
                                   "does in games without them.")
@@ -831,9 +844,14 @@ def slip_card(slip, open_json, cal):
     stake_txt = ""
     if slip.get("stake"):
         stake_txt = f"{money(slip['stake'])} staked" + (f", {money(back)} back" if back is not None else "")
+    reasons = slip.get("reasons") or {}
+    marks = reasons.get("legs") or []
     rows = []
-    for l, c in zip(g["legs"], by_leg):
+    for i, (l, c) in enumerate(zip(g["legs"], by_leg)):
         result = l["result"]
+        sure = (marks[i] if i < len(marks) else {}).get("sure")
+        sure_tag = (f"<span class='jr-sure {sure.split()[0].lower()}'>{esc(sure)}</span>"
+                    if sure else "")
         actual = ("" if l["actual"] is None else f"<b>{dj._n(l['actual'])}</b>"
                   + (f" in {dj._n(l['min'])} min" if l.get("min") else ""))
         if result == "void":
@@ -844,7 +862,7 @@ def slip_card(slip, open_json, cal):
             proj = "no projection" if result != "unreadable" else ""
         rows.append(f"<tr><td style='width:1.1rem'><span class='jr-dot {result}'></span></td>"
                     f"<td class='who'>{esc(l['player'])}</td>"
-                    f"<td>{esc(pk.leg_label(l))}<span class='m-proj'>{proj}</span></td>"
+                    f"<td>{esc(pk.leg_label(l))}{sure_tag}<span class='m-proj'>{proj}</span></td>"
                     f"<td class='num'>{actual}</td><td class='num proj'>{proj}</td></tr>")
     with st.container(border=True):
         st.markdown(
@@ -853,13 +871,25 @@ def slip_card(slip, open_json, cal):
             + (f"<span class='when'>placed {placed.strftime('%a %-d %b, %-I:%M %p')}</span>" if placed else "")
             + (f"<span class='when'>{stake_txt}</span>" if stake_txt else "")
             + ("<span class='when'>picked by Boxscore Whisperer</span>"
-               if slip.get("picked_by") == "boxscore whisperer" else "")
+               if slip.get("picked_by") == "boxscore whisperer" else
+               "<span class='when'>picked by someone else</span>"
+               if slip.get("picked_by") == "someone else" else "")
             + f"<span class='jr-chip {cls}'>{chip}</span></div>"
-            "<table class='jr-legs'>" + "".join(rows) + "</table>",
+            "<table class='jr-legs'>" + "".join(rows) + "</table>"
+            + "".join(f"<p class='jr-reason'><span class='lbl'>{lbl}</span>"
+                      f"{esc(reasons['slip'][k])}</p>"
+                      for k, lbl in (("idea", "Why this slip"), ("after", "Looking back"))
+                      if (reasons.get("slip") or {}).get(k)),
             unsafe_allow_html=True)
         if g["result"] == "pending":
             with st.expander("The evidence behind each leg", expanded=True):
                 render_check(check, cal)
+        written = pk.has_reasons(slip)
+        settled = g["result"] in ("won", "lost")
+        label = ("Your reasons" if written
+                 else "Look back at this slip" if settled else "Write why you picked it")
+        with st.expander(label, expanded=g["result"] == "pending" and not written):
+            reasons_form(slip, settled)
         cols = st.columns([1.3, 1.1, 1.1, 2], gap="small")
         if slip.get("image"):
             with cols[0].popover("Screenshot", use_container_width=True):
@@ -883,6 +913,55 @@ def slip_card(slip, open_json, cal):
                 graded.clear()
                 checked.clear()
                 st.rerun()
+
+
+def reasons_form(slip, settled):
+    """Your side of the slip: why you picked it, how sure you were of each
+    leg, what would make it miss, and (once it's settled) what you read
+    right or wrong. Saved on the slip; it never leaves this Mac."""
+    sid = slip["id"]
+    reasons = slip.get("reasons") or {}
+    said, marks = reasons.get("slip") or {}, reasons.get("legs") or []
+    st.markdown("<p class='jr-p'>The engine has the numbers. This is the part that comes from "
+                "watching. Write it before the game, so the record shows what you actually "
+                "thought, not what you remember thinking.</p>", unsafe_allow_html=True)
+    with st.form(f"why_{sid}", border=False):
+        idea = st.text_area("Why this slip? The idea that ties it together.",
+                            value=said.get("idea", ""), key=f"idea_{sid}", height=80,
+                            placeholder="A matchup you like, a story you're following, a role "
+                                        "that's changed")
+        legs = []
+        for i, l in enumerate(slip["legs"]):
+            mark = marks[i] if i < len(marks) else {}
+            st.markdown(f"<p class='jr-why-leg'><b>{esc(l.get('player') or '?')}</b>"
+                        f"{esc(pk.leg_label(l))}</p>", unsafe_allow_html=True)
+            sure = st.radio("How sure were you?", pk.SURE, horizontal=True,
+                            index=pk.SURE.index(mark["sure"]) if mark.get("sure") in pk.SURE
+                            else None, key=f"sure_{sid}_{i}")
+            left, right = st.columns(2, gap="small")
+            why = left.text_area("What do you know that the numbers don't?",
+                                 value=mark.get("why", ""), key=f"why_{sid}_{i}", height=80,
+                                 placeholder="How he's been playing, what the coach does with "
+                                             "him, something you saw")
+            miss = right.text_area("What would make it miss?",
+                                   value=mark.get("miss", ""), key=f"miss_{sid}_{i}", height=80,
+                                   placeholder="A minutes cut, foul trouble, a blowout, a "
+                                               "teammate back")
+            legs.append({"sure": sure, "why": why, "miss": miss})
+        after = said.get("after", "")
+        if settled or after:
+            after = st.text_area("Looking back: what did you read right, and what did you miss?",
+                                 value=after, key=f"after_{sid}", height=80,
+                                 placeholder="Was the reason right and the result unlucky, or "
+                                             "was the reason wrong?")
+        if st.form_submit_button("Save reasons", type="primary"):
+            pk.save_reasons(sid, PICKS_DIR, slip={"idea": idea, "after": after}, legs=legs)
+            graded.clear()
+            checked.clear()
+            st.rerun()
+    if reasons.get("at"):
+        at = datetime.datetime.fromisoformat(reasons["at"])
+        st.caption(f"Last saved {at.strftime('%a %-d %b, %-I:%M %p')}.")
 
 
 def bar_row(name, won, total, color="#22c55e"):
@@ -988,8 +1067,21 @@ def render_record(rec, gs, cal):
 
     if len(rec.get("by_picker", {})) > 1:
         st.markdown("<p class='jr-h2'>By who picked</p>", unsafe_allow_html=True)
-        st.markdown("".join(bar_row("Boxscore W." if who == "boxscore whisperer" else "You", *wl)
+        names = {"boxscore whisperer": "Boxscore W.", "someone else": "Someone else"}
+        st.markdown("".join(bar_row(names.get(who, "You"), *wl)
                             for who, wl in sorted(rec["by_picker"].items())), unsafe_allow_html=True)
+    sure = rec.get("by_sure") or {}
+    if sure:
+        marked = sum(t for _, t in sure.values())
+        st.markdown("<p class='jr-h2'>By how sure you were</p>", unsafe_allow_html=True)
+        st.markdown("".join(bar_row(k, *sure[k]) for k in pk.SURE if k in sure),
+                    unsafe_allow_html=True)
+        st.markdown(
+            "<p class='jr-p'>From the reasons you wrote on each slip. If your read adds "
+            "something, Strong legs should land more often than Leans and Fillers."
+            + (f" Only <b>{marked}</b> marked leg{'s have' if marked != 1 else ' has'} settled "
+               "so far, so give it a few weeks." if marked < 20 else "")
+            + "</p>", unsafe_allow_html=True)
     st.markdown("<p class='jr-h2'>By leg type</p>", unsafe_allow_html=True)
     order = ["points", "rebounds", "assists", "threes", "steals", "blocks", "combos"]
     st.markdown("".join(bar_row(k.capitalize(), *rec["by_kind"][k])

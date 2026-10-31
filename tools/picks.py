@@ -93,7 +93,27 @@ _GAME_DATE = re.compile(r"(?:(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|today
 _PLACED = re.compile(r"bet\s+placed\s+on:?\s*\w{3},?\s+(\d{1,2})\s+([a-z]{3})\w*\s+"
                      r"(\d{1,2}):(\d{2})(?::(\d{2}))?", re.I)
 _PRICE = re.compile(r"multi\+?\s*@\s*(\d{1,4}\.\d{2})", re.I)
-_LEGS = re.compile(r"\b(\d{1,2})\s+legs\b", re.I)
+_LEGS = re.compile(r"\b(\d{1,2})[\s-]+(?:legs|pick parlay|leg parlay)\b", re.I)
+
+# US sportsbook parlays (the "7 Pick Parlay" layout shared on X, 1 Nov
+# 2026) stack each leg as three rows:
+#     7+
+#     Deni Avdija Assists
+#     POR Trail Blazers @ UTA Jazz  Today 3:10 PM
+# The threshold sits alone on its row, so _THRESHOLD never matched it and
+# the slip read as having no legs. The price is American odds ("+4649";
+# a boosted slip shows the old price struck through first), and the game
+# is dated "Today"/"Tomorrow", or M/D, never with a month name.
+_PARLAY = re.compile(r"\b(?:pick|leg)\s+parlay\b|parlay\s+boost|\bsgp\b", re.I)
+_ALONE_THRESHOLD = re.compile(r"^(\d{1,3})\s*\+(?:\s+\S{1,3})?$")
+_AMERICAN = re.compile(r"(?<![\d.])([+-]\d{3,5})(?![\d.])")
+_DAY_WORD = re.compile(r"\b(today|tomorrow|tonight)\b|\b(\d{1,2})/(\d{1,2})\b", re.I)
+
+
+def american_to_decimal(odds):
+    """+4649 -> 47.49, -137 -> 1.73."""
+    odds = int(odds)
+    return round(1 + odds / 100 if odds > 0 else 1 + 100 / abs(odds), 2)
 
 
 # ------------------------------------------------------------------ reading
@@ -263,18 +283,27 @@ def _title_above(lines, i, need_over=False):
     return lines[i - 1] if i else ""
 
 
-def parse_sportsbet(lines, players=None, today=None):
-    """One Sportsbet slip's recognised text -> {price, legs, placed_at,
-    status_on_slip, problems}. Each leg: player, pid, team, stat, line,
-    us_date, plus `needs_review` when something couldn't be read."""
+def parse_sportsbet(lines, players=None, today=None, us_today=None):
+    """One slip's recognised text -> {price, legs, placed_at,
+    status_on_slip, problems}. Reads Sportsbet slips and the US "N Pick
+    Parlay" layout. Each leg: player, pid, team, stat, line, us_date, plus
+    `needs_review` when something couldn't be read."""
     players = players if players is not None else known_players()
     today = today or datetime.datetime.now(SYDNEY).date()
+    us_today = us_today or datetime.datetime.now(NEW_YORK).date()
     lines = [re.sub(r"\s+", " ", str(l)).strip() for l in lines if str(l).strip()]
     blob = " ".join(lines)
-    slip = {"source": "sportsbet", "legs": [], "problems": []}
+    parlay = bool(_PARLAY.search(blob)) and not _PRICE.search(blob)
+    slip = {"source": "parlay" if parlay else "sportsbet", "legs": [], "problems": []}
 
     price = _PRICE.search(blob)
     slip["price"] = float(price.group(1)) if price else None
+    if parlay:
+        # The header's last American price, before the first leg: a boost
+        # shows the old price struck through, then the one that pays.
+        first_leg = next((i for i, l in enumerate(lines) if _ALONE_THRESHOLD.match(l)), len(lines))
+        odds = [m.group(1) for l in lines[:first_leg] for m in _AMERICAN.finditer(l)]
+        slip["price"] = american_to_decimal(odds[-1]) if odds else None
     legs_count = _LEGS.search(blob)
     slip["legs_on_slip"] = int(legs_count.group(1)) if legs_count else None
     letters = re.sub(r"[^A-Z]", "", blob.upper())
@@ -292,7 +321,7 @@ def parse_sportsbet(lines, players=None, today=None):
     else:
         slip["placed_at"] = None
         slip["proposed"] = bool(re.search(r"proposed\s+bet", blob, re.I))
-        if not slip["proposed"]:
+        if not slip["proposed"] and not parlay:   # a US parlay shows no placed time
             slip["problems"].append("Couldn't read when the bet was placed.")
 
     # Where each game date sits in the text, as (line index, US date),
@@ -331,6 +360,17 @@ def parse_sportsbet(lines, players=None, today=None):
             leg = {"stat": _stat_from(threshold.group(2)),
                    "line": int(threshold.group(1)) - 0.5, "side": "over", "side_unsure": False,
                    "who": above, "title": above}
+        elif parlay and _ALONE_THRESHOLD.match(line):
+            # "7+" alone, then "Deni Avdija Assists", then the game.
+            for j in range(i + 1, min(i + 3, len(lines))):
+                if _ALONE_THRESHOLD.match(lines[j]):
+                    break
+                if _stat_from(lines[j]):
+                    leg = {"stat": _stat_from(lines[j]),
+                           "line": int(_ALONE_THRESHOLD.match(line).group(1)) - 0.5,
+                           "side": "over", "side_unsure": False,
+                           "who": lines[j], "title": lines[j], "below": j}
+                    break
         if not leg:
             continue
         found = match_player(leg["who"], players) or match_player(leg["title"], players)
@@ -345,6 +385,22 @@ def parse_sportsbet(lines, players=None, today=None):
             pick = before[-1] if before else (dates[0] if dates else None)
         when = pick[1] if pick else None
         game = games.get(pick[0]) if pick else None
+        if "below" in leg:
+            # The game and its day sit on the row(s) under the name.
+            when, game = None, None
+            for j in range(leg["below"] + 1, min(leg["below"] + 3, len(lines))):
+                game = game or _game_from(lines[j])
+                day = _DAY_WORD.search(lines[j])
+                if day and when is None:
+                    if day.group(1):
+                        when = us_today + datetime.timedelta(
+                            days=1 if day.group(1).lower() == "tomorrow" else 0)
+                        slip["dated_today"] = True
+                    else:
+                        try:
+                            when = datetime.date(us_today.year, int(day.group(2)), int(day.group(3)))
+                        except ValueError:
+                            when = None
         entry = {
             "player": found[2] if found else re.sub(r"[^A-Za-z.' -]", "", leg["who"]).strip(),
             "pid": found[0] if found else None, "team": found[1] if found else None,
@@ -366,6 +422,10 @@ def parse_sportsbet(lines, players=None, today=None):
             slip["problems"].append(
                 f"The slip says {slip['legs_on_slip']} legs but {len(slip['legs'])} were read. "
                 "Check for a missing leg.")
+    if slip.pop("dated_today", False):
+        slip["problems"].append(
+            f"This slip says \"Today\" with no date, so its legs are dated the US day it is now "
+            f"({us_today.strftime('%a %-d %b')}). Change the US date if the games were another day.")
     if not slip["legs"]:
         slip["problems"].append("No legs were recognised on this screenshot.")
     return slip
@@ -472,6 +532,14 @@ def save_slip(slip, image_bytes=None, image_name=None, picks_dir=None):
                 slip["image"] = old_image      # re-saved without a screenshot: keep the old one
         except (OSError, ValueError):
             pass
+    if "reasons" not in slip and os.path.exists(path):
+        try:
+            with open(path) as f:
+                old_reasons = json.load(f).get("reasons")
+            if old_reasons:
+                slip["reasons"] = old_reasons  # re-saved from a screenshot: keep what you wrote
+        except (OSError, ValueError):
+            pass
     if image_bytes:
         ext = os.path.splitext(image_name or "slip.png")[1].lower() or ".png"
         os.makedirs(os.path.join(picks_dir, "images"), exist_ok=True)
@@ -548,6 +616,7 @@ def record(graded):
                 won, total = pickers.get(who, (0, 0))
                 pickers[who] = (won + (l["result"] == "won"), total + 1)
     out["by_picker"] = pickers
+    out["by_sure"] = by_sure(graded)
     return out
 
 
@@ -559,6 +628,51 @@ def leg_label(leg):
     if leg.get("side") == "under":
         return f"{int(leg['line'] - 0.5)} or fewer {STATS[leg['stat']][1]}"
     return f"{int(leg['line'] + 0.5)}+ {STATS[leg['stat']][1]}"
+
+
+# ------------------------------------------------------------------ your reasons
+
+# How sure you were of a leg when you picked it, strongest first.
+SURE = ["Strong", "Lean", "Filler", "Not sure"]
+
+
+def _clean(answers):
+    """Drop blank answers and trim the rest."""
+    out = {}
+    for k, v in (answers or {}).items():
+        if isinstance(v, str):
+            v = v.strip()
+        if v not in (None, ""):
+            out[k] = v
+    return out
+
+
+def save_reasons(sid, picks_dir=None, slip=None, legs=None):
+    """Keep your own reasons on a saved slip. `slip` holds the slip-wide
+    answers ("idea" before the game, "after" once it's settled); `legs` is
+    one {"sure", "why", "miss"} per leg, in the slip's order. Blank answers
+    are dropped, so saving an empty form leaves nothing behind."""
+    reasons = {"slip": _clean(slip), "legs": [_clean(l) for l in (legs or [])]}
+    reasons["at"] = datetime.datetime.now(SYDNEY).isoformat(timespec="seconds")
+    return update_slip(sid, picks_dir, reasons=reasons)
+
+
+def has_reasons(slip):
+    r = slip.get("reasons") or {}
+    return bool(r.get("slip")) or any(r.get("legs") or [])
+
+
+def by_sure(graded):
+    """Settled legs grouped by how sure you said you were: {label: (won, total)}."""
+    out = {}
+    for s in graded:
+        marks = (s.get("reasons") or {}).get("legs") or []
+        for l, m in zip(s["legs"], marks):
+            sure = (m or {}).get("sure")
+            if sure and l["result"] in ("won", "lost"):
+                won, total = out.get(sure, (0, 0))
+                out[sure] = (won + (l["result"] == "won"), total + 1)
+    return out
 
 
 # ------------------------------------------------------------------ money

@@ -98,3 +98,26 @@ def test_picks_tab_empty_then_with_a_slip(journal_dir):
     at = AppTest.from_file(APP, default_timeout=60).run()
     assert not at.exception
     assert "1-leg multi at 5.00" in _text(at)
+
+
+def test_picks_reasons_form_saves_and_shows(journal_dir):
+    import picks as pk
+    sid = pk.save_slip({"source": "sportsbet", "price": 5.0, "placed_at": "2026-10-21T10:00:00+11:00",
+                        "legs": [{"player": "Al Star", "pid": None, "team": "BOS", "stat": "PTS",
+                                  "line": 19.5, "us_date": "2099-01-01", "price": None}]},
+                       picks_dir=str(journal_dir / "picks"))
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    assert not at.exception
+    assert any(e.label == "Write why you picked it" for e in at.expander)
+    at.text_area(key=f"idea_{sid}").input("Back-to-back for their bigs")
+    at.radio(key=f"sure_{sid}_0").set_value("Lean")
+    at.text_area(key=f"why_{sid}_0").input("Starting since the trade")
+    at.button[[b.label for b in at.button].index("Save reasons")].click().run()
+    assert not at.exception
+    saved = pk.load_slips(str(journal_dir / "picks"))[0]["reasons"]
+    assert saved["slip"] == {"idea": "Back-to-back for their bigs"}
+    assert saved["legs"] == [{"sure": "Lean", "why": "Starting since the trade"}]
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    text = _text(at)
+    assert "Back-to-back for their bigs" in text and "jr-sure lean" in text
+    assert any(e.label == "Your reasons" for e in at.expander)
