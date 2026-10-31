@@ -224,6 +224,93 @@ def defense_multiplier(opponent, day):
                   f"({rating:.1f} vs {league:.1f}, {used}): x{mult:.3f}")
 
 
+def _teams_in(frame):
+    """The team abbreviations a game log belongs to."""
+    if frame is None or frame.empty or "MATCHUP" not in frame:
+        return set()
+    return {str(m).split()[0] for m in frame["MATCHUP"] if str(m).split()}
+
+
+def _shared_games(pid, mate_pid, day):
+    """(games together, games apart) -- counting only seasons in which they
+    were actually TEAMMATES.
+
+    Without that restriction Avdija showed "measured from 60 games
+    without Ja Morant", which were last season's games, when Morant
+    played for Memphis. A game without a man who was never on your team
+    says nothing about what happens when he is hurt; counting it turns
+    an empty sample into a confident one.
+    """
+    together = apart = 0
+    for season in (season_for_date(day), _prev_season(season_for_date(day))):
+        mine = pk._log(pid, season)
+        theirs = pk._log(mate_pid, season)
+        if mine is None or mine.empty:
+            continue
+        mine = mine[mine["_d"].map(lambda d: d is not None and d < day)]
+        if not (_teams_in(mine) & _teams_in(theirs)):
+            continue                      # not teammates that season
+        mate_days = set() if theirs is None or theirs.empty else set(theirs["_d"])
+        for d in mine["_d"]:
+            if d in mate_days:
+                together += 1
+            else:
+                apart += 1
+    return together, apart
+
+
+def teammate_evidence(pid, out_names, day):
+    """What the missing-teammates layer actually has to go on.
+
+    Avdija, 31 Oct 2026: Ja Morant was out and the layer returned a
+    multiplier of 1.0 -- which reads exactly like "checked, makes no
+    difference" and in fact meant "nothing to check". Morant had played
+    20 games for Memphis last season and all four of Avdija's games this
+    one, so "Avdija without Morant" was a sample of zero.
+
+    Shaedon Sharpe is the opposite trap: 55 games alongside Avdija last
+    season and none this one, so every current-season game is ALREADY
+    without him and a 'without Sharpe' bump would be counted twice.
+
+    Returns one verdict per absent teammate so the difference between
+    no effect, no evidence, and already-priced-in is visible instead of
+    arriving as the same number.
+    """
+    from engine.team_ids import TEAM_ID_BY_ABBR
+    from engine.cache import read_payload
+    ids = {}
+    for abbr, tid in TEAM_ID_BY_ABBR.items():
+        for row in ((read_payload(f"roster_{tid}") or {}).get("data") or []):
+            ids[pk._norm(row["PLAYER"])] = int(row["PLAYER_ID"])
+    verdicts = []
+    for name in (out_names or []):
+        mate = ids.get(pk._norm(name))
+        if not mate:
+            continue
+        together, apart = _shared_games(pid, mate, day)
+        cur = pk._log(pid, season_for_date(day))
+        cur_n = 0 if cur is None or cur.empty else len(
+            cur[cur["_d"].map(lambda d: d is not None and d < day)])
+        cur_together = 0
+        if cur_n:
+            theirs = pk._log(mate, season_for_date(day))
+            mate_days = set() if theirs is None or theirs.empty else set(theirs["_d"])
+            cur_together = sum(1 for d in cur["_d"] if d in mate_days)
+        if together == 0 and apart == 0:
+            verdicts.append((name, "none", f"{name} has never been his teammate in a game on "
+                             f"record, so there is nothing measuring what changes without him"))
+        elif apart == 0:
+            verdicts.append((name, "none", f"{name} has played in every one of the {together} "
+                             f"games this is measured from, so there is no evidence of what "
+                             f"changes without him"))
+        elif cur_n and cur_together == 0:
+            verdicts.append((name, "priced", f"{name} has missed all {cur_n} of his games this "
+                             f"season, so his absence is already in these numbers"))
+        else:
+            verdicts.append((name, "measured", f"measured from {apart} game(s) without {name}"))
+    return verdicts
+
+
 def teammates_multipliers(pid, day, out_names):
     """{stat: multiplier} from the engine's missing-teammates layer, or {}."""
     if not out_names:
@@ -352,6 +439,16 @@ def check_leg(leg, out_names=None):
     d_mult, d_note = defense_multiplier(opponent, day)
     t_mults, t_note = teammates_multipliers(leg["pid"], day, out_names)
     out["notes"] = [n for n in (d_note, t_note) if n]
+
+    # A multiplier of 1.0 from the teammates layer reads like "checked,
+    # no difference" and can mean "nothing to check". Say which.
+    out["teammates"] = teammate_evidence(leg["pid"], out_names, day)
+    for name, kind, text in out["teammates"]:
+        if kind in ("none", "priced"):
+            # Not .capitalize(): these sentences start with a player's name
+            # and it lowercases the rest of it ("Ja morant").
+            out["flags"].append(text[0].upper() + text[1:] + ".")
+            t_mults = {}
     out["opponent"] = opponent
 
     # Karma's question, asked of every leg: does this player have an
