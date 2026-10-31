@@ -646,9 +646,19 @@ def check_table(check):
                     f"<td class='num proj'>{recent}</td><td class='num proj'>{mins_txt}</td>"
                     f"<td class='num'>{proj}</td></tr>")
         flags += [f"<li><b>{esc(l['player'])}</b>: {esc(f)}</li>" for f in c["flags"]]
+        # Where the bodies are, in a list of its own: an observation about
+        # the opponent's roster, not a warning about this leg, and
+        # deliberately not folded into the chance beside it.
+        m = c.get("matchup")
+        if m:
+            arrow = {"with": "&#9650;", "against": "&#9660;"}.get(m["edge"], "&#8212;")
+            edges.append(f"<li>{arrow} <b>{esc(l['player'])}</b> ({esc(m['kind'])}): "
+                         f"{esc(m['verdict'])}</li>")
     html_out = ("<table class='jr-legs'><tr><td class='jr-faint'>Player</td><td class='jr-faint'>Leg</td>"
                 "<td class='num proj jr-faint'>Landed lately</td><td class='num proj jr-faint'>Minutes</td>"
                 "<td class='num jr-faint'>Projection, chance</td></tr>" + "".join(rows) + "</table>")
+    if edges:
+        html_out += f"<ul class='jr-list jr-faint'>{''.join(dict.fromkeys(edges))}</ul>"
     if flags:
         html_out += f"<ul class='jr-list jr-warn'>{''.join(dict.fromkeys(flags))}</ul>"
     return html_out
