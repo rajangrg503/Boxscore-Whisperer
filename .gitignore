@@ -64,4 +64,23 @@ projections/*.tmp
 # what this repository is and is not offering.
 Graphic designer/
 pod-design-engine/
-journal/
+
+# journal/ is NOT one of those. It is this repo's nightly accuracy
+# journal and the scout that feeds it, and it was swept into the block
+# above -- so the 31 Oct rewrite of nba_scout.py was never in version
+# control at all and existed on one laptop only. The CODE travels with
+# the repo. What stays out, and why:
+#
+#   journal/picks/            11MB of model scratch output
+#   journal/_cache/           cached box scores, rebuildable
+#   journal/transcripts_output/   third-party podcast captions
+#   journal/coverage/         karma's own notes on his own bets
+#   journal/2026-*.json|.md   the nightly measurements -- these ARE the
+#                             accuracy claim and belong here by the same
+#                             argument as projections/ above, but the
+#                             repo is public, so that is karma's call
+#                             and not a default. Delete the first line
+#                             below to include them.
+journal/*
+!journal/*.py
+!journal/FIELDS.md
