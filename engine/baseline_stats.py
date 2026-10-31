@@ -14,7 +14,8 @@ player's own game-to-game standard deviation: the point estimate moved,
 how much he varies around it did not.
 """
 
-from engine.minutes import minutes_aware_means, spread_at_minutes
+from engine.minutes import (minutes_aware_means, spread_at_minutes, SEASON_COLUMN,
+                            MIN_PRIOR_GAMES)
 from engine.stat_columns import STAT_COLUMNS
 
 
@@ -48,9 +49,23 @@ def stats_from_gamelog(df, stat_columns=STAT_COLUMNS, minutes_aware=True,
              if minutes_aware else None)
     spreads = (spread_at_minutes(df, stat_columns, minutes_override)
                if minutes_aware and minutes_override is not None else None)
+    # A two-season frame (engine.game_log.resolve_projection_frame) tags
+    # its rows; the spread is this season's own once there are enough
+    # games for one, because last season's per-game spread describes a
+    # different number of minutes. The game count it reports is the
+    # EFFECTIVE sample -- this season's games plus what the prior is
+    # worth -- which is the number the confidence tier should read.
+    spread_rows, n_games = df, len(df)
+    if SEASON_COLUMN in df.columns:
+        seasons = df[SEASON_COLUMN].astype(str)
+        current = df[seasons == seasons.max()]
+        prior_weight = float(df.attrs.get("prior_weight") or 0.0)
+        n_games = int(round(len(current) + (prior_weight if len(df) > len(current) else 0.0)))
+        if len(current) >= MIN_PRIOR_GAMES:
+            spread_rows = current
     stats_dict = {}
     for col, _ in stat_columns:
-        mean = df[col].mean() if means is None else means[col]
-        std = df[col].std() if spreads is None else spreads[col]
+        mean = spread_rows[col].mean() if means is None else means[col]
+        std = spread_rows[col].std() if spreads is None else spreads[col]
         stats_dict[col] = (mean, std)
-    return stats_dict, len(df)
+    return stats_dict, n_games

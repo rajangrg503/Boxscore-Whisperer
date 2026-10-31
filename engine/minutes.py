@@ -73,6 +73,63 @@ MIN_PRIOR_GAMES = 5
 MINUTES_COLUMN = "MIN"
 DATE_COLUMN = "GAME_DATE"
 
+# A frame from engine.game_log.resolve_projection_frame carries BOTH
+# seasons, tagged in this column, with df.attrs["prior_weight"] saying how
+# many games last season is worth (12 x role similarity, engine/role_blend).
+# A frame without the column is one season and behaves exactly as before.
+SEASON_COLUMN = "_season"
+MINUTES_MIN_GAMES = 3      # current-season games before his minutes are his own
+
+
+def _split(played):
+    """(current rows, prior rows, prior weight per game) -- the two-season
+    frame taken apart. Single-season frames come back whole with no prior.
+
+    The 31 Oct 2026 rule, in one place: MINUTES come from this season as
+    soon as there are three of them, because last season's minutes were
+    last season's job (Camara 33 then, 25 now). RATES per minute blend
+    across both, because a per-minute rate carries between seasons
+    without scaling, and last season is worth at most twelve games of it,
+    scaled down by how far the role moved (Sabonis' five games at minutes
+    he had never played before were 92% on a line; blended they are 64%).
+    """
+    if played is None or SEASON_COLUMN not in played.columns:
+        return played, None, 0.0
+    seasons = played[SEASON_COLUMN].astype(str)
+    newest = seasons.max()        # "2026-27" > "2025-26"
+    cur = played[seasons == newest].reset_index(drop=True)
+    prev = played[seasons != newest].reset_index(drop=True)
+    w_prev = float(played.attrs.get("prior_weight") or 0.0)
+    if len(prev) == 0 or w_prev <= 0:
+        return cur, None, 0.0
+    return cur, prev, w_prev / len(prev)
+
+
+def _weights(cur, prev, w_each):
+    """One weight per row of cur + prev: this season counts in full, last
+    season at w_each per game so it totals the prior weight."""
+    return [1.0] * len(cur) + [w_each] * (0 if prev is None else len(prev))
+
+
+def _frame_for_minutes(played):
+    """The rows whose minutes describe tonight: this season's when there
+    are MINUTES_MIN_GAMES of them, else last season's (the old fallback)."""
+    cur, prev, _w = _split(played)
+    if prev is None:
+        return cur, False
+    if len(cur) >= MINUTES_MIN_GAMES:
+        return cur, False
+    return prev, True
+
+
+def _effective_games(played):
+    """How many games the frame is worth: this season's plus the prior's
+    weight. The MIN_PRIOR_GAMES gate reads this, so a player with four
+    current games and a full prior season is not refused, and a rookie
+    with four games and nothing behind them still is."""
+    cur, prev, w_each = _split(played)
+    return len(cur) + (0.0 if prev is None else w_each * len(prev))
+
 
 def _played(df):
     """Prior games he actually played, newest first.
@@ -99,9 +156,12 @@ def projected_minutes(df):
     """Minutes to project for the next game, or None when the log is too
     thin to say. Half his recent workload, half his season."""
     played = _played(df)
-    if played is None or len(played) < MIN_PRIOR_GAMES:
+    if played is None or _effective_games(played) < MIN_PRIOR_GAMES:
         return None
-    minutes = played[MINUTES_COLUMN]
+    rows, _from_prior = _frame_for_minutes(played)
+    if rows is None or len(rows) == 0:
+        return None
+    minutes = rows[MINUTES_COLUMN]
     mpg = float(minutes.mean())
     recent = float(minutes.head(RECENT_WINDOW).mean())
     return RECENT_WEIGHT * recent + (1.0 - RECENT_WEIGHT) * mpg
@@ -119,8 +179,13 @@ def why_not(df, stat_columns):
     played = _played(df)
     if played is None:
         return "no usable minutes in the game log"
-    if len(played) < MIN_PRIOR_GAMES:
-        return f"only {len(played)} played games (needs {MIN_PRIOR_GAMES})"
+    if _effective_games(played) < MIN_PRIOR_GAMES:
+        cur, prev, _w = _split(played)
+        if prev is None:
+            return f"only {len(played)} played games (needs {MIN_PRIOR_GAMES})"
+        return (f"only {len(cur)} played games this season and last season's role "
+                f"is worth {_effective_games(played) - len(cur):.0f} more "
+                f"(needs {MIN_PRIOR_GAMES})")
     if float(played[MINUTES_COLUMN].sum()) <= 0:
         return "no minutes recorded"
     missing = [col for col, _ in stat_columns if col not in played.columns]
@@ -156,14 +221,19 @@ def minutes_aware_means(df, stat_columns, minutes_override=None):
     if why_not(df, stat_columns) is not None:
         return None
     played = _played(df)
-    total_minutes = float(played[MINUTES_COLUMN].sum())
+    cur, prev, w_each = _split(played)
+    rows = cur if prev is None else pd.concat([cur, prev], ignore_index=True)
+    weights = pd.Series(_weights(cur, prev, w_each), index=rows.index)
+    total_minutes = float((pd.to_numeric(rows[MINUTES_COLUMN], errors="coerce") * weights).sum())
+    if total_minutes <= 0:
+        return None
     projected = projected_minutes(df)
     if minutes_override is not None:
         projected = float(minutes_override)
 
     means = {}
     for col, _label in stat_columns:
-        total = pd.to_numeric(played[col], errors="coerce").sum()
+        total = (pd.to_numeric(rows[col], errors="coerce").fillna(0.0) * weights).sum()
         means[col] = float(total) / total_minutes * projected
     return means
 
@@ -212,17 +282,20 @@ def spread_at_minutes(df, stat_columns, minutes):
     if why_not(df, stat_columns) is not None or minutes is None:
         return None
     played = _played(df)
-    minutes_series = pd.to_numeric(played[MINUTES_COLUMN], errors="coerce")
-    total_minutes = float(minutes_series.sum())
+    cur, prev, w_each = _split(played)
+    rows = cur if prev is None else pd.concat([cur, prev], ignore_index=True)
+    weights = pd.Series(_weights(cur, prev, w_each), index=rows.index)
+    minutes_series = pd.to_numeric(rows[MINUTES_COLUMN], errors="coerce")
+    total_minutes = float((minutes_series * weights).sum())
     if total_minutes <= 0:
         return None
 
     spreads = {}
     for col, _label in stat_columns:
-        values = pd.to_numeric(played[col], errors="coerce").fillna(0.0)
-        rate = float(values.sum()) / total_minutes
+        values = pd.to_numeric(rows[col], errors="coerce").fillna(0.0)
+        rate = float((values * weights).sum()) / total_minutes
         residuals = values - rate * minutes_series
-        sigma_sq = float((residuals ** 2).sum()) / total_minutes
+        sigma_sq = float((residuals ** 2 * weights).sum()) / total_minutes
         spreads[col] = (sigma_sq * float(minutes)) ** 0.5
     return spreads
 
@@ -232,15 +305,22 @@ def describe(df):
     None. A reader who can see the minutes assumption can argue with
     it, which is the whole point of showing any of this."""
     played = _played(df)
-    if played is None or len(played) < MIN_PRIOR_GAMES:
+    if played is None or _effective_games(played) < MIN_PRIOR_GAMES:
         return None
-    minutes = played[MINUTES_COLUMN]
+    rows, from_prior = _frame_for_minutes(played)
+    if rows is None or len(rows) == 0:
+        return None
+    minutes = rows[MINUTES_COLUMN]
     mpg = float(minutes.mean())
     recent = float(minutes.head(RECENT_WINDOW).mean())
+    cur, prev, w_each = _split(played)
     return {
         "projected": RECENT_WEIGHT * recent + (1.0 - RECENT_WEIGHT) * mpg,
         "mpg": mpg,
         "recent": recent,
         "window": RECENT_WINDOW,
-        "games": len(played),
+        "games": len(rows),
+        "minutes_from_prior_season": from_prior,
+        "prior_weight": 0.0 if prev is None else w_each * len(prev),
+        "games_this_season": len(cur),
     }

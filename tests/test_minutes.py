@@ -247,3 +247,72 @@ def test_zero_is_not_the_same_as_no_override():
     d = log([30, 30, 30, 30, 30], points=[60, 60, 60, 60, 60])
     assert m.minutes_aware_means(d, COLS, minutes_override=0.0)["PTS"] == 0.0
     assert m.minutes_aware_means(d, COLS, minutes_override=None)["PTS"] == 60.0
+
+
+# ---- two seasons in one frame (31 Oct 2026) --------------------------------
+def two_seasons(cur_minutes, prev_minutes, prior_weight, cur_pts=None, prev_pts=None):
+    """What engine.game_log.resolve_projection_frame hands over: both
+    seasons tagged, last season's weight in attrs."""
+    cur = log(cur_minutes, points=cur_pts)
+    cur[m.SEASON_COLUMN] = "2026-27"
+    prev = log(prev_minutes, points=prev_pts)
+    prev["GAME_DATE"] = pd.date_range("2025-01-01", periods=len(prev))[::-1]
+    prev[m.SEASON_COLUMN] = "2025-26"
+    df = pd.concat([cur, prev], ignore_index=True)
+    df.attrs["prior_weight"] = prior_weight
+    return df
+
+
+def test_minutes_are_this_seasons_as_soon_as_there_are_three():
+    # Camara: 33 a night last season, 25 now. Four games is enough to
+    # know that; the old path handed back 33.
+    d = two_seasons([25, 25, 25, 25], [33] * 40, prior_weight=8.0)
+    assert m.projected_minutes(d) == pytest.approx(25)
+    assert m.describe(d)["minutes_from_prior_season"] is False
+    assert m.describe(d)["games"] == 4
+
+
+def test_rates_blend_across_seasons_at_the_prior_weight():
+    # 1.0 pt/min this season over 5 games of 30, 0.5 pt/min last season.
+    # Prior worth 5 games of 30 minutes -> rate 0.75 -> 22.5 at 30 min.
+    d = two_seasons([30] * 5, [30] * 50, prior_weight=5.0,
+                    cur_pts=[30] * 5, prev_pts=[15] * 50)
+    means = m.minutes_aware_means(d, COLS)
+    assert means["PTS"] == pytest.approx(22.5)
+
+
+def test_there_is_no_cliff_at_five_games():
+    # Four games and five games with the same rates project the same.
+    four = two_seasons([30] * 4, [30] * 50, prior_weight=6.0,
+                       cur_pts=[30] * 4, prev_pts=[15] * 50)
+    five = two_seasons([30] * 5, [30] * 50, prior_weight=6.0,
+                       cur_pts=[30] * 5, prev_pts=[15] * 50)
+    a, b = m.minutes_aware_means(four, COLS)["PTS"], m.minutes_aware_means(five, COLS)["PTS"]
+    assert abs(a - b) < 1.5          # one more game at the same rate, not a regime change
+    assert m.why_not(four, COLS) is None
+
+
+def test_a_rookie_with_four_games_and_no_prior_is_still_refused():
+    d = two_seasons([30] * 4, [], prior_weight=0.0)
+    assert m.why_not(d, COLS) is not None
+    assert m.projected_minutes(d) is None
+
+
+def test_fewer_than_three_current_games_fall_back_to_last_seasons_minutes():
+    d = two_seasons([12, 14], [30] * 40, prior_weight=9.0)
+    assert m.projected_minutes(d) == pytest.approx(30)
+    assert m.describe(d)["minutes_from_prior_season"] is True
+
+
+def test_the_baseline_reports_the_effective_sample_and_this_seasons_spread():
+    d = two_seasons([30] * 6, [30] * 50, prior_weight=6.0,
+                    cur_pts=[20, 22, 24, 26, 28, 30], prev_pts=[15] * 50)
+    stats, n = stats_from_gamelog(d, COLS)
+    assert n == 12
+    assert stats["PTS"][1] == pytest.approx(pd.Series([20, 22, 24, 26, 28, 30]).std())
+
+
+def test_a_single_season_frame_is_unchanged():
+    d = log([30, 30, 30, 30, 30])
+    assert m.projected_minutes(d) == pytest.approx(30)
+    assert m.describe(d)["prior_weight"] == 0

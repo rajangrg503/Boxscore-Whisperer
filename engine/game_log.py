@@ -140,3 +140,94 @@ def resolve_season_gamelog(player_id):
 
     df = fetch_combined_game_log(player_id, PREVIOUS_SEASON)  # let this one raise if it fails -- nothing left to fall back to
     return df, PREVIOUS_SEASON, f"{PREVIOUS_SEASON} full season, incl. playoffs ({len(df)} games)"
+
+
+# ---------------------------------------------------------------- blend
+
+SEASON_COLUMN = "_season"
+MINUTES_MIN_GAMES = 3      # current-season games before his minutes are his own
+
+
+def _rate36(df, col):
+    if df is None or len(df) == 0 or col not in df.columns or "MIN" not in df.columns:
+        return None
+    mins = pd.to_numeric(df["MIN"], errors="coerce").fillna(0)
+    if mins.sum() <= 0:
+        return None
+    return float(pd.to_numeric(df[col], errors="coerce").fillna(0).sum()) / float(mins.sum()) * 36
+
+
+def resolve_projection_frame(player_id):
+    """BOTH seasons' games for the projection, tagged by season, with how
+    much of last season still describes him in `df.attrs`.
+
+    resolve_season_gamelog() is a cliff: five current games and last
+    season vanishes, four and this season does. The 20 Sep sweep showed
+    the last-season side is only ~3% worse than in-season ON AVERAGE,
+    which is why the cliff survived -- but the average hides the two
+    cases that bit on 31 Oct 2026, from one slip, one night:
+
+      Camara   4 games -> last season's per-minute rate times LAST
+               SEASON'S MINUTES (33), while he now plays 25
+      Sabonis  5 games -> this season only, five games, 92% on a line he
+               cleared five times at minutes he had never played before
+
+    The engine is per-minute, so the two things the cliff conflates can
+    be separated: RATES blend across seasons (a per-minute rate carries
+    without scaling), MINUTES stay this season's as soon as there are
+    three of them. engine/minutes.py does both when it sees the season
+    column; every other consumer still gets one season from
+    resolve_season_gamelog and is unaffected.
+
+    Returns (df, meta). meta: n_cur, n_prev, similarity (engine/role_blend),
+    mpg_cur, mpg_prev, source. The single-season function's fallback
+    still governs the degenerate cases: no current games means last
+    season at full weight, exactly as before; no prior season means
+    this season alone.
+    """
+    from engine.role_blend import role_similarity, PRIOR_W
+    try:
+        cur = fetch_combined_game_log(player_id, CURRENT_SEASON)
+    except Exception:
+        cur = pd.DataFrame()
+    try:
+        prev = fetch_combined_game_log(player_id, PREVIOUS_SEASON)
+    except Exception:
+        prev = pd.DataFrame()
+    cur = cur.copy() if cur is not None else pd.DataFrame()
+    prev = prev.copy() if prev is not None else pd.DataFrame()
+    if len(cur):
+        cur[SEASON_COLUMN] = CURRENT_SEASON
+    if len(prev):
+        prev[SEASON_COLUMN] = PREVIOUS_SEASON
+
+    def mpg(df):
+        if df is None or len(df) == 0 or "MIN" not in df.columns:
+            return None
+        m = pd.to_numeric(df["MIN"], errors="coerce").dropna()
+        return float(m.mean()) if len(m) else None
+
+    mpg_cur, mpg_prev = mpg(cur), mpg(prev)
+    rate_cur, rate_prev = _rate36(cur, "FGA"), _rate36(prev, "FGA")
+    if mpg_cur and mpg_prev and rate_cur is not None and rate_prev is not None:
+        sim = role_similarity(mpg_cur, mpg_prev, rate_cur, rate_prev)
+    else:
+        sim = 1.0
+    frames = [f for f in (cur, prev) if len(f)]
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    n_cur, n_prev = len(cur), len(prev)
+    w_prev = PRIOR_W * sim if n_prev else 0.0
+    if n_cur and n_prev:
+        source = (f"{n_cur} games this season, with {PREVIOUS_SEASON} behind them at "
+                  f"{sim:.0%} role match (worth about {w_prev:.0f} games)")
+    elif n_cur:
+        source = f"{CURRENT_SEASON} season so far ({n_cur} games), no prior season on record"
+    else:
+        source = f"{PREVIOUS_SEASON} full season, incl. playoffs ({n_prev} games)"
+    meta = {"n_cur": n_cur, "n_prev": n_prev, "similarity": round(sim, 2),
+            "mpg_cur": mpg_cur, "mpg_prev": mpg_prev, "prior_weight": w_prev,
+            "source": source,
+            "season": (CURRENT_SEASON if (n_cur >= MINUTES_MIN_GAMES or not n_prev)
+                       else PREVIOUS_SEASON)}
+    df.attrs.update(meta)
+    return df, meta

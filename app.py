@@ -54,7 +54,8 @@ from engine.tracker import (
     refresh_pending_predictions,
     is_hypothetical,
 )
-from engine.game_log import fetch_combined_game_log, resolve_season_gamelog
+from engine.game_log import (fetch_combined_game_log, resolve_season_gamelog,
+                             resolve_projection_frame)
 
 # ---------- Local-to-cloud data cache ----------
 # Moved to engine/cache.py (CACHE_DIR, cached_or_live, etc.) -- see that
@@ -390,7 +391,13 @@ def get_season_baseline(player_id, player_name, minutes_override=None):
     adjustment can share the exact same season-resolution rule instead
     of re-deriving it. This function's own return shape and behavior
     are unchanged by that move."""
-    df, season, source = resolve_season_gamelog(player_id)
+    # Both seasons, tagged, with last season worth 12 games x role match
+    # (engine/game_log.resolve_projection_frame, 31 Oct 2026). The old
+    # five-game cliff is gone from THIS path only: minutes come from
+    # this season as soon as it has three games, per-minute rates blend
+    # across both. `season` now means "where the minutes came from".
+    df, meta = resolve_projection_frame(player_id)
+    season, source = meta["season"], meta["source"]
     # minutes_override is the reader's own minutes for tonight. It
     # reaches the per-minute core and nothing else -- see
     # engine/minutes.py's minutes_aware_means for why that is the only
@@ -416,7 +423,7 @@ def get_projected_minutes_note(player_id):
     underneath flat season averages. Asking engine/minutes.py the same
     question the baseline asks makes the two agree by construction."""
     try:
-        df, _season, _source = resolve_season_gamelog(player_id)
+        df, _meta = resolve_projection_frame(player_id)
     except Exception as exc:                         # noqa: BLE001
         return None, f"couldn't read the game log ({type(exc).__name__})"
     reason = minutes_why_not(df, STAT_COLUMNS)
@@ -3449,14 +3456,26 @@ with tab1:
                     f"rates are measured and the minutes are assumed."
                 )
             else:
+                # Where the rates came from is a different question from
+                # where the minutes came from, and after 31 Oct 2026 they
+                # can have different answers: rates blend last season in
+                # at its role-match weight, minutes are this season's as
+                # soon as it has three games.
+                _prior_w = float(_mins.get("prior_weight") or 0.0)
+                _rates = ""
+                if _prior_w > 0:
+                    _rates = (f" The per-minute rates also lean on last season, worth about "
+                              f"{_prior_w:.0f} games by how much his role carried over.")
+                _season_txt = ("last season" if _mins.get("minutes_from_prior_season")
+                               else "his season")
                 st.write(
                     f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **Projected minutes: "
                     f"{_mins['projected']:.1f}** — half his last {_mins['window']} games "
-                    f"({_mins['recent']:.1f}) and half his season "
-                    f"({_mins['mpg']:.1f} over {_mins['games']} games). Every stat above is "
-                    f"his per-minute rate times that number, which is why the baseline isn't "
-                    f"simply his season average. It knows his recent workload, not tonight's "
-                    f"plan: a role change it can't see, it won't see."
+                    f"({_mins['recent']:.1f}) and half {_season_txt} "
+                    f"({_mins['mpg']:.1f} over {_mins['games']} games).{_rates} Every stat "
+                    f"above is his per-minute rate times that number, which is why the "
+                    f"baseline isn't simply his season average. It knows his recent "
+                    f"workload, not tonight's plan: a role change it can't see, it won't see."
                 )
             # Karma's first question of any game, asked here of this player:
             # does he have an advantage in THIS matchup? Where the opponent is
