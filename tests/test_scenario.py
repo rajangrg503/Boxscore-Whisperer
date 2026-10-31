@@ -661,3 +661,13 @@ def test_the_within_roster_rule_is_unchanged():
     assert parse("Jalen Williams is out")["out_teammates"] == ["1631114"]
     assert parse("Jaylin Williams is out")["out_teammates"] == ["1630793"]
     assert parse("Williams is out")["out_teammates"] == []
+
+
+def test_matchup_read_is_reference_only_and_absent_without_a_roster(monkeypatch):
+    """engine.matchup.read says where the opponent is short of bodies at
+    this player's archetype. It is shown beside a projection and never
+    folded into it, and with nothing to read it is None, not a guess."""
+    from engine import matchup
+    assert matchup.read(1, "ZZZ", "2026-27") is None          # no such team
+    monkeypatch.setattr(matchup, "of_player", lambda pid: None)
+    assert matchup.read(1, "BOS", "2026-27") is None          # no archetype on record

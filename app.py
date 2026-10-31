@@ -64,6 +64,7 @@ from engine.game_log import fetch_combined_game_log, resolve_season_gamelog
 # commit and push data_cache/ so the deployed app picks it up.
 from engine.cache import ARCHIVE as CACHE_ARCHIVE, CACHE_DIR, cached_or_live
 from engine.adjustments.missing_players import get_opponent_missing_adjustment
+from engine.matchup import read as matchup_read
 from engine.adjustments.defender import get_defender_matchup_adjustment
 from engine.adjustments.scheme import get_synergy_scheme_adjustment, SCHEME_ADJUSTMENTS, NO_SCHEME
 from engine.adjustments.base import AdjustmentResult
@@ -2766,6 +2767,7 @@ with tab1:
             "teammate_note": teammate_note,
             "new_teammate_note": new_teammate_note,
             "opp_missing_note": opp_missing_note,
+            "missing_opponents_ids": list(missing_opponents_ids),
             "defender_note": defender_note,
             "scheme_note": scheme_note,
             "scheme_executor_input": scheme_executor_input,
@@ -3455,6 +3457,25 @@ with tab1:
                     f"his per-minute rate times that number, which is why the baseline isn't "
                     f"simply his season average. It knows his recent workload, not tonight's "
                     f"plan: a role change it can't see, it won't see."
+                )
+            # Karma's first question of any game, asked here of this player:
+            # does he have an advantage in THIS matchup? Where the opponent is
+            # short of bodies at his archetype, measured against the league
+            # median with tonight's absentees excluded. Reference only -- a
+            # minutes share is where the bodies are, not a defender, so it
+            # sits beside the projection and is never folded into it.
+            _edge = matchup_read(player_id, opponent_abbr, CURRENT_SEASON,
+                                 exclude=r.get("missing_opponents_ids") or [])
+            if _edge:
+                _arrow = {"with": "▲", "against": "▼"}.get(_edge["edge"], "—")
+                _sat = (f" (not counting {', '.join(_edge['excluded'])})"
+                        if _edge.get("excluded") else "")
+                st.write(
+                    f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **Matchup (reference only):** {_arrow} "
+                    f"as a {_edge['kind']} he {_edge['verdict']}{_sat} — {opponent_abbr} "
+                    f"plays {_edge['share']:.0f}% of its minutes at {_edge['kind']} against a "
+                    f"league median of {_edge['league']:.0f}%. Where the bodies are, not "
+                    f"who is guarding him; it does not move the numbers above."
                 )
             notes_by_layer = {
                 "opponent_defense": def_note,

@@ -30,80 +30,28 @@ it is shown beside the chance, never folded into it.
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import matchup_holes as mh                                    # noqa: E402
-from engine.cache import read_payload                         # noqa: E402
-from engine.team_ids import TEAM_ID_BY_ABBR                    # noqa: E402
+from engine import archetype as _arch                           # noqa: E402
+from engine import matchup as _m                                # noqa: E402
+from engine.team_ids import TEAM_ID_BY_ABBR                     # noqa: E402,F401
 
-GAP = 4.0                 # percentage points below the league median
-_baseline_cache = {}
-
-
-def _baseline(season):
-    if season not in _baseline_cache:
-        _baseline_cache[season] = mh.league_baseline(season)
-    return _baseline_cache[season]
+GAP = _m.GAP
 
 
-def player_archetype(player_id, team):
-    """guard / wing / big from the cached roster row, or None."""
-    tid = TEAM_ID_BY_ABBR.get(team)
-    if not tid:
-        return None
-    for row in ((read_payload(f"roster_{tid}") or {}).get("data") or []):
-        if int(row["PLAYER_ID"]) == int(player_id):
-            return mh.archetype(row.get("POSITION"), row.get("HEIGHT"), row.get("WEIGHT"))
-    return None
+def player_archetype(player_id, team=None):
+    """Kept for callers; the engine looks a player up across every roster."""
+    return _arch.of_player(player_id)
 
 
 def archetype_anywhere(player_id):
-    """guard / wing / big, looked up across every roster.
-
-    player_archetype() takes a team and is right for the man you are
-    betting on. It is wrong for a former teammate: Jerami Grant was
-    looked up on Portland, where he no longer plays, came back None, and
-    was filed as "plays a different position" from Deni Avdija -- the
-    one teammate whose absence actually moves Avdija's shot volume.
-    """
-    for abbr in TEAM_ID_BY_ABBR:
-        kind = player_archetype(player_id, abbr)
-        if kind:
-            return kind
-    return None
+    return _arch.of_player(player_id)
 
 
 def read(player_id, team, opponent, season, exclude=()):
-    """{kind, gap, verdict, share, league} -- or None when it cannot be said.
-
-    `exclude` takes the opponent's players who are out tonight, so a team
-    is not credited with coverage it will not have on the floor.
-    """
-    kind = player_archetype(player_id, team)
-    if not kind or not opponent or opponent not in TEAM_ID_BY_ABBR:
-        return None
-    try:
-        profile = mh.team_profile(opponent, season, exclude=exclude)
-        baseline = _baseline(season)
-    except Exception:                      # noqa: BLE001 -- a missing cache is not an error here
-        return None
-    share = profile["share"].get(kind)
-    league = baseline.get(kind)
-    if share is None or league is None:
-        return None
-    deficit = round(league - share, 1)
-    if deficit >= GAP:
-        verdict = f"attacks {opponent}'s {kind} coverage, {deficit:.1f}pt below the league median"
-        edge = "with"
-    elif deficit <= -GAP:
-        verdict = f"{opponent} is {abs(deficit):.1f}pt deep at {kind} against the league median"
-        edge = "against"
-    else:
-        verdict = f"{opponent} covers {kind}s at about league level"
-        edge = "neutral"
-    return {"kind": kind, "gap": deficit, "edge": edge, "verdict": verdict,
-            "share": round(share, 1), "league": round(league, 1), "opponent": opponent}
+    """See engine.matchup.read. `team` is accepted and unused: the player's
+    archetype comes from wherever he is on a roster now."""
+    return _m.read(player_id, opponent, season, exclude=exclude)
 
 
 def main(argv=None):
