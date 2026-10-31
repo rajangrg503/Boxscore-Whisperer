@@ -208,6 +208,28 @@ def _stat_from(text):
 
 # ------------------------------------------------------------------ parsing
 
+
+def parser_fingerprint():
+    """A short digest of THIS file's source.
+
+    journal_app caches a screenshot's parse under a key made from the
+    image bytes alone, so once a slip had been read its answer was frozen
+    for the life of the browser session. On 31 Oct 2026 the signed-line
+    fix landed and the app kept showing the old read -- every leg "Over",
+    no line -- because the image had not changed and the cached answer
+    was never recomputed.
+
+    Keying on the parser as well means any edit here retires every stored
+    read automatically, so it cannot be forgotten the next time this file
+    changes.
+    """
+    try:
+        with open(os.path.abspath(__file__), "rb") as handle:
+            return hashlib.sha1(handle.read()).hexdigest()[:8]
+    except OSError:
+        return "nofile"
+
+
 def _us_date(day, month, hour, minute, year):
     start = datetime.datetime(year, month, day, hour, minute, tzinfo=SYDNEY)
     return start.astimezone(NEW_YORK).date()

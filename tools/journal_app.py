@@ -683,7 +683,11 @@ def render_check(check, cal):
 def read_upload(upload):
     """Recognise and parse one uploaded screenshot, once per file."""
     data = upload.getvalue()
-    key = "ocr_" + pk.hashlib.sha1(data).hexdigest()[:12]
+    # The parser's own fingerprint is part of the key: a fix to picks.py
+    # must retire the reads it already got wrong, and keying on the image
+    # alone froze them for the session.
+    key = ("ocr_" + pk.hashlib.sha1(data).hexdigest()[:12]
+           + "_" + pk.parser_fingerprint())
     if key not in st.session_state:
         os.makedirs(os.path.join(PICKS_DIR, "_incoming"), exist_ok=True)
         path = os.path.join(PICKS_DIR, "_incoming", key + os.path.splitext(upload.name)[1].lower())
