@@ -132,6 +132,38 @@ def get_teammate_availability_adjustment(player_id, missing_names, season, df=No
             data_quality="unavailable", sample_n=0, applied=False,
         )
 
+    # Same plate only. An absent teammate redistributes this player's
+    # shots only if he was taking the same ones -- a guard's absence does
+    # not change what a wing does. Avdija's 71 games last season: FGA/36
+    # 17.3 with and 17.3 without Sharpe (G), 16.9 vs 18.1 with and
+    # without Grant (F). Karma, 31 Oct 2026: "they dont eat into each
+    # other." Teammates of another archetype are dropped here with a
+    # note rather than measured, because a measured 'effect' of a man
+    # who never took his shots is noise with a sample size attached.
+    from engine import archetype as _arch
+    mine = _arch.of_player(player_id)
+    kept, elsewhere = [], []
+    for name in missing_names:
+        theirs = _arch.of_name(name)
+        if mine and theirs and theirs != mine:
+            elsewhere.append(f"{name} ({theirs})")
+        else:
+            kept.append(name)
+    plate_note = ""
+    if elsewhere:
+        plate_note = (f" {', '.join(elsewhere)} not counted: a {mine} does not take shots "
+                      f"from a {'/'.join(sorted({e.split('(')[1][:-1] for e in elsewhere}))}, "
+                      f"so his absence says nothing about this player's volume (it may still "
+                      f"change who creates it, which this layer does not measure).")
+    if not kept:
+        return AdjustmentResult(
+            layer=MISSING_TEAMMATES_LAYER, value=neutral,
+            note=("No same-position teammate is missing -- no shot redistribution to measure."
+                  + plate_note),
+            data_quality="unavailable", sample_n=0, applied=False,
+        )
+    missing_names = kept
+
     if df is None:
         try:
             df = fetch_combined_game_log(player_id, season)
@@ -188,7 +220,7 @@ def get_teammate_availability_adjustment(player_id, missing_names, season, df=No
             note=(f"Found {len(matching_games)} game(s) missing {', '.join(missing_names)} "
                   f"out of {games_checked} checked (and {present_count} with them "
                   f"present) -- not enough real contrast in both directions to "
-                  f"trust a comparison, skipping this adjustment."),
+                  f"trust a comparison, skipping this adjustment." + plate_note),
             data_quality="unavailable", sample_n=len(matching_games), applied=False,
         )
 
@@ -213,6 +245,7 @@ def get_teammate_availability_adjustment(player_id, missing_names, season, df=No
         f"with them present), stat-by-stat: {summary}. Each raw difference is "
         f"shrunk toward zero by sample size ({sample_n} games vs. a "
         f"{OUT_RATIO_SHRINK_K}-game prior) -- backtested, small samples overshoot."
+        + plate_note
     )
     return AdjustmentResult(
         layer=MISSING_TEAMMATES_LAYER, value=adjustments, note=note,

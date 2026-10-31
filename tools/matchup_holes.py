@@ -75,45 +75,8 @@ from engine.team_ids import TEAM_ID_BY_ABBR                    # noqa: E402
 # Archetype thresholds, in inches and pounds. Documented rather than
 # tuned: nothing here has been fitted to an outcome, and the moment one
 # of them is, it belongs in a sweep with a measurement beside it.
-GUARD_MAX_IN = 77        # 6-5 and under
-WING_MAX_IN = 81         # 6-6 to 6-9
-WING_MIN_LB = 206        # below this a 6-6 body is a guard, not a wing
-BIG_MIN_LB = 232         # a 6-9 listed F at this weight is playing the 5
-
-ARCHETYPES = ("guard", "wing", "big")
-
-
-def inches(height):
-    try:
-        feet, inch = str(height).split("-")
-        return int(feet) * 12 + int(inch)
-    except Exception:
-        return 0
-
-
-def pounds(weight):
-    try:
-        return int(float(weight))
-    except Exception:
-        return 0
-
-
-def archetype(position, height, weight):
-    """guard / wing / big from listed size, with the two corrections that
-    matter: a light 6-6 is a guard, and a heavy 6-9 forward is a big."""
-    pos = str(position or "")
-    tall, heavy = inches(height), pounds(weight)
-    if tall == 0:
-        return None
-    if tall > WING_MAX_IN or pos in ("C", "C-F", "F-C"):
-        return "big"
-    if tall <= GUARD_MAX_IN:
-        return "guard"
-    if heavy < WING_MIN_LB:
-        return "guard"          # 6-6, 195: a guard who is tall
-    if tall >= WING_MAX_IN and heavy >= BIG_MIN_LB:
-        return "big"            # 6-9, 240 listed F: he is playing the 5
-    return "wing"
+from engine.archetype import (GUARD_MAX_IN, WING_MAX_IN, WING_MIN_LB,  # noqa: E402,F401
+                              BIG_MIN_LB, ARCHETYPES, inches, pounds, archetype)
 
 
 def minutes_played(player_id, season):
