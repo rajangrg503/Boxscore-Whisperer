@@ -61,6 +61,44 @@ PRIOR_W = 12.0
 MIN_GAMES_CUR = 4
 MIN_GAMES_PREV = 15
 
+# Karma's question, 31 Oct: "should we only value last season data for
+# those who played significant games?"
+#
+# Games played is close but not the gate. Ajay Mitchell played plenty of
+# significant games last season -- in a team that still had Holmgren,
+# Jalen Williams, Caruso and Wallace. His 84% prior describes a role he
+# is not in tonight, and no games-played threshold would have caught
+# that, because he passes it easily.
+#
+# What matters is whether the role CARRIED OVER. Two things measure it
+# without needing play-by-play: how the minutes moved, and how the shot
+# volume per minute moved. A player at the same minutes and the same
+# attempts is doing the same job; one whose attempts per 36 have jumped
+# by half is not, however many games he played.
+#
+# The first attempt at this just scaled the prior's weight by similarity,
+# and it was wrong in an instructive way. Shrinking the prior does not
+# express "we know less" -- it hands the weight to p_cur, so a five-game
+# sample gets MORE authority exactly where the role changed and the five
+# games are least trustworthy. Sabonis (similarity 0.56, minutes up 25%)
+# went from 74% to 79% on that change, which is backwards.
+#
+# A changed role means the prior answers a question we did not ask. So
+# the prior's twelve games are SPLIT: `12 * sim` of them keep saying what
+# last season said, and `12 * (1 - sim)` say 0.5 -- nothing. Total weight
+# stays twelve, and a shifted role pulls the blend toward a coin flip
+# instead of toward whichever extreme the small sample happens to show.
+
+
+def role_similarity(mpg_cur, mpg_prev, fga36_cur, fga36_prev):
+    """1.0 = same minutes and same shot volume per minute. Falls toward 0
+    as either moves. Symmetric: doubling and halving are equally far."""
+    def ratio(a, b):
+        if not a or not b:
+            return 0.5
+        return min(a / b, b / a)
+    return ratio(mpg_cur, mpg_prev) * ratio(fga36_cur, fga36_prev)
+
 
 def norm(name):
     folded = fold_diacritics(str(name)).lower()
@@ -91,11 +129,19 @@ def build_index(exclude, dtd, season_cur, season_prev):
             mp = [nf(x.get("MIN")) for x in prev]
             if not st.mean(mc) or not st.mean(mp):
                 continue
+            fga_c = sum(nf(x.get("FGA")) for x in cur)
+            fga_p = sum(nf(x.get("FGA")) for x in prev)
+            fga36_c = fga_c / sum(mc) * 36 if sum(mc) else 0.0
+            fga36_p = fga_p / sum(mp) * 36 if sum(mp) else 0.0
+            sim = role_similarity(st.mean(mc), st.mean(mp), fga36_c, fga36_p)
             index[norm(row["PLAYER"])] = {
                 "name": row["PLAYER"], "team": abbr, "cur": cur, "prev": prev,
                 "mpg": st.mean(mc), "mpg_prev": st.mean(mp),
                 "mcv": st.pstdev(mc) / st.mean(mc),
                 "scale": st.mean(mc) / st.mean(mp),
+                "fga36": fga36_c, "fga36_prev": fga36_p, "sim": sim,
+                "w_prev": PRIOR_W * sim,
+                "w_unknown": PRIOR_W * (1.0 - sim),
             }
     return index
 
@@ -107,7 +153,9 @@ def rate(player, stat, line, side):
     p_cur = sum(1 for v in vc if hit(v)) / len(vc)
     p_prev = sum(1 for v in vp if hit(v)) / len(vp)
     n = len(vc)
-    return p_cur, p_prev, (n * p_cur + PRIOR_W * p_prev) / (n + PRIOR_W), vc
+    wp, wu = player["w_prev"], player["w_unknown"]
+    blend = (n * p_cur + wp * p_prev + wu * 0.5) / (n + wp + wu)
+    return p_cur, p_prev, blend, vc
 
 
 def main(argv=None):
@@ -154,6 +202,7 @@ def main(argv=None):
                 "blend": blend, "edge": blend - 1.0 / price, "mcv": p["mcv"],
                 "mpg": p["mpg"], "log": [int(v) for v in vc],
                 "minutes_up": p["scale"] > 1.12,
+                "sim": p["sim"],
             })
 
     keep = [r for r in rows
@@ -164,13 +213,14 @@ def main(argv=None):
     print(f"\n{len(rows)} sides priced, {len(keep)} clear "
           f"blend>={args.min_blend:.0%}, both seasons>=50%, mcv<={args.max_mcv}, edge>0\n")
     print(f"{'game':9s}{'player':25s}{'stat':5s}{'side':6s}{'line':>6s}{'$':>6s}"
-          f"{'cur':>6s}{'prev':>6s}{'blend':>7s}{'edge':>7s}{'mpg':>6s}{'mcv':>6s}  log")
+          f"{'cur':>6s}{'prev':>6s}{'role':>6s}{'blend':>7s}{'edge':>7s}"
+          f"{'mpg':>6s}{'mcv':>6s}  log")
     for r in keep[:args.top]:
         flag = "  ^minutes up vs last season (p_prev optimistic)" if r["minutes_up"] else ""
         print(f"{r['game']:9s}{r['name']:25s}{r['stat']:5s}{r['side']:6s}"
               f"{r['line']:6.1f}{r['price']:6.2f}{r['p_cur']:6.0%}{r['p_prev']:6.0%}"
-              f"{r['blend']:7.0%}{r['edge']:+7.1%}{r['mpg']:6.1f}{r['mcv']:6.2f}  "
-              f"{r['log']}{flag}")
+              f"{r['sim']:6.2f}{r['blend']:7.0%}{r['edge']:+7.1%}"
+              f"{r['mpg']:6.1f}{r['mcv']:6.2f}  {r['log']}{flag}")
     if skipped:
         print(f"\nno two-season sample, dropped: {', '.join(sorted(set(skipped)))}")
     return 0
