@@ -292,26 +292,65 @@ def clean_vtt(path):
     return " ".join(lines)
 
 
-def get_transcript(vid, tmp):
+# Caption clients, tried in order. YouTube rate-limits them separately,
+# and "android" -- which this used to request on its own -- is the most
+# heavily throttled of the three, so a 429 on it says nothing about
+# whether the others would answer.
+CAPTION_CLIENTS = (["ios"], ["web_safari"], ["android"])
+
+
+def get_transcript(vid, tmp, cookies_from=None):
+    """Captions for one video, retrying a 429 instead of sleeping through it.
+
+    The old handler slept sixty seconds on a 429 and THEN returned None,
+    so the wait bought nothing: the request it was waiting for was never
+    re-sent. It now retries, backing off 30s, 60s, 120s, and moves to the
+    next client rather than re-asking the one that just refused.
+
+    A 429 on every client usually means YouTube wants a signed-in
+    request. --cookies-from chrome passes the browser's own cookies and
+    normally clears it. That reads the cookie jar of a browser on this
+    machine, so it is opt-in and never the default.
+    """
     if yt_dlp is None:
         print("    yt_dlp not installed here -- cannot fetch captions")
         return None
-    opts = {"skip_download": True, "writesubtitles": True,
+    base = {"skip_download": True, "writesubtitles": True,
             "writeautomaticsub": True,
             "subtitleslangs": ["en", "en-US", "en-orig"],   # was 'sublangs'
             "subtitlesformat": "vtt",
             "outtmpl": os.path.join(tmp, vid), "quiet": True,
             "no_warnings": True, "sleep_interval": 3,
-            "extractor_args": {"youtube": {"player_client": ["android"]}}}
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=True)
-    except Exception as exc:                  # noqa: BLE001 -- reported
-        if "429" in str(exc):
-            print("    429, waiting 60s")
-            time.sleep(60)
-        else:
-            print(f"    captions failed: {type(exc).__name__}: {str(exc)[:70]}")
+            "sleep_interval_requests": 2, "retries": 3,
+            "extractor_retries": 3}
+    if cookies_from:
+        base["cookiesfrombrowser"] = (cookies_from,)
+    backoff = 30
+    throttled = False
+    for client in CAPTION_CLIENTS:
+        opts = dict(base)
+        opts["extractor_args"] = {"youtube": {"player_client": list(client)}}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.extract_info(f"https://www.youtube.com/watch?v={vid}",
+                                 download=True)
+            break
+        except Exception as exc:              # noqa: BLE001 -- reported
+            if "429" in str(exc) or "Too Many Requests" in str(exc):
+                throttled = True
+                print(f"    429 on {client[0]}, waiting {backoff}s then "
+                      f"trying the next client")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 120)
+                continue
+            print(f"    captions failed on {client[0]}: "
+                  f"{type(exc).__name__}: {str(exc)[:70]}")
+            return None
+    else:
+        if throttled and not cookies_from:
+            print("    throttled on every client. Re-run with "
+                  "--cookies-from chrome (or firefox/safari/edge) to send "
+                  "your browser's YouTube cookies.")
         return None
     vtts = sorted(glob.glob(os.path.join(tmp, f"{vid}*.vtt")))
     if not vtts:
@@ -327,7 +366,8 @@ def get_transcript(vid, tmp):
 
 # ------------------------------------------------------------- per team
 
-def process_team(key, out, cids, max_age_days, check_only=False, any_title=False):
+def process_team(key, out, cids, max_age_days, check_only=False,
+                 any_title=False, cookies_from=None):
     handle = TEAM_HANDLES[key]
     print(f"--> {key.upper():14s} {handle}")
 
@@ -341,7 +381,7 @@ def process_team(key, out, cids, max_age_days, check_only=False, any_title=False
     if check_only:
         return f"OK  {key.upper()}: would take {entry['id']} from {when}"
 
-    text = get_transcript(entry["id"], out)
+    text = get_transcript(entry["id"], out, cookies_from)
     if not text:
         return f"NO  {key.upper()}: no captions for {entry['id']}"
 
@@ -371,6 +411,12 @@ def main(argv=None):
     parser.add_argument("--any-title", action="store_true",
                         help="accept the newest recent video even if the title "
                              "does not look like game coverage")
+    parser.add_argument("--cookies-from", default=None,
+                        choices=["chrome", "firefox", "safari", "edge", "brave"],
+                        help="send that browser's YouTube cookies with the "
+                             "caption request. Use it when every client "
+                             "returns 429; it reads the browser's cookie jar "
+                             "on this machine, so it is never the default.")
     args = parser.parse_args(argv)
 
     target = args.target.lower()
@@ -394,7 +440,8 @@ def main(argv=None):
         keys = sorted(TEAM_HANDLES)
         for i, key in enumerate(keys, 1):
             results.append(process_team(key, OUT_DIR, cids, args.max_age_days,
-                                        args.check, args.any_title))
+                                        args.check, args.any_title,
+                                        args.cookies_from))
             print(f"    {results[-1]}")
             if i < len(keys) and not args.check:
                 time.sleep(random.randint(8, 14))
@@ -409,7 +456,7 @@ def main(argv=None):
         parser.error(f"unknown team '{target}'. Known: {', '.join(sorted(TEAM_HANDLES))}")
 
     print(process_team(target, OUT_DIR, cids, args.max_age_days,
-                       args.check, args.any_title))
+                       args.check, args.any_title, args.cookies_from))
     return 0
 
 
