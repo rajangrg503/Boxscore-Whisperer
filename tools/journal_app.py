@@ -630,7 +630,7 @@ def trust_note(cal):
 
 
 def check_table(check):
-    rows, flags = [], []
+    rows, flags, edges = [], [], []
     for l in check["legs"]:
         c = l["check"]
         recent = (f"{c['recent']['over']} of last {c['recent']['of']}" if c.get("recent") else "")
