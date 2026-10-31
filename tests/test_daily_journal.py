@@ -388,3 +388,72 @@ def test_night_file_has_schema_and_field_guide(tmp_path, monkeypatch):
     assert "rotation" in night["games"][0] and "min_delta" in night["games"][0]["lines"][0]
     guide = (tmp_path / "FIELDS.md").read_text()
     assert "absorbed_by" in guide and "{" not in guide
+
+
+# ---- coverage debriefs ---------------------------------------------------
+
+def _coverage(tmp_path, entries, slate=None):
+    (tmp_path / "coverage").mkdir(exist_ok=True)
+    (tmp_path / "coverage" / f"{DAY}.json").write_text(json.dumps(
+        {"date": DAY.isoformat(), "source": "coverage log artifact", "slate_notes": slate or {},
+         "entries": entries}))
+
+
+def test_coverage_links_by_game_and_folded_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(dj, "usual_minutes", lambda pid, day: USUAL.get(pid))
+    _coverage(tmp_path, {
+        "star": {"player": "AL STAR", "game": "BOS @ NYK", "bet": "OVER 24.5 pts",
+                 "coverage": ["Single coverage"], "watched": "Watched most", "note": "hot"},
+        "cy": {"player": "Cy Out", "game": "BOS @ NYK", "note": "didn't play"},
+        "ghost": {"player": "Nobody Real", "game": "BOS @ NYK"},
+        "elsewhere": {"player": "Al Star", "game": "LAL @ GSW"},
+    }, slate={"script": "pace up"})
+    dj.journal_day(DAY, None, out_dir=str(tmp_path), log=lambda *a: None)
+    night = json.loads((tmp_path / f"{DAY}.json").read_text())
+    g = night["games"][0]
+    linked = {c["key"]: c for c in g["coverage"]}
+    assert set(linked) == {"star", "cy"}                     # Cy Out links via the minutes table
+    assert linked["star"]["pid"] == 1 and linked["star"]["coverage"] == ["Single coverage"]
+    assert {l["coverage"] for l in g["lines"] if l["pid"] == 1} == {"star"}
+    assert not any("coverage" in l for l in g["lines"] if l["pid"] != 1)
+    why = {u["key"]: u["why"] for u in night["coverage_unlinked"]}
+    assert why == {"ghost": "name not found in that game's box score",
+                   "elsewhere": "no game with those two teams this night"}
+    assert night["coverage_slate"] == {"script": "pace up"}
+
+
+def test_a_later_export_is_linked_without_rewriting_the_night(tmp_path, monkeypatch):
+    import os
+    import time
+    monkeypatch.setattr(dj, "usual_minutes", lambda pid, day: USUAL.get(pid))
+    dj.journal_day(DAY, None, out_dir=str(tmp_path), log=lambda *a: None)
+    first = json.loads((tmp_path / f"{DAY}.json").read_text())
+    assert "coverage" not in first["games"][0]
+    _coverage(tmp_path, {"star": {"player": "Al Star", "game": "NYK @ BOS"}})
+    later = time.time() + 5
+    os.utime(tmp_path / "coverage" / f"{DAY}.json", (later, later))
+    logged = []
+    dj.journal_day(DAY, None, out_dir=str(tmp_path), log=logged.append)   # complete: not rewritten
+    assert any("linked a newer coverage export" in m for m in logged)
+    night = json.loads((tmp_path / f"{DAY}.json").read_text())
+    assert night["games"][0]["coverage"][0]["key"] == "star"
+    assert night["written_at"] == first["written_at"]
+
+
+def test_fold_name():
+    assert dj.fold_name("Jaime Jaquez Jr.") == dj.fold_name("jaime jaquez") == "jaime jaquez"
+    assert dj.fold_name("Nikola Jokić") == "nikola jokic"
+
+
+def test_a_night_written_by_an_older_version_gets_linked(tmp_path, monkeypatch):
+    monkeypatch.setattr(dj, "usual_minutes", lambda pid, day: USUAL.get(pid))
+    _coverage(tmp_path, {"star": {"player": "Al Star", "game": "NYK @ BOS"}})
+    dj.journal_day(DAY, None, out_dir=str(tmp_path), log=lambda *a: None)
+    night = json.loads((tmp_path / f"{DAY}.json").read_text())
+    for key in ("coverage_linked_at", "coverage_slate", "coverage_unlinked", "coverage_source"):
+        night.pop(key, None)
+    night["games"][0].pop("coverage")
+    (tmp_path / f"{DAY}.json").write_text(json.dumps(night))     # newer than the export
+    assert dj.relink_coverage(DAY, str(tmp_path)) is True
+    assert json.loads((tmp_path / f"{DAY}.json").read_text())["games"][0]["coverage"][0]["key"] == "star"
+    assert dj.relink_coverage(DAY, str(tmp_path)) is False         # already linked, export older

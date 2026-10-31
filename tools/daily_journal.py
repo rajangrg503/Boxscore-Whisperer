@@ -48,6 +48,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from zoneinfo import ZoneInfo
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -808,6 +809,8 @@ def journal_day(day, generate=None, out_dir=JOURNAL_DIR, force=False, log=print,
     if os.path.exists(path) and not force:
         with open(path) as f:
             if INCOMPLETE_MARKER not in f.read():
+                if relink_coverage(day, out_dir):
+                    log(f"{day}: linked a newer coverage export")
                 log(f"{day}: already written ({path}) -- use --force to redo")
                 return path
     games_by_id, source = list_games(day)
@@ -886,11 +889,100 @@ def write_data(day, games, source, reasons, rejected, used_model, out_dir=JOURNA
         "inside": sum(g["inside"] for g in played),
         "games": out,
     }
+    link_coverage(body, out_dir)
     path = os.path.join(out_dir, f"{day.isoformat()}.json")
     with open(path, "w") as f:
         json.dump(body, f, default=_plain, ensure_ascii=False, indent=1)
     write_field_guide(out_dir)
     return path
+
+
+# ------------------------------------------------------------- coverage
+#
+# karma's coverage debriefs live in an Artifact's database, which only the
+# coverage-log session can read; it exports them to
+# journal/coverage/<US date>.json. Entries are keyed by hand-written
+# player slugs, not ids, so they're linked by game (same two teams) plus a
+# folded name match against that game's box score -- and an entry that
+# doesn't match is listed as unlinked, never guessed.
+
+def fold_name(name):
+    text = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode().lower()
+    words = re.sub(r"[^a-z ]", " ", text).split()
+    return " ".join(w for w in words if w not in ("jr", "sr", "ii", "iii", "iv"))
+
+
+def _teams_of(text):
+    return frozenset(t.strip().upper() for t in str(text or "").replace("vs.", "@").split("@") if t.strip())
+
+
+def _coverage_path(day_iso, out_dir):
+    return os.path.join(out_dir, "coverage", f"{day_iso}.json")
+
+
+def link_coverage(body, out_dir=JOURNAL_DIR):
+    """Attach the night's coverage export, if there is one, in place."""
+    path = _coverage_path(body["date"], out_dir)
+    for g in body["games"]:
+        g.pop("coverage", None)
+        for line in g.get("lines") or []:
+            line.pop("coverage", None)
+    for key in ("coverage_slate", "coverage_unlinked", "coverage_source", "coverage_linked_at"):
+        body.pop(key, None)
+    try:
+        with open(path) as f:
+            export = json.load(f)
+    except (OSError, ValueError):
+        return body
+    unlinked = []
+    for key, entry in (export.get("entries") or {}).items():
+        teams = _teams_of(entry.get("game"))
+        game = next((g for g in body["games"]
+                     if teams and teams in (frozenset({g.get("home"), g.get("away")}),
+                                            frozenset({g.get("winner"), g.get("loser")}))), None)
+        if game is None:
+            unlinked.append({"key": key, "player": entry.get("player"), "game": entry.get("game"),
+                             "why": "no game with those two teams this night"})
+            continue
+        wanted = fold_name(entry.get("player"))
+        pids = {m["pid"] for m in game.get("minutes") or [] if fold_name(m["name"]) == wanted}
+        pids |= {l["pid"] for l in game.get("lines") or [] if fold_name(l["name"]) == wanted}
+        if len(pids) != 1:
+            unlinked.append({"key": key, "player": entry.get("player"), "game": entry.get("game"),
+                             "why": "name not found in that game's box score" if not pids
+                             else "name matches more than one player"})
+            continue
+        pid = pids.pop()
+        game.setdefault("coverage", []).append({"key": key, "pid": pid, **entry})
+        for line in game.get("lines") or []:
+            if line["pid"] == pid:
+                line["coverage"] = key
+    body["coverage_slate"] = export.get("slate_notes")
+    body["coverage_unlinked"] = unlinked
+    body["coverage_source"] = export.get("source")
+    body["coverage_linked_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    return body
+
+
+def relink_coverage(day, out_dir=JOURNAL_DIR):
+    """Link a written night's coverage export if it has never been linked,
+    or the export is newer than the night. True if it did."""
+    night_path = os.path.join(out_dir, f"{day.isoformat()}.json")
+    cov_path = _coverage_path(day.isoformat(), out_dir)
+    if not (os.path.exists(night_path) and os.path.exists(cov_path)):
+        return False
+    try:
+        with open(night_path) as f:
+            body = json.load(f)
+    except (OSError, ValueError):
+        return False
+    # Never linked (written by an older version), or the export is newer.
+    if "coverage_linked_at" in body and os.path.getmtime(cov_path) <= os.path.getmtime(night_path):
+        return False
+    link_coverage(body, out_dir)
+    with open(night_path, "w") as f:
+        json.dump(body, f, default=_plain, ensure_ascii=False, indent=1)
+    return True
 
 
 SCHEMA_VERSION = 2
@@ -927,6 +1019,17 @@ All projections use only games before that night.
 - `absorbed_by`: when he played {ROTATION_GAP}+ fewer, the teammates who played more
   (`name`, `pid`, `delta`), biggest first
 - `minutes_from`: when he played {ROTATION_GAP}+ more, the teammates who played fewer
+- `coverage`: the debrief key for this player, when there is one (see below)
+
+## Coverage debriefs
+Read from `journal/coverage/<US date>.json` (exported from the coverage-log
+artifact) and linked by game (same two teams) plus a folded name match
+against the game's box score. Re-linked whenever a newer export appears.
+- game `coverage`: list of debriefs, each `key`, `pid` plus the export's own fields
+  (`player`, `game`, `bet`, `result`, `actual`, `watched`, `coverage`, `whenchanged`,
+  `rotation`, `again`, `note`, `updatedAt`)
+- night `coverage_slate`: the slate-wide notes; `coverage_unlinked`: entries that
+  matched no game or no player, with `why`; `coverage_source`; `coverage_linked_at`
 """
 
 
