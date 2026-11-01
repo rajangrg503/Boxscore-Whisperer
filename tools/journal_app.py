@@ -1117,6 +1117,18 @@ def render_tonight():
                 with tab:
                     st.dataframe(slate_table(g["players"][team]), hide_index=True,
                                  width="stretch")
+                    # No games this season means his minutes are last season's.
+                    # Jimmy Butler, 1 Nov 2026: out since January, off the
+                    # injury report that afternoon, projected at 31 minutes.
+                    back = [p["name"] for p in g["players"][team]
+                            if (p.get("evidence") or {}).get("minutes_from") == "prev"]
+                    if back:
+                        st.markdown(
+                            f"<div class='jr-note'>No games this season: "
+                            f"{esc(', '.join(back))}. Their minutes are last season's. Someone "
+                            "coming back from a long absence usually plays on a minutes "
+                            "limit, so read these lines as a ceiling, and check he's actually "
+                            "playing.</div>", unsafe_allow_html=True)
                     reads = g["reads"].get(team) or []
                     if reads:
                         st.markdown("<ul class='jr-list jr-faint'>" + "".join(

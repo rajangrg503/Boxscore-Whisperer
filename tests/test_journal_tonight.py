@@ -30,7 +30,9 @@ SLATE = {"games": [{
     "away": "BOS", "home": "ORL", "tipoff": "2026-11-01T20:40Z",
     "out": {"BOS": [], "ORL": ["Paolo Banchero", "Jalen Suggs"]},
     "day_to_day": {"BOS": [], "ORL": []},
-    "players": {"BOS": [_line("Jayson Tatum", 1, 26.0)], "ORL": [_line("Franz Wagner", 2, 24.0)]},
+    "players": {"BOS": [_line("Jayson Tatum", 1, 26.0)],
+                "ORL": [_line("Franz Wagner", 2, 24.0),
+                        dict(_line("Long Absence", 3, 19.0), evidence={"minutes_from": "prev"})]},
     "score": {"BOS": 114.0, "ORL": 101.0},
     "reads": {"BOS": [{"name": "Jayson Tatum", "edge": "with", "verdict": "attacks ORL's wings"}],
               "ORL": []},
@@ -56,6 +58,7 @@ def test_a_saved_slate_renders(journal_dir):
     assert "Paolo Banchero" in text
     assert "missing BOS" in text and "Jayson Tatum" in text
     assert "attacks ORL" in text and "wings" in text
+    assert "No games this season" in text and "Long Absence" in text
 
 
 def test_the_button_projects_and_saves(journal_dir, monkeypatch):

@@ -32,6 +32,17 @@ host has stopped answering, and continuing just wastes 30 seconds a time.
 It is resumable. Players whose current-season log is already cached with
 games in it are skipped, so re-running after a rate limit clears picks up
 where it stopped.
+
+--recent N: KEEPING IT CURRENT (1 Nov 2026)
+The default mode fills gaps; it never refetches a player who already has
+games cached, so it cannot pick up last night. --recent N asks ESPN which
+teams played on each of the last N US dates and refetches only the
+players on those rosters whose cached log lacks that game -- about 200
+requests after a 7-game night, a few minutes, instead of the full
+4,400-request refresh_cache.py pass that times out half-way. Each
+failure is retried once after a pause before it counts. Run by
+tools/install_logs_job.sh twice a day: after the US slate finishes, and
+again before the next one tips.
 """
 import argparse
 import os
@@ -55,6 +66,7 @@ CONSECUTIVE_FAILURE_LIMIT = 8
 
 DEFAULT_PACE = 1.2       # seconds between requests; refresh_cache.py uses 0.6
 REQUEST_TIMEOUT = 20
+RETRY_PAUSE = 10         # seconds before the one retry of a failed request
 
 
 def roster_players():
@@ -77,6 +89,40 @@ def already_cached(player_id, season):
     """
     payload = read_payload(f"gamelog_{player_id}_{season}")
     return bool(payload and (payload.get("data") or []))
+
+
+def _stamp(day):
+    """date -> the game log's GAME_DATE spelling, 'Oct 31, 2026'."""
+    return day.strftime("%b %d, %Y")
+
+
+def recent_todo(days, players, season, today=None):
+    """(todo, played_on) for --recent: roster players whose team played on
+    one of the last `days` US dates and whose cached log has no row for
+    that date. Asks ESPN for the slates, which a home connection reaches."""
+    import datetime
+    from zoneinfo import ZoneInfo
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import availability as av
+    today = today or datetime.datetime.now(ZoneInfo("America/New_York")).date()
+    played_on = {}
+    for back in range(1, days + 1):
+        day = today - datetime.timedelta(days=back)
+        for g in av.slate(day.strftime("%Y%m%d")):
+            status = (g.get("status") or "").lower()
+            if status and not status.startswith("final"):
+                continue                      # not finished: nothing to fetch yet
+            for team in (g["away"], g["home"]):
+                played_on[team] = max(played_on.get(team, day), day)
+    todo = []
+    for pid, (name, abbr) in players.items():
+        day = played_on.get(abbr)
+        if day is None:
+            continue
+        rows = (read_payload(f"gamelog_{pid}_{season}") or {}).get("data") or []
+        if not any((r.get("GAME_DATE") or "") == _stamp(day) for r in rows):
+            todo.append((pid, name, abbr))
+    return todo, played_on
 
 
 def fetch(player_id, season):
@@ -103,11 +149,19 @@ def main(argv=None):
                         help="stop after this many players, for a cautious first run")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the plan and fetch nothing")
+    parser.add_argument("--recent", type=int, default=None, metavar="N",
+                        help="refetch players whose team played in the last N US days "
+                             "and whose cached log is missing that game")
     args = parser.parse_args(argv)
 
     players = roster_players()
-    todo = [(pid, name, abbr) for pid, (name, abbr) in players.items()
-            if not already_cached(pid, args.season)]
+    if args.recent:
+        todo, played_on = recent_todo(args.recent, players, args.season)
+        print(f"teams that played in the last {args.recent} US day(s): "
+              f"{len(played_on)}  ({', '.join(sorted(played_on))})")
+    else:
+        todo = [(pid, name, abbr) for pid, (name, abbr) in players.items()
+                if not already_cached(pid, args.season)]
     todo.sort(key=lambda t: (t[2], t[1]))
     if args.limit:
         todo = todo[:args.limit]
@@ -125,6 +179,11 @@ def main(argv=None):
     consecutive = 0
     for i, (pid, name, abbr) in enumerate(todo, 1):
         frame, error = fetch(pid, args.season)
+        if error:
+            # One retry after a pause: a single slow answer is common, and
+            # a timed-out player otherwise waits a whole day for the next run.
+            time.sleep(RETRY_PAUSE)
+            frame, error = fetch(pid, args.season)
         if error:
             failed += 1
             consecutive += 1
