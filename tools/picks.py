@@ -697,9 +697,15 @@ def save_slip(slip, image_bytes=None, image_name=None, picks_dir=None):
         # The same bet uploaded again after the parser learned more (1 Nov
         # 2026: a 7-leg multi first saved as 2 legs) replaces the old copy
         # instead of sitting beside it. Same placed time, same price.
+        # Singles placed together share the placed time and often the
+        # price (six straights at 1.80, 1 Nov 2026), so the old copy must
+        # also share at least one leg -- a re-parse always does.
+        def _legs(s):
+            return {(_norm(l.get("player")), l.get("stat")) for l in s.get("legs") or []}
         for old in load_slips(picks_dir):
             if (old.get("placed_at") == slip["placed_at"]
-                    and old.get("price") == slip.get("price") and old.get("id")):
+                    and old.get("price") == slip.get("price") and old.get("id")
+                    and _legs(old) & _legs(slip)):
                 slip["id"] = old["id"]
                 for keep in ("stake", "picked_by", "out"):
                     if old.get(keep) and not slip.get(keep):
