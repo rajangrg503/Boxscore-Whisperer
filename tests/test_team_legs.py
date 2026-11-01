@@ -147,3 +147,18 @@ def test_reasons_follow_their_leg_when_a_slip_gains_legs(tmp_path):
     assert by_player[("Collin Murray-Boyles", "PR")]["why"] == "Poeltl"
     assert by_player[("Boston Celtics", "WIN")] == {}
     assert saved["reasons"]["slip"] == {"idea": "even games"}
+
+
+def test_a_player_leg_grades_from_the_written_night_when_the_cache_is_behind(tmp_path, monkeypatch):
+    monkeypatch.setattr(pk.dj, "JOURNAL_DIR", str(tmp_path))
+    (tmp_path / "2026-10-31.json").write_text(json.dumps({"games": [{
+        "home": "SAS", "away": "MIN", "winner": "SAS", "margin": 10,
+        "lines": [{"pid": 999000001, "stat": s, "actual": a, "min": 20.1}
+                  for s, a in (("PTS", 10), ("REB", 8), ("AST", 4))],
+        "minutes": [{"pid": 999000001, "min": 20.1, "played": True},
+                    {"pid": 999000002, "min": 0, "played": False}]}]}))
+    leg = {"pid": 999000001, "stat": "PTS", "line": 19.5, "side": "under", "us_date": "2026-10-31"}
+    g = pk.grade_leg(leg)
+    assert (g["result"], g["actual"], g["min"]) == ("won", 10.0, 20.1)
+    assert pk.grade_leg(dict(leg, stat="PRA", line=30.5, side="over"))["result"] == "lost"
+    assert pk.grade_leg(dict(leg, pid=999000002))["result"] == "void"

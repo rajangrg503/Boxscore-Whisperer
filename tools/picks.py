@@ -557,6 +557,35 @@ def _night_game(us_date, team=None, game=None):
     return None
 
 
+def _night_actuals(us_date, pid):
+    """What a player did on a night, from the written journal night (ESPN's
+    box score): ({"PTS": .., "REB": .., "AST": ..}, minutes, played) or None.
+
+    The fallback for grading when the stats.nba.com cache hasn't caught up
+    -- on 1 Nov 2026 the morning refresh timed out on half its players, so
+    a multi that had landed showed "waiting on 3 legs" while the night
+    itself was already written with every number in it."""
+    path = os.path.join(dj.JOURNAL_DIR, f"{us_date}.json")
+    try:
+        with open(path) as f:
+            night = json.load(f)
+    except (OSError, ValueError):
+        return None
+    stats, minutes, played = {}, None, None
+    for g in night.get("games") or []:
+        for line in g.get("lines") or []:
+            if line.get("pid") == pid and line.get("actual") is not None:
+                stats[line["stat"]] = float(line["actual"])
+                minutes = line.get("min") if minutes is None else minutes
+        for m in g.get("minutes") or []:
+            if m.get("pid") == pid:
+                played = m.get("played")
+                minutes = m.get("min") if minutes is None else minutes
+    if not stats and played is None:
+        return None
+    return stats, minutes, played
+
+
 def grade_team_leg(leg, out):
     """A team bet from the night's final score: to win, a line, or the
     game total. Pending until the night is written with that game in it."""
@@ -603,6 +632,17 @@ def grade_leg(leg):
         out["min"] = float(row.get("MIN") or 0)
         under = leg.get("side") == "under"
         out["result"] = "won" if (out["actual"] < leg["line"] if under else out["actual"] > leg["line"]) else "lost"
+    elif (night := _night_actuals(leg["us_date"], leg["pid"])) and (
+            all(c in night[0] for c in cols) or night[2] is False):
+        stats, minutes, played = night
+        if played is False:
+            out["result"] = "void"
+        else:
+            out["actual"] = float(sum(stats[c] for c in cols))
+            out["min"] = float(minutes or 0)
+            under = leg.get("side") == "under"
+            out["result"] = "won" if (out["actual"] < leg["line"] if under
+                                      else out["actual"] > leg["line"]) else "lost"
     elif day < datetime.datetime.now(NEW_YORK).date() - datetime.timedelta(days=2):
         # The cache has days after this and no game: he didn't play.
         latest = frame["_d"].max() if not frame.empty else None
