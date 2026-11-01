@@ -146,9 +146,22 @@ def build_index(exclude, dtd, season_cur, season_prev):
     return index
 
 
+COMBOS = {"PRA": ("PTS", "REB", "AST"), "PR": ("PTS", "REB"),
+          "PA": ("PTS", "AST"), "RA": ("REB", "AST")}
+
+
+def stat_of(row, stat):
+    """A game's value for a stat, combos summed from their parts: medians
+    do not add (pra-is-the-missing-column, 20 Oct), so a combo is read per
+    game and the line is tested against that, never against a sum of
+    projections."""
+    parts = COMBOS.get(stat, (stat,))
+    return sum(nf(row.get(c)) for c in parts)
+
+
 def rate(player, stat, line, side):
-    vc = [nf(x.get(stat)) for x in player["cur"]]
-    vp = [nf(x.get(stat)) * player["scale"] for x in player["prev"]]
+    vc = [stat_of(x, stat) for x in player["cur"]]
+    vp = [stat_of(x, stat) * player["scale"] for x in player["prev"]]
     hit = (lambda v: v > line) if side == "OVER" else (lambda v: v < line)
     p_cur = sum(1 for v in vc if hit(v)) / len(vc)
     p_prev = sum(1 for v in vp if hit(v)) / len(vp)
