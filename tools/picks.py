@@ -630,6 +630,23 @@ def grade_slip(slip):
 
 # ------------------------------------------------------------------ storage
 
+def _leg_key(leg):
+    return (_norm(leg.get("player") or ""), leg.get("stat"), leg.get("line"), leg.get("side"))
+
+
+def carry_reasons(old, new_legs):
+    """Your reasons from an older copy of a slip, re-attached to the same
+    legs on the new copy. Reasons are stored one per leg IN ORDER, so when
+    a re-read slip gains legs the old answers must follow their leg, not
+    their position: on 1 Nov 2026 a 2-leg read became 7 legs and
+    Pritchard's reason landed on "Boston Celtics to win" and Murray-
+    Boyles' on Pritchard."""
+    reasons = dict(old.get("reasons") or {})
+    by_key = {_leg_key(l): r for l, r in zip(old.get("legs") or [], reasons.get("legs") or [])}
+    reasons["legs"] = [by_key.get(_leg_key(l), {}) for l in new_legs]
+    return reasons
+
+
 def save_slip(slip, image_bytes=None, image_name=None, picks_dir=None):
     picks_dir = picks_dir or PICKS_DIR
     os.makedirs(picks_dir, exist_ok=True)
@@ -642,9 +659,11 @@ def save_slip(slip, image_bytes=None, image_name=None, picks_dir=None):
             if (old.get("placed_at") == slip["placed_at"]
                     and old.get("price") == slip.get("price") and old.get("id")):
                 slip["id"] = old["id"]
-                for keep in ("stake", "picked_by", "reasons", "out"):
+                for keep in ("stake", "picked_by", "out"):
                     if old.get(keep) and not slip.get(keep):
                         slip[keep] = old[keep]
+                if old.get("reasons") and not slip.get("reasons"):
+                    slip["reasons"] = carry_reasons(old, slip["legs"])
                 break
     slip["id"] = slip.get("id") or slip_id(slip)
     slip["saved_at"] = datetime.datetime.now(SYDNEY).isoformat(timespec="seconds")

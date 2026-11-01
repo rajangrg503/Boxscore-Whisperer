@@ -130,3 +130,20 @@ def test_slip_check_leaves_team_legs_out_of_the_chance():
     import slip_check as sc
     c = sc.check_leg({"stat": "WIN", "team": "IND", "us_date": "2026-11-01", "pid": None})
     assert c["chance"] is None and c.get("team")
+
+
+def test_reasons_follow_their_leg_when_a_slip_gains_legs(tmp_path):
+    full = parse()["legs"]
+    short = [l for l in full if not pk.is_team(l)]           # Pritchard, Murray-Boyles
+    pk.save_slip({"price": 13.37, "placed_at": "2026-11-01T15:22:51+11:00", "legs": short,
+                  "reasons": {"slip": {"idea": "even games"},
+                              "legs": [{"sure": "Strong", "why": "x factor"},
+                                       {"sure": "Strong", "why": "Poeltl"}]}},
+                 picks_dir=str(tmp_path))
+    pk.save_slip(dict(parse()), picks_dir=str(tmp_path))
+    saved = pk.load_slips(str(tmp_path))[0]
+    by_player = {(l["player"], l["stat"]): r for l, r in zip(saved["legs"], saved["reasons"]["legs"])}
+    assert by_player[("Payton Pritchard", "PRA")]["why"] == "x factor"
+    assert by_player[("Collin Murray-Boyles", "PR")]["why"] == "Poeltl"
+    assert by_player[("Boston Celtics", "WIN")] == {}
+    assert saved["reasons"]["slip"] == {"idea": "even games"}

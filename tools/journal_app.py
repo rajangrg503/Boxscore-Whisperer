@@ -356,7 +356,7 @@ def render_details(g):
                 if g["tw"].get(key) is not None:
                     table[label] = [g["tw"][key], g["tl"][key]]
             frame = pd.DataFrame(table).set_index("").T
-            st.dataframe(frame, use_container_width=True)
+            st.dataframe(frame, width="stretch")
     with misses:
         if g.get("surprises"):
             st.markdown("<ul class='jr-list'>" + "".join(
@@ -463,12 +463,12 @@ def render_season(nights):
                     .configure_view(strokeWidth=0)
                     .configure_axis(grid=True, gridColor="#1b202b", domainColor="#252b38",
                                     labelColor="#9aa3b2", titleColor="#9aa3b2"),
-                    use_container_width=True)
+                    width="stretch")
     st.caption("Dashed line: the 80% the ranges are built to hold.")
 
     table = frame[["Night", "Games", "In range", "Lines", "pct", "Llama lines"]].iloc[::-1]
     st.dataframe(table.rename(columns={"pct": "In range (%)"}), hide_index=True,
-                 use_container_width=True)
+                 width="stretch")
 
 
 MISS_COLORS = {"below": "#f87171", "inside": "#22c55e", "above": "#60a5fa"}
@@ -574,7 +574,7 @@ def render_misses(nights):
             st.markdown("<p class='jr-p'>Nobody yet. This fills in as more nights are written.</p>",
                         unsafe_allow_html=True)
         else:
-            st.dataframe(table, hide_index=True, use_container_width=True)
+            st.dataframe(table, hide_index=True, width="stretch")
 
     if without:
         st.markdown("<p class='jr-h2'>Older nights</p>", unsafe_allow_html=True)
@@ -752,7 +752,7 @@ def review_upload(upload, open_slips, cal):
     with box:
         left, right = st.columns([1, 2.8], gap="medium")
         with left:
-            st.image(data, use_container_width=True)
+            st.image(data, width="stretch")
         with right:
             if "error" in parsed:
                 st.markdown(f"<div class='jr-note'>{esc(parsed['error'])}</div>", unsafe_allow_html=True)
@@ -775,7 +775,7 @@ def review_upload(upload, open_slips, cal):
                 frame = pd.DataFrame(columns=["Player", "Side", "Stat", "Line", "US date", "Fix"])
             edited = st.data_editor(
                 frame, key=f"legs_{key}", num_rows="dynamic", hide_index=True,
-                use_container_width=True,
+                width="stretch",
                 column_config={
                     "Side": st.column_config.SelectboxColumn(options=["Over", "Under"], required=True),
                     "Stat": st.column_config.SelectboxColumn(options=list(STAT_CHOICES), required=True),
@@ -841,7 +841,11 @@ def slip_card(slip, open_json, cal):
     if g["result"] == "won":
         chip, cls = "Landed", "won"
     elif g["result"] == "lost":
-        chip = ("Lost by 1 leg" if g["legs_lost"] == 1 else f"Lost by {g['legs_lost']} legs")
+        waiting = sum(l["result"] == "pending" for l in g["legs"])
+        # A lost leg settles the slip, but "lost by 1 leg" while two legs are
+        # still ungraded makes a 3-leg loss look like a near miss.
+        chip = (f"Lost, {waiting} leg{'s' if waiting != 1 else ''} still to grade" if waiting
+                else "Lost by 1 leg" if g["legs_lost"] == 1 else f"Lost by {g['legs_lost']} legs")
         cls = "lost"
     else:
         waiting = sum(l["result"] == "pending" for l in g["legs"])
@@ -907,9 +911,9 @@ def slip_card(slip, open_json, cal):
             reasons_form(slip, settled)
         cols = st.columns([1.3, 1.1, 1.1, 2], gap="small")
         if slip.get("image"):
-            with cols[0].popover("Screenshot", use_container_width=True):
+            with cols[0].popover("Screenshot", width="stretch"):
                 st.image(os.path.join(PICKS_DIR, slip["image"]))
-        with cols[1].popover("Stake", use_container_width=True):
+        with cols[1].popover("Stake", width="stretch"):
             new_stake = st.number_input("Stake (A$)", value=float(slip.get("stake") or 0.0),
                                         min_value=0.0, step=1.0, key=f"st_{slip['id']}")
             new_paid = st.number_input("Paid out (A$)", value=float(slip.get("paid") or 0.0),
@@ -921,7 +925,7 @@ def slip_card(slip, open_json, cal):
                                paid=new_paid or None)
                 graded.clear()
                 st.rerun()
-        with cols[2].popover("Remove", use_container_width=True):
+        with cols[2].popover("Remove", width="stretch"):
             st.markdown("Remove this slip from your picks? This can't be undone.")
             if st.button("Remove slip", key=f"rm_{slip['id']}", type="primary"):
                 pk.remove_slip(slip["id"], PICKS_DIR)
@@ -954,14 +958,19 @@ def reasons_form(slip, settled):
                             index=pk.SURE.index(mark["sure"]) if mark.get("sure") in pk.SURE
                             else None, key=f"sure_{sid}_{i}")
             left, right = st.columns(2, gap="small")
+            team_leg = pk.is_team(l)
             why = left.text_area("What do you know that the numbers don't?",
                                  value=mark.get("why", ""), key=f"why_{sid}_{i}", height=80,
-                                 placeholder="How he's been playing, what the coach does with "
-                                             "him, something you saw")
+                                 placeholder=("Who's out on each side, rest, how they match up, "
+                                              "something you saw" if team_leg else
+                                              "How he's been playing, what the coach does with "
+                                              "him, something you saw"))
             miss = right.text_area("What would make it miss?",
                                    value=mark.get("miss", ""), key=f"miss_{sid}_{i}", height=80,
-                                   placeholder="A minutes cut, foul trouble, a blowout, a "
-                                               "teammate back")
+                                   placeholder=("A late scratch, a back-door cover, a cold "
+                                                "shooting night" if team_leg else
+                                                "A minutes cut, foul trouble, a blowout, a "
+                                                "teammate back"))
             legs.append({"sure": sure, "why": why, "miss": miss})
         after = said.get("after", "")
         if settled or after:
@@ -1075,7 +1084,7 @@ def render_record(rec, gs, cal):
             "Staked": money(w["staked"]), "Back": money(w["returned"]),
             "Net": ("+" if w["net"] >= 0 else "−") + money(abs(w["net"])),
         } for w in cash["weeks"]])
-        st.dataframe(weeks, hide_index=True, use_container_width=True)
+        st.dataframe(weeks, hide_index=True, width="stretch")
     else:
         st.markdown("<p class='jr-p'>Add a stake to a slip (the Stake button on each one) to see "
                     "what's gone in and come back, week by week.</p>", unsafe_allow_html=True)
@@ -1210,9 +1219,9 @@ with st.sidebar:
                           disabled=status != "ready")
     exists = day.isoformat() in nights
     clicked = st.button("Rewrite this night" if exists else "Write this night",
-                        type="primary", use_container_width=True)
+                        type="primary", width="stretch")
     if status != "ready":
-        if st.button("Check Llama again", use_container_width=True):
+        if st.button("Check Llama again", width="stretch"):
             llama_status.clear()
             st.rerun()
 
