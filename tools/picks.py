@@ -58,7 +58,14 @@ STATS = {
     "PRA": (["PTS", "REB", "AST"], "pts + reb + ast"), "PR": (["PTS", "REB"], "pts + reb"),
     "PA": (["PTS", "AST"], "pts + ast"), "RA": (["REB", "AST"], "reb + ast"),
     "FG3M": (["FG3M"], "threes"), "STL": (["STL"], "steals"), "BLK": (["BLK"], "blocks"),
+    # Team bets: graded from the night's final score, never projected.
+    "WIN": ([], "to win"), "SPREAD": ([], "line"), "TOTAL": ([], "total points"),
 }
+TEAM_MARKETS = ("WIN", "SPREAD", "TOTAL")
+
+
+def is_team(leg):
+    return leg.get("stat") in TEAM_MARKETS
 _STAT_WORDS = [  # longest first, matched on lower-case text with spaces removed
     ("pts+reb+ast", "PRA"), ("points+rebounds+assists", "PRA"),
     ("pts+reb", "PR"), ("pts+ast", "PA"), ("reb+ast", "RA"),
@@ -108,6 +115,14 @@ _PARLAY = re.compile(r"\b(?:pick|leg)\s+parlay\b|parlay\s+boost|\bsgp\b", re.I)
 _ALONE_THRESHOLD = re.compile(r"^(\d{1,3})\s*\+(?:\s+\S{1,3})?$")
 _AMERICAN = re.compile(r"(?<![\d.])([+-]\d{3,5})(?![\d.])")
 _DAY_WORD = re.compile(r"\b(today|tomorrow|tonight)\b|\b(\d{1,2})/(\d{1,2})\b", re.I)
+# Team markets on a Sportsbet slip: the market name sits under the
+# selection ("Boston Celtics" / "Match Betting", "Indiana Pacers (-3.5)" /
+# "Handicap Betting", "Over (218.5)" / "Total Points"). Until 1 Nov 2026
+# these rows were skipped without a word: a 7-leg multi was saved as its
+# 2 player legs, and its "chance" was worked out on those two.
+_TEAM_MARKET = re.compile(r"^(match betting|head to head|handicap betting|line betting|"
+                          r"total (?:match )?points)$", re.I)
+_HANDICAP = re.compile(r"\(\s*([+-]?\d{1,2}(?:\.\d)?)\s*\)")
 
 
 def american_to_decimal(odds):
@@ -213,6 +228,16 @@ def _team_in(text):
             _TEAM_NICKNAMES = []
     low = text.lower()
     return next((abbr for nick, abbr in _TEAM_NICKNAMES if nick in low), None)
+
+
+def _team_name(abbr):
+    """'BOS' -> 'Boston Celtics', or None."""
+    try:
+        from nba_api.stats.static import teams
+        hit = teams.find_team_by_abbreviation(abbr) if abbr else None
+        return hit["full_name"] if hit else None
+    except ImportError:
+        return None
 
 
 def _game_from(line):
@@ -342,9 +367,26 @@ def parse_sportsbet(lines, players=None, today=None, us_today=None):
         if _PLACED.search(line) or _GAME_DATE.search(line):
             continue
         leg = None
-        dash = _NAME_DASH_STAT.match(line)
-        threshold = _THRESHOLD.search(line)
-        if dash and _stat_from(dash.group(2)) and not threshold:
+        market = _TEAM_MARKET.match(line)
+        if market:
+            title = _title_above(lines, i)
+            kind = market.group(1).lower()
+            if kind.startswith("total"):
+                over = _OVER.search(title)
+                leg = {"stat": "TOTAL", "line": abs(float(over.group(2))) if over else None,
+                       "side": over.group(1).lower() if over else "over",
+                       "side_unsure": not over, "who": title, "title": title, "team_leg": True}
+            else:
+                hcp = _HANDICAP.search(title) if "handicap" in kind or "line" in kind else None
+                leg = {"stat": "SPREAD" if hcp else "WIN",
+                       "line": float(hcp.group(1)) if hcp else None,
+                       "side": "over", "side_unsure": False,
+                       "who": _HANDICAP.sub("", title).strip(), "title": title, "team_leg": True}
+        dash = None if leg else _NAME_DASH_STAT.match(line)
+        threshold = None if leg else _THRESHOLD.search(line)
+        if leg:
+            pass
+        elif dash and _stat_from(dash.group(2)) and not threshold:
             # "Cedric Coward - Alt Pts + Reb": the line is on the row above.
             above = _title_above(lines, i, need_over=True)
             over = _OVER.search(above)
@@ -373,7 +415,8 @@ def parse_sportsbet(lines, players=None, today=None, us_today=None):
                     break
         if not leg:
             continue
-        found = match_player(leg["who"], players) or match_player(leg["title"], players)
+        found = (None if leg.get("team_leg") else
+                 match_player(leg["who"], players) or match_player(leg["title"], players))
         leg_price = _LEG_PRICE.search(leg["title"])
         # A leg priced on its own (a single inside a multi) is followed by
         # its game; legs of a same-game multi come after theirs.
@@ -401,6 +444,24 @@ def parse_sportsbet(lines, players=None, today=None, us_today=None):
                             when = datetime.date(us_today.year, int(day.group(2)), int(day.group(3)))
                         except ValueError:
                             when = None
+        if leg.get("team_leg"):
+            team = _team_in(leg["who"]) if leg["stat"] != "TOTAL" else None
+            entry = {
+                "player": (game or "Game") if leg["stat"] == "TOTAL"
+                else _team_name(team) or re.sub(r"[^A-Za-z.' -]", "", leg["who"]).strip(),
+                "pid": None, "team": team,
+                "stat": leg["stat"], "line": leg["line"], "side": leg["side"],
+                "us_date": when.isoformat() if when else None,
+                "price": float(leg_price.group(1)) if leg_price else None,
+                "game": game,
+            }
+            entry["needs_review"] = [msg for ok, msg in (
+                (team or leg["stat"] == "TOTAL", "team not recognised"),
+                (entry["line"] is not None or leg["stat"] == "WIN", "line not read"),
+                (game or leg["stat"] != "TOTAL", "game not read"),
+                (entry["us_date"], "game date not read")) if not ok]
+            slip["legs"].append(entry)
+            continue
         entry = {
             "player": found[2] if found else re.sub(r"[^A-Za-z.' -]", "", leg["who"]).strip(),
             "pid": found[0] if found else None, "team": found[1] if found else None,
@@ -474,9 +535,61 @@ def projection(pid, stat, day):
             round(float(np.percentile(series, 90)), 1), True)
 
 
+def _night_game(us_date, team=None, game=None):
+    """The written night's record of one game: (winner, loser, margin,
+    total) or None when the night or that game isn't in yet."""
+    path = os.path.join(dj.JOURNAL_DIR, f"{us_date}.json")
+    try:
+        with open(path) as f:
+            night = json.load(f)
+    except (OSError, ValueError):
+        return None
+    sides = set(game.split("@")) if game and "@" in game else None
+    for g in night.get("games") or []:
+        pair = {g.get("home"), g.get("away")}
+        if (sides and pair == sides) or (team and team in pair):
+            if not g.get("winner") or g.get("margin") is None:
+                return None
+            total = None
+            if isinstance(g.get("tw"), dict) and isinstance(g.get("tl"), dict):
+                total = (g["tw"].get("pts") or 0) + (g["tl"].get("pts") or 0)
+            return g["winner"], g.get("loser"), int(g["margin"]), total
+    return None
+
+
+def grade_team_leg(leg, out):
+    """A team bet from the night's final score: to win, a line, or the
+    game total. Pending until the night is written with that game in it."""
+    found = _night_game(leg["us_date"], leg.get("team"), leg.get("game"))
+    if not found:
+        return out
+    winner, _loser, margin, total = found
+    if leg["stat"] == "TOTAL":
+        if total is None or leg.get("line") is None:
+            return out
+        out["actual"] = float(total)
+        under = leg.get("side") == "under"
+        out["result"] = "won" if (total < leg["line"] if under else total > leg["line"]) else "lost"
+        return out
+    signed = margin if winner == leg.get("team") else -margin
+    out["actual"] = float(signed)
+    if leg["stat"] == "WIN":
+        out["result"] = "won" if signed > 0 else "lost"
+    else:
+        cover = signed + float(leg["line"])
+        out["result"] = "won" if cover > 0 else ("void" if cover == 0 else "lost")
+    return out
+
+
 def grade_leg(leg):
     out = dict(leg)
     out.update({"result": "pending", "actual": None, "min": None, "proj": None})
+    if is_team(leg):
+        if not leg.get("us_date") or not (leg.get("team") or leg.get("game")) or (
+                leg["stat"] != "WIN" and leg.get("line") is None):
+            out["result"] = "unreadable"
+            return out
+        return grade_team_leg(leg, out)
     if not leg.get("pid") or leg.get("line") is None or not leg.get("us_date"):
         out["result"] = "unreadable"
         return out
@@ -521,6 +634,18 @@ def save_slip(slip, image_bytes=None, image_name=None, picks_dir=None):
     picks_dir = picks_dir or PICKS_DIR
     os.makedirs(picks_dir, exist_ok=True)
     slip = {k: v for k, v in slip.items() if k != "problems"}
+    if not slip.get("id") and slip.get("placed_at"):
+        # The same bet uploaded again after the parser learned more (1 Nov
+        # 2026: a 7-leg multi first saved as 2 legs) replaces the old copy
+        # instead of sitting beside it. Same placed time, same price.
+        for old in load_slips(picks_dir):
+            if (old.get("placed_at") == slip["placed_at"]
+                    and old.get("price") == slip.get("price") and old.get("id")):
+                slip["id"] = old["id"]
+                for keep in ("stake", "picked_by", "reasons", "out"):
+                    if old.get(keep) and not slip.get(keep):
+                        slip[keep] = old[keep]
+                break
     slip["id"] = slip.get("id") or slip_id(slip)
     slip["saved_at"] = datetime.datetime.now(SYDNEY).isoformat(timespec="seconds")
     path = os.path.join(picks_dir, f"{slip['id']}.json")
@@ -598,7 +723,8 @@ def record(graded):
     out["no_proj"] = [l for l in legs if not l.get("proj")]
     kinds = {}
     for l in legs:
-        kind = STATS[l["stat"]][1] if l["stat"] in ("PTS", "REB", "AST") else "combos"
+        kind = ("team bets" if is_team(l) else
+                STATS[l["stat"]][1] if l["stat"] in ("PTS", "REB", "AST") else "combos")
         won, total = kinds.get(kind, (0, 0))
         kinds[kind] = (won + (l["result"] == "won"), total + 1)
     out["by_kind"] = kinds
@@ -623,6 +749,12 @@ def record(graded):
 def leg_label(leg):
     """'16+ points', '9 or fewer points' -- every leg as the number to reach
     (Over) or stay at or under (Under)."""
+    if leg.get("stat") == "WIN":
+        return "to win"
+    if leg.get("stat") == "SPREAD" and leg.get("line") is not None:
+        return f"{leg['line']:+g} line"
+    if leg.get("stat") == "TOTAL" and leg.get("line") is not None:
+        return f"{'under' if leg.get('side') == 'under' else 'over'} {leg['line']:g} total points"
     if leg.get("line") is None:
         return STATS.get(leg.get("stat"), ([], "?"))[1]
     if leg.get("side") == "under":

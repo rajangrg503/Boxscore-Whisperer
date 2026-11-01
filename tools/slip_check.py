@@ -404,6 +404,11 @@ def check_leg(leg, out_names=None):
     """The evidence behind one leg, from games before its night."""
     out = {"flags": [], "chance": None, "proj": None, "recent": None, "minutes": None,
            "notes": [], "rough": False}
+    if pk.is_team(leg):
+        out["flags"].append("Team bet: the engine projects players, not results, so this leg "
+                            "isn't checked and the slip's combined chance leaves it out.")
+        out["team"] = True
+        return out
     if not leg.get("pid") or leg.get("line") is None or not leg.get("us_date"):
         out["flags"].append("Couldn't read this leg fully, so it can't be checked.")
         return out

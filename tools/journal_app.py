@@ -793,12 +793,19 @@ def review_upload(upload, open_slips, cal):
     for _, row in edited.iterrows():
         if not str(row.get("Player") or "").strip():
             continue
-        found = pk.match_player(str(row["Player"]), names)
-        player = found[2] if found else str(row["Player"]).strip()
+        stat = STAT_CHOICES.get(row.get("Stat"), "PTS")
+        if stat in pk.TEAM_MARKETS:
+            found = None
+            player = str(row["Player"]).strip()
+            team = pk._team_in(player) if stat != "TOTAL" else None
+        else:
+            found = pk.match_player(str(row["Player"]), names)
+            player = found[2] if found else str(row["Player"]).strip()
+            team = found[1] if found else None
         when = row.get("US date")
         legs.append({
-            "player": player, "pid": found[0] if found else None, "team": found[1] if found else None,
-            "stat": STAT_CHOICES.get(row.get("Stat"), "PTS"),
+            "player": player, "pid": found[0] if found else None, "team": team,
+            "stat": stat,
             "line": None if pd.isna(row.get("Line")) else float(row["Line"]),
             "side": "under" if str(row.get("Side")).lower() == "under" else "over",
             "us_date": when.isoformat() if hasattr(when, "isoformat") and not pd.isna(when) else None,
@@ -854,10 +861,18 @@ def slip_card(slip, open_json, cal):
                     if sure else "")
         actual = ("" if l["actual"] is None else f"<b>{dj._n(l['actual'])}</b>"
                   + (f" in {dj._n(l['min'])} min" if l.get("min") else ""))
+        if pk.is_team(l) and l["actual"] is not None and l["stat"] != "TOTAL":
+            margin = int(l["actual"])
+            actual = (f"<b>won by {margin}</b>" if margin > 0 else
+                      f"<b>lost by {-margin}</b>" if margin < 0 else "<b>tied</b>")
+        elif pk.is_team(l) and l["actual"] is not None:
+            actual = f"<b>{int(l['actual'])}</b> total"
         if result == "void":
             actual = "didn't play"
         if c.get("proj"):
             proj = f"mid {dj._n(c['proj']['mid'])}, {pct(c['chance'])}" + (" (rough)" if c["rough"] else "")
+        elif pk.is_team(l):
+            proj = "team bet"
         else:
             proj = "no projection" if result != "unreadable" else ""
         rows.append(f"<tr><td style='width:1.1rem'><span class='jr-dot {result}'></span></td>"
