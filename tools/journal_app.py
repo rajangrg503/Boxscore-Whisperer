@@ -50,6 +50,7 @@ import whisper  # noqa: E402
 
 JOURNAL_DIR = os.environ.get("BW_JOURNAL_DIR", "").strip() or dj.JOURNAL_DIR
 PICKS_DIR = os.path.join(JOURNAL_DIR, "picks")
+SLATE_DIR = os.path.join(JOURNAL_DIR, "slate")
 MODEL = whisper.DEFAULT_MODEL
 FAVICON = os.path.join(REPO_ROOT, "assets", "favicon.png")
 
@@ -988,6 +989,145 @@ def reasons_form(slip, settled):
         st.caption(f"Last saved {at.strftime('%a %-d %b, %-I:%M %p')}.")
 
 
+# ------------------------------------------------------------------ tonight
+
+def slate_path(day):
+    return os.path.join(SLATE_DIR, f"{day.isoformat()}.json")
+
+
+def load_slate(day):
+    try:
+        with open(slate_path(day)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def build_slate(day, area):
+    """Who's playing (ESPN, from this Mac) and every game's box score
+    projected from it (tools/box_score.py), saved before tip so the
+    numbers can be scored against the night once it's written."""
+    import availability as av
+    import box_score as bs
+    with area.status("Reading the games and the injury report from ESPN…", expanded=False):
+        try:
+            games = av.collect(day.strftime("%Y%m%d"))
+        except av.Unreachable as error:
+            area.error(f"Couldn't reach ESPN for the slate: {error}")
+            return None
+        if not games:
+            area.info("No games on that US date.")
+            return None
+        slate = bs.project_slate({"games": games})
+        for g in slate["games"]:
+            g["stale"] = {}
+            for team in (g["away"], g["home"]):
+                last, missing = bs.stale_players(team, [p["pid"] for p in g["players"][team]],
+                                                 JOURNAL_DIR, day.isoformat())
+                g["stale"][team] = {"last": last, "names": [p["name"] for p in g["players"][team]
+                                                            if p["pid"] in missing]}
+    slate["date"] = day.isoformat()
+    slate["made_at"] = datetime.datetime.now(pk.SYDNEY).isoformat(timespec="seconds")
+    os.makedirs(SLATE_DIR, exist_ok=True)
+    with open(slate_path(day), "w") as f:
+        json.dump(slate, f, indent=1)
+    return slate
+
+
+def tip_time(iso):
+    if not iso:
+        return ""
+    try:
+        when = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(pk.SYDNEY)
+    except ValueError:
+        return ""
+    return when.strftime("%a %-d %b, %-I:%M %p").replace(" 0", " ")
+
+
+def slate_table(players):
+    rows = [{"Player": p["name"], "Min": round(p["min"]), "Pts": p["PTS"], "Reb": p["REB"],
+             "Ast": p["AST"], "PRA": round(p["PTS"] + p["REB"] + p["AST"], 1),
+             "3PM": p["FG3M"], "Stl": p["STL"], "Blk": p["BLK"]} for p in players]
+    frame = pd.DataFrame(rows)
+    if not frame.empty:
+        total = {"Player": "Team", **{c: round(float(frame[c].sum()), 1)
+                                      for c in frame.columns if c != "Player"}}
+        total["Min"] = round(total["Min"])
+        frame = pd.concat([frame, pd.DataFrame([total])], ignore_index=True)
+    return frame
+
+
+def render_tonight():
+    st.markdown("<h1 class='jr-date'>Tonight</h1>", unsafe_allow_html=True)
+    us_today = datetime.datetime.now(pk.NEW_YORK).date()
+    day = st.date_input("US date of the games", value=us_today, key="tonight_day",
+                        format="DD/MM/YYYY",
+                        help="US date: a Sunday-morning tip in Sydney is Saturday night there.")
+    slate = load_slate(day)
+    area = st.container()
+    label = "Project these games again" if slate else "Project these games"
+    if st.button(label, type="secondary" if slate else "primary", key="tonight_go",
+                 help="Reads who's out from ESPN now and projects every game. Takes a few "
+                      "seconds."):
+        fresh = build_slate(day, area)
+        if fresh:
+            slate = fresh
+    if not slate:
+        st.markdown(
+            "<div class='jr-empty'><b>Nothing projected for this date yet.</b><br>Press "
+            "<b>Project these games</b> to read the injury report and project every game's "
+            "box score. Do it close to tip: who's out changes through the day.</div>",
+            unsafe_allow_html=True)
+        return
+    made = datetime.datetime.fromisoformat(slate["made_at"]).strftime("%a %-d %b, %-I:%M %p")
+    st.markdown(f"<p class='jr-p'>{len(slate['games'])} game{'s' if len(slate['games']) != 1 else ''}. "
+                f"Projected {esc(made)} Sydney time, from who was out then. Each player's line "
+                "is his per-minute rates (this season, with last season weighted by how much "
+                "his role carried over) times the minutes he's projected to play tonight; a "
+                "team's games are weighted toward the ones played without tonight's absentees."
+                "</p>", unsafe_allow_html=True)
+    for g in slate["games"]:
+        away, home = g["away"], g["home"]
+        sa, sh = g["score"][away], g["score"][home]
+        lead = home if sh >= sa else away
+        with st.container(border=True):
+            st.markdown(
+                f"<div class='jr-slip-head'><b>{esc(away)} {sa:.0f}</b> – <b>{esc(home)} {sh:.0f}"
+                f"</b> <span class='when'>{esc(lead)} by {abs(sh - sa):.0f} · total {sa + sh:.0f}"
+                + (f" · tips {esc(tip_time(g.get('tipoff')))}" if g.get("tipoff") else "")
+                + "</span></div>", unsafe_allow_html=True)
+            notes = []
+            for team in (away, home):
+                if g["out"].get(team):
+                    notes.append(f"<b>{esc(team)} out:</b> {esc(', '.join(g['out'][team]))}")
+                if g["day_to_day"].get(team):
+                    notes.append(f"<b>{esc(team)} day-to-day</b> (projected as playing): "
+                                 f"{esc(', '.join(g['day_to_day'][team]))}")
+            if notes:
+                st.markdown("<p class='jr-p jr-faint'>" + "<br>".join(notes) + "</p>",
+                            unsafe_allow_html=True)
+            stale = [(t, v) for t, v in (g.get("stale") or {}).items() if v.get("names")]
+            for team, v in stale:
+                st.markdown(
+                    f"<div class='jr-note'>The stats cache is missing {esc(team)}'s game on "
+                    f"{esc(nice_date(v['last']))} for {esc(', '.join(v['names']))}, so they're "
+                    "projected without it. The morning refresh fills it in.</div>",
+                    unsafe_allow_html=True)
+            for team, tab in zip((away, home), st.tabs([away, home])):
+                with tab:
+                    st.dataframe(slate_table(g["players"][team]), hide_index=True,
+                                 width="stretch")
+                    reads = g["reads"].get(team) or []
+                    if reads:
+                        st.markdown("<ul class='jr-list jr-faint'>" + "".join(
+                            f"<li>{'▲' if r['edge'] == 'with' else '▼'} <b>{esc(r['name'])}</b>: "
+                            f"{esc(r['verdict'])}</li>" for r in reads) + "</ul>",
+                            unsafe_allow_html=True)
+    st.caption("What this can't see: who guards whom, minutes limits, a late scratch, and "
+               "blowouts, which end the starters' night early. Team totals are the least "
+               "reliable number on the page. Projections, not betting advice.")
+
+
 def bar_row(name, won, total, color="#22c55e"):
     share = 100 * won / total if total else 0
     return ("<div class='jr-stat'>"
@@ -1246,7 +1386,10 @@ wrote = st.session_state.pop("just_wrote", None)
 if wrote:
     st.toast(f"Wrote {nice_date(wrote, long=True)}")
 
-night_tab, misses_tab, picks_tab, season_tab = st.tabs(["Night", "Misses", "Picks", "Season"])
+tonight_tab, night_tab, misses_tab, picks_tab, season_tab = st.tabs(
+    ["Tonight", "Night", "Misses", "Picks", "Season"])
+with tonight_tab:
+    render_tonight()
 with night_tab:
     if not nights:
         st.markdown(

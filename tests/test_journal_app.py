@@ -40,17 +40,23 @@ def _text(at):
     return " ".join(m.value for m in at.markdown)
 
 
+def _write_button(at):
+    """The sidebar's Write/Rewrite button -- found by label, since the
+    Tonight tab's button now comes first in the page."""
+    return next(b for b in at.button if b.label in ("Write this night", "Rewrite this night"))
+
+
 def test_empty_journal_invites_writing(journal_dir):
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert not at.exception
     assert "No nights written yet" in _text(at)
-    assert at.button[0].label == "Write this night"
+    assert _write_button(at).label == "Write this night"
 
 
 def test_write_button_writes_and_shows_the_night(journal_dir):
     at = AppTest.from_file(APP, default_timeout=60).run()
     assert at.toggle[0].disabled and at.toggle[0].value is False   # Llama hidden
-    at.button[0].click().run()
+    _write_button(at).click().run()
     assert not at.exception
     assert (journal_dir / f"{DAY.isoformat()}.json").exists()
     assert (journal_dir / f"{DAY.isoformat()}.md").exists()
@@ -58,7 +64,7 @@ def test_write_button_writes_and_shows_the_night(journal_dir):
     assert "Wednesday 21 October" in text
     assert "BOS trailed 27⁠–⁠22 at halftime and won by 15." in text
     assert "Plain summary" in text
-    assert at.button[0].label == "Rewrite this night"
+    assert _write_button(at).label == "Rewrite this night"
 
 
 def test_legacy_night_without_data_still_opens(journal_dir):

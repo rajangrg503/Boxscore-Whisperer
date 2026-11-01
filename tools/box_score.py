@@ -51,6 +51,7 @@ that coming. Read the matchup reads printed under each team beside the
 numbers, never instead of them.
 """
 import argparse
+import datetime
 import json
 import os
 import statistics as st
@@ -340,6 +341,94 @@ def fmt_team(abbr, players, meta, out_names, opp, exclude):
         print(f"      {r}")
     print()
     return tot
+
+
+# ---------------------------------------------------------------- for the Journal
+LINE_COLS = ("PTS", "REB", "AST", "FG3M", "STL", "BLK", "TOV", "FGA", "FTA")
+
+
+def matchup_reads(players, opp, exclude, top=6):
+    """The ▲/▼ archetype reads for a team's top-minutes players."""
+    reads = []
+    for p in players[:top]:
+        try:
+            r = mx.read(p["pid"], opp, CUR, exclude=exclude)
+        except Exception:                                   # noqa: BLE001
+            r = None
+        if r and r.get("edge") in ("with", "against"):
+            reads.append({"name": p["name"], "edge": r["edge"], "verdict": r["verdict"]})
+    return reads
+
+
+def project_slate(feed, only=None):
+    """Every game in an availability feed (tools/availability.py's shape),
+    projected: {"games": [...], "league": {...}}. Each game carries both
+    teams' lines, the projected score, who is out and day-to-day, and the
+    matchup reads -- the same numbers main() prints, as data."""
+    league, team_pts = league_rates()
+    games = []
+    for game in feed.get("games", []):
+        away, home = game["away"], game["home"]
+        if only and f"{away}@{home}" != only:
+            continue
+        out_a, out_h = absentees(feed, away), absentees(feed, home)
+        _for_a, all_a, _ = team_strength(team_pts, away)
+        _for_h, all_h, _ = team_strength(team_pts, home)
+        pa, ma = project_team(away, set(out_a), league, all_h, home=False)
+        ph, mh = project_team(home, set(out_h), league, all_a, home=True)
+        dtd = {}
+        for row in game.get("injuries") or []:
+            if row.get("severity") != "out":
+                dtd.setdefault(row.get("team"), []).append(
+                    f"{row.get('nba_name') or row.get('name')} ({row.get('status')})")
+        entry = {"away": away, "home": home, "tipoff": game.get("tipoff"),
+                 "out": {away: sorted(out_a.values()), home: sorted(out_h.values())},
+                 "day_to_day": {away: dtd.get(away, []), home: dtd.get(home, [])},
+                 "players": {}, "score": {}, "reads": {}, "states": {}}
+        for team, opp, players, meta, exclude in ((away, home, pa, ma, set(out_h)),
+                                                  (home, away, ph, mh, set(out_a))):
+            entry["players"][team] = [
+                dict({"name": p["name"], "pid": p["pid"], "min": round(p["line"]["min"], 1),
+                      "evidence": {"match": p["n_match"], "games": p["n_cur"],
+                                   "prev_weight": round(p["w_prev"], 1),
+                                   "minutes_from": p["minutes_src"]}},
+                     **{c: round(p["line"][c], 1) for c in LINE_COLS})
+                for p in players]
+            entry["score"][team] = round(sum(p["line"]["PTS"] for p in players), 1)
+            entry["reads"][team] = matchup_reads(players, opp, exclude)
+            entry["states"][team] = meta["cur"]
+        games.append(entry)
+    return {"games": games,
+            "league": {k: round(v, 3) for k, v in league.items()}}
+
+
+def stale_players(team, pids, journal_dir, before):
+    """Players whose stats cache is missing the team's most recent game.
+
+    The cache refreshes from stats.nba.com, which times out on some
+    players and not others (1 Nov 2026: half of them). The written
+    Journal nights come from ESPN and do have that game, so they say who
+    played in it: anyone who did and has no row for that date is being
+    projected without it. Returns (date or None, [pid, ...])."""
+    import glob as _glob
+    for path in sorted(_glob.glob(os.path.join(journal_dir, "????-??-??.json")), reverse=True):
+        day = os.path.basename(path)[:10]
+        if day >= before:
+            continue
+        try:
+            night = json.load(open(path))
+        except (OSError, ValueError):
+            continue
+        for g in night.get("games") or []:
+            if team not in (g.get("home"), g.get("away")):
+                continue
+            played = {m["pid"] for m in g.get("minutes") or []
+                      if m.get("team") == team and m.get("played")}
+            stamp = datetime.datetime.strptime(day, "%Y-%m-%d").strftime("%b %d, %Y")
+            missing = [pid for pid in pids if pid in played and not any(
+                (r.get("GAME_DATE") or "") == stamp for r in log(pid, CUR))]
+            return day, missing
+    return None, []
 
 
 def main(argv=None):
