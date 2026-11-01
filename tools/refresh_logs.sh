@@ -26,7 +26,7 @@ PYTHON="${PYTHON:-python3}"
 say() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG"; }
 
 say "=== recent game logs: starting ==="
-"$PYTHON" tools/refresh_current_season.py --recent 2 >>"$LOG" 2>&1
+"$PYTHON" -u tools/refresh_current_season.py --recent 2 >>"$LOG" 2>&1
 STATUS=$?
 if [ $STATUS -ne 0 ]; then
     say "=== recent game logs: finished with failures (exit $STATUS) -- the next run retries ==="
