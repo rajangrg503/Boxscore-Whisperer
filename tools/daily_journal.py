@@ -372,25 +372,73 @@ def rotation(minutes_table):
     return out
 
 
-def pregame_projection(player_id, day):
-    """{stat: (low, mid, high)} from games strictly before `day`, or None.
+def _blended_frame(player_id, day):
+    """Games before `day` from BOTH seasons, tagged the way the app's
+    engine.game_log.resolve_projection_frame tags them, so engine/minutes.py
+    takes minutes from this season and blends per-minute rates by role.
 
-    Mirrors the app's season choice: this season once a player has five
-    games in it, otherwise last season's whole log."""
+    This used to be its own copy of the old five-game switch -- this
+    season once it had five games, last season's whole log before that --
+    so the Night and Misses tabs kept judging Camara against last
+    season's 33 minutes after the app had moved on (1 Nov 2026). It is
+    point-in-time, which is why it can't simply call the app's function:
+    only games before the night count."""
+    from engine.minutes import SEASON_COLUMN
+    from engine.role_blend import role_similarity, PRIOR_W
     season = season_for_date(day)
     start = int(season[:4])
     previous = f"{start - 1}-{str(start)[-2:]}"
-    frame = _gamelog(player_id, season)
-    if not frame.empty:
-        frame = frame[frame["_date"].map(lambda d: d is not None and d < day)]
-    if len(frame) < MIN_PRIOR_GAMES:
-        frame = _gamelog(player_id, previous)
-    if len(frame) < MIN_PRIOR_GAMES:
+    cur = _gamelog(player_id, season)
+    if not cur.empty:
+        cur = cur[cur["_date"].map(lambda d: d is not None and d < day)]
+    prev = _gamelog(player_id, previous)
+    frames = []
+    for frame, tag in ((cur, season), (prev, previous)):
+        if len(frame):
+            frame = frame.copy()
+            frame[SEASON_COLUMN] = tag
+            frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    both = pd.concat(frames, ignore_index=True)
+
+    def rate(frame, col):
+        m = pd.to_numeric(frame.get("MIN"), errors="coerce").fillna(0).sum()
+        return float(pd.to_numeric(frame.get(col), errors="coerce").fillna(0).sum()) / m * 36 if m else None
+
+    def mpg(frame):
+        m = pd.to_numeric(frame.get("MIN"), errors="coerce").dropna()
+        return float(m.mean()) if len(m) else None
+
+    sim = 1.0
+    if len(cur) and len(prev):
+        a, b, c, d = mpg(cur), mpg(prev), rate(cur, "FGA"), rate(prev, "FGA")
+        if a and b and c is not None and d is not None:
+            sim = role_similarity(a, b, c, d)
+    both.attrs["prior_weight"] = PRIOR_W * sim if len(prev) else 0.0
+    both.attrs["current_rows"] = len(cur)
+    return both
+
+
+def pregame_projection(player_id, day):
+    """{stat: (low, mid, high)} from games strictly before `day`, or None.
+
+    Same rule as the app since 1 Nov 2026: minutes from this season once
+    it has three games, per-minute rates blended across both seasons with
+    last season worth up to twelve games by role similarity. A player
+    with too little behind him either way is still refused."""
+    frame = _blended_frame(player_id, day)
+    if frame.empty:
+        return None
+    effective = frame.attrs["current_rows"] + (frame.attrs["prior_weight"]
+                                               if len(frame) > frame.attrs["current_rows"] else 0)
+    if effective < MIN_PRIOR_GAMES:
         return None
     stats, n_games = stats_from_gamelog(frame.drop(columns=["_date"], errors="ignore"))
     out = {}
     if "MIN" in frame.columns:
-        minutes = pd.to_numeric(frame["MIN"], errors="coerce").dropna()
+        recent = frame.iloc[:frame.attrs["current_rows"]] if frame.attrs["current_rows"] >= 3 else frame
+        minutes = pd.to_numeric(recent["MIN"], errors="coerce").dropna()
         if len(minutes):
             out["_usual_min"] = round(float(minutes.tail(10).median()), 1)
     for col, _label, _short in HEADLINE:
