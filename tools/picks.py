@@ -394,14 +394,14 @@ def parse_sportsbet(lines, players=None, today=None, us_today=None):
             leg = {"stat": _stat_from(dash.group(2)),
                    "line": abs(float(over.group(2))) if over else (float(bare.group(1)) if bare else None),
                    "side": over.group(1).lower() if over else "over",
-                   "side_unsure": not over,
+                   "side_unsure": not over, "market": "ou",
                    "who": dash.group(1), "title": above}
         elif threshold and _stat_from(threshold.group(2)) and not _PRICE.search(line):
             # "16+ Points" / "To Record 8+ Rebounds": the name is the row above.
             above = _title_above(lines, i)
             leg = {"stat": _stat_from(threshold.group(2)),
                    "line": int(threshold.group(1)) - 0.5, "side": "over", "side_unsure": False,
-                   "who": above, "title": above}
+                   "market": "alt", "who": above, "title": above}
         elif parlay and _ALONE_THRESHOLD.match(line):
             # "7+" alone, then "Deni Avdija Assists", then the game.
             for j in range(i + 1, min(i + 3, len(lines))):
@@ -470,6 +470,8 @@ def parse_sportsbet(lines, players=None, today=None, us_today=None):
             "price": float(leg_price.group(1)) if leg_price else None,
             "game": game,
         }
+        if leg.get("market"):
+            entry["market"] = leg["market"]   # "ou" or "alt" ("To Record N+"): see line_snapshot.clv
         entry["needs_review"] = [msg for ok, msg in (
             (entry["pid"], "player not recognised"), (entry["line"] is not None, "line not read"),
             (not (leg["side_unsure"] and entry["line"] is not None), "check over or under"),

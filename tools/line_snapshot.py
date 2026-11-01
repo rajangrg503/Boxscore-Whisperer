@@ -204,16 +204,25 @@ def closing_line(leg, out_dir=None):
 
 def clv(leg, close):
     """How the close moved against the line you took, in your favour when
-    positive: points of line for over/under, and the price you got over
-    the closing price for an N+ leg priced on its own."""
-    if not close or close.get("line") is None or leg.get("line") is None:
+    positive: points of line for an over/under leg, and the price you got
+    over the closing price for an N+ leg priced on its own.
+
+    A "To Record 15+" leg is NOT compared with the main over/under line:
+    that line sits wherever the book centres it (15.5 for Murray-Boyles'
+    pts+reb on 1 Nov), so the gap to 14.5 is the market's shape, not a
+    move. Its own N+ price at the close is the comparison, and without a
+    price on the slip there is nothing honest to say."""
+    if not close or leg.get("line") is None:
         return None
-    under = leg.get("side") == "under"
-    out = {"close": close["line"],
-           "line": round((leg["line"] - close["line"]) if under else (close["line"] - leg["line"]), 1)}
-    if leg.get("price") and close.get("alt_price"):
+    out = {}
+    if leg.get("price") and close.get("alt_price") and leg.get("market") != "ou":
         out["price"] = round(leg["price"] / close["alt_price"] - 1, 3)
-    return out
+        out["close_price"] = close["alt_price"]
+    if leg.get("market") != "alt" and close.get("line") is not None:
+        under = leg.get("side") == "under"
+        out["close"] = close["line"]
+        out["line"] = round((leg["line"] - close["line"]) if under else (close["line"] - leg["line"]), 1)
+    return out or None
 
 
 def main(argv=None):

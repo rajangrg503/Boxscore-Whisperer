@@ -882,9 +882,12 @@ def slip_card(slip, open_json, cal):
         else:
             proj = "no projection" if result != "unreadable" else ""
         moved = ls.clv(l, ls.closing_line(l, os.path.join(JOURNAL_DIR, "lines")))
-        if moved:
+        if moved and "line" in moved:
             proj += (f" · closed {dj._n(moved['close'])}"
                      + (f" ({moved['line']:+g})" if moved["line"] else " (same)"))
+        elif moved:
+            proj += (f" · closed at {moved['close_price']:.2f}"
+                     f" ({moved['price']:+.0%} on price)")
         rows.append(f"<tr><td style='width:1.1rem'><span class='jr-dot {result}'></span></td>"
                     f"<td class='who'>{esc(l['player'])}</td>"
                     f"<td>{esc(pk.leg_label(l))}{sure_tag}<span class='m-proj'>{proj}</span></td>"
@@ -1234,7 +1237,7 @@ def render_clv(gs):
     for s in gs:
         for l in s["legs"]:
             moved = ls.clv(l, ls.closing_line(l, os.path.join(JOURNAL_DIR, "lines")))
-            if moved:
+            if moved and "line" in moved:
                 rows.append(moved["line"])
     st.markdown("<p class='jr-h2'>Against the closing line</p>", unsafe_allow_html=True)
     if not rows:

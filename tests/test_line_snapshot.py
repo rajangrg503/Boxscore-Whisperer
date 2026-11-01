@@ -65,12 +65,13 @@ def test_clv_uses_the_last_pre_tip_snapshot(tmp_path, monkeypatch):
     _fake(monkeypatch, 14.5, 1.55)                      # the market moved toward the over
     ls.snapshot(now=START - datetime.timedelta(minutes=20), out_dir=str(tmp_path))
     leg = {"player": "Collin Murray-Boyles", "stat": "PR", "line": 14.5, "side": "over",
-           "us_date": "2026-11-01", "game": "BOS@ORL", "price": 1.72}
+           "us_date": "2026-11-01", "game": "BOS@ORL", "price": 1.72, "market": "alt"}
     close = ls.closing_line(leg, str(tmp_path))
     assert close["line"] == 14.5 and close["alt_price"] == 1.55
     v = ls.clv(leg, close)
-    assert v["line"] == 0.0 and v["price"] == round(1.72 / 1.55 - 1, 3)   # got 11% better odds
-    over = dict(leg, line=13.5, price=None)
+    assert v == {"price": round(1.72 / 1.55 - 1, 3), "close_price": 1.55}   # 11% better odds
+    assert ls.clv(dict(leg, price=None), close) is None     # an N+ leg in a multi: nothing honest
+    over = dict(leg, line=13.5, price=None, market="ou")
     assert ls.clv(over, close)["line"] == 1.0
     under = dict(over, side="under")
     assert ls.clv(under, close)["line"] == -1.0
