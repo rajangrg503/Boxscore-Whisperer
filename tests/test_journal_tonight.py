@@ -65,6 +65,8 @@ def test_the_button_projects_and_saves(journal_dir, monkeypatch):
     monkeypatch.setattr(av, "collect", lambda day, index=None: [{"away": "BOS", "home": "ORL"}])
     monkeypatch.setattr(bs, "project_slate", lambda feed, only=None: json.loads(json.dumps(SLATE)))
     monkeypatch.setattr(bs, "stale_players", lambda team, pids, jd, before: (None, []))
+    import line_snapshot as ls
+    monkeypatch.setattr(ls, "snapshot", lambda **k: {TODAY.isoformat(): "x"})
     at = AppTest.from_file(APP, default_timeout=60).run()
     at.button(key="tonight_go").click().run()
     assert not at.exception

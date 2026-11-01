@@ -46,6 +46,7 @@ import daily_journal as dj  # noqa: E402
 import journal_insights as ji  # noqa: E402
 import picks as pk  # noqa: E402
 import slip_check as sc  # noqa: E402
+import line_snapshot as ls  # noqa: E402
 import whisper  # noqa: E402
 
 JOURNAL_DIR = os.environ.get("BW_JOURNAL_DIR", "").strip() or dj.JOURNAL_DIR
@@ -880,6 +881,10 @@ def slip_card(slip, open_json, cal):
             proj = "team bet"
         else:
             proj = "no projection" if result != "unreadable" else ""
+        moved = ls.clv(l, ls.closing_line(l, os.path.join(JOURNAL_DIR, "lines")))
+        if moved:
+            proj += (f" · closed {dj._n(moved['close'])}"
+                     + (f" ({moved['line']:+g})" if moved["line"] else " (same)"))
         rows.append(f"<tr><td style='width:1.1rem'><span class='jr-dot {result}'></span></td>"
                     f"<td class='who'>{esc(l['player'])}</td>"
                     f"<td>{esc(pk.leg_label(l))}{sure_tag}<span class='m-proj'>{proj}</span></td>"
@@ -1034,6 +1039,16 @@ def build_slate(day, area):
     return slate
 
 
+def save_lines(area):
+    try:
+        paths = ls.snapshot(out_dir=os.path.join(JOURNAL_DIR, "lines"))
+    except ls.Unreachable as error:
+        area.warning(f"Couldn't read Sportsbet's lines: {error}")
+        return
+    area.caption("Saved Sportsbet's lines for " + (", ".join(nice_date(d) for d in sorted(paths))
+                                                   or "no upcoming games") + ".")
+
+
 def tip_time(iso):
     if not iso:
         return ""
@@ -1072,6 +1087,11 @@ def render_tonight():
         fresh = build_slate(day, area)
         if fresh:
             slate = fresh
+            save_lines(area)
+    if st.button("Save Sportsbet's lines now", key="tonight_lines",
+                 help="Every player line on the listed games, saved with the time. The lines "
+                      "job does this on its own in the 45 minutes before each tip."):
+        save_lines(area)
     if not slate:
         st.markdown(
             "<div class='jr-empty'><b>Nothing projected for this date yet.</b><br>Press "
@@ -1196,12 +1216,41 @@ def render_picks():
     if rec and rec["legs"]:
         render_record(rec, gs, cal)
     if slips:
+        render_clv(gs)          # needs no settled legs: the close is known before the result
+    if slips:
         st.markdown("<p class='jr-h2'>Slips</p>", unsafe_allow_html=True)
         st.markdown("<p class='jr-p'>Each leg shows what the player did and, last, the engine's "
                     "projection and chance from games before that night.</p>",
                     unsafe_allow_html=True)
         for slip in slips:
             slip_card(slip, open_json, cal)
+
+
+def render_clv(gs):
+    """How the lines you took compare with where the market closed. A
+    closing line that moved past yours is the market agreeing with you
+    after you bet -- the quickest honest read of picking skill there is."""
+    rows = []
+    for s in gs:
+        for l in s["legs"]:
+            moved = ls.clv(l, ls.closing_line(l, os.path.join(JOURNAL_DIR, "lines")))
+            if moved:
+                rows.append(moved["line"])
+    st.markdown("<p class='jr-h2'>Against the closing line</p>", unsafe_allow_html=True)
+    if not rows:
+        st.markdown("<p class='jr-p'>No closing lines saved for your legs yet. The lines job "
+                    "(tools/install_lines_job.sh) saves Sportsbet's lines in the 45 minutes "
+                    "before each tip; from then on every leg shows where its line closed.</p>",
+                    unsafe_allow_html=True)
+        return
+    beat, same = sum(r > 0 for r in rows), sum(r == 0 for r in rows)
+    st.markdown(
+        f"<p class='jr-p'>On <b>{len(rows)}</b> leg{'s' if len(rows) != 1 else ''} with a saved "
+        f"close, the line moved your way after you took it on <b>{beat}</b>, didn't move on "
+        f"<b>{same}</b>, and moved against you on <b>{len(rows) - beat - same}</b>. Average "
+        f"<b>{sum(rows) / len(rows):+.1f}</b> points of line. Beating the close regularly "
+        "is the sign of an edge that shows up long before the win rate settles.</p>",
+        unsafe_allow_html=True)
 
 
 def render_record(rec, gs, cal):
