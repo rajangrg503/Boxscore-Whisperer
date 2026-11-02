@@ -1129,6 +1129,12 @@ def render_tonight():
             if notes:
                 st.markdown("<p class='jr-p jr-faint'>" + "<br>".join(notes) + "</p>",
                             unsafe_allow_html=True)
+            import box_score as bs   # noqa: PLC0415 -- heavy; only when a slate shows
+            eats = bs.who_eats_notes(g)
+            if eats:
+                st.markdown("<div class='jr-note'><b>Who eats.</b> "
+                            + "<br>".join(esc(n) for n in eats)
+                            + " Already in the numbers below.</div>", unsafe_allow_html=True)
             stale = [(t, v) for t, v in (g.get("stale") or {}).items() if v.get("names")]
             for team, v in stale:
                 st.markdown(

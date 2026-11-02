@@ -43,6 +43,20 @@ HOW A LINE IS BUILT (the 31 Oct 2026 method, in order)
      allowed per game this season, shrunk toward league with K=10 games,
      and +/-1.5% for home court. Rebounds are left alone.
 
+  7. WHO EATS (2 Nov 2026, tools/opponent_absence.py and who_eats.py).
+     If the OTHER team's key G, F or C (most minutes per game this
+     season at that position) is out tonight, our players' rates move
+     by what 1,405 games measured, by their own position group: their C
+     out puts our C at +11% reb and pts and our G at +9% ast; their G
+     out puts our F at +10% ast. The table is OPP_LIFT. Lifts from more
+     than one absent key man multiply, capped at MAX_LIFT.
+     On the second night of a BACK-TO-BACK, starters (28+ mpg) lose 2%
+     of minutes before the roster is filled to 240; that is all the data
+     supports -- their production is otherwise flat, and the minutes go
+     down the bench, where the measured gain was.
+     Our OWN absentees are not in this step: the state weighting in
+     step 1 already reads the games this roster played without them.
+
 WHAT IT DOES NOT KNOW
 Who guards whom (the point-of-attack layer is a note, not a number),
 minutes restrictions, rookies with no games, and blowouts -- a 20-point
@@ -73,6 +87,23 @@ MINUTES_MIN_GAMES = 3
 K2, K3, KFT = 150.0, 150.0, 100.0
 K_TEAM = 10.0
 HOME = 0.015
+# their key man at position X is out -> our players at position Y:
+# per-minute multipliers measured by tools/opponent_absence.py (2 Nov 2026)
+OPP_LIFT = {
+    "C": {"C": {"PTS": 1.112, "REB": 1.109, "AST": 1.065},
+          "F": {"PTS": 1.053, "REB": 1.056, "AST": 1.026},
+          "G": {"PTS": 1.032, "REB": 1.028, "AST": 1.089}},
+    "F": {"C": {"PTS": 1.013, "REB": 1.031, "AST": 1.022},
+          "F": {"PTS": 1.045, "REB": 1.032, "AST": 1.072},
+          "G": {"PTS": 1.030, "REB": 1.033, "AST": 1.045}},
+    "G": {"C": {"PTS": 1.042, "REB": 1.024, "AST": 1.010},
+          "F": {"PTS": 1.063, "REB": 1.038, "AST": 1.096},
+          "G": {"PTS": 1.046, "REB": 1.020, "AST": 1.049}},
+}
+MAX_LIFT = 1.15
+B2B_STARTER_MIN = 0.98       # who_eats.py: starters -2% minutes, production flat
+STARTER_MPG = 28.0
+KEY_MIN_GAMES = 3
 COLS = ("PTS", "REB", "AST", "FG3M", "STL", "BLK", "TOV", "FGA", "FTA")
 
 
@@ -191,8 +222,112 @@ def prior_absentees(abbr, out_ids):
     return keep
 
 
+# ---------------------------------------------------------------- who eats
+def pos_group(pos):
+    pos = (pos or "").upper()
+    if pos.startswith("C") or pos == "F-C":
+        return "C"
+    if pos.startswith("F"):
+        return "F"
+    if pos.startswith("G"):
+        return "G"
+    return None
+
+
+def key_players(abbr):
+    """{group: pid}: the most minutes per game at each position group for
+    this team this season (3+ games), else last season with this team."""
+    best = {}
+    for season in (CUR, PREV):
+        for row in roster(abbr):
+            g = pos_group(row.get("POSITION"))
+            if not g or g in best and best[g][2] == CUR and season == PREV:
+                continue
+            pid = int(row["PLAYER_ID"])
+            rows = [r for r in log(pid, season) if team_of_row(r) == abbr]
+            if len(rows) < KEY_MIN_GAMES:
+                continue
+            m = mpg(rows)
+            if g not in best or (best[g][2] == season and m > best[g][1]):
+                best[g] = (pid, m, season)
+    return {g: v[0] for g, v in best.items()}
+
+
+def opp_keys_out(opp, opp_out_ids):
+    """Position groups whose key man on the other team is out tonight."""
+    return sorted(g for g, pid in key_players(opp).items() if pid in opp_out_ids)
+
+
+def lift_for(pos, keys_out):
+    """{col: multiplier} for one of our players, from the opponent's absences."""
+    g = pos_group(pos)
+    lift = {"PTS": 1.0, "REB": 1.0, "AST": 1.0}
+    if not g:
+        return lift
+    for x in keys_out:
+        for col, v in OPP_LIFT[x][g].items():
+            lift[col] *= v
+    return {c: min(v, MAX_LIFT) for c, v in lift.items()}
+
+
+def us_date_of(game, feed=None):
+    """The game's US calendar date: tip time minus five hours, else the
+    feed's date. None when neither is known."""
+    tip = game.get("tipoff")
+    if tip:
+        try:
+            t = datetime.datetime.fromisoformat(str(tip).replace("Z", "+00:00"))
+            return (t - datetime.timedelta(hours=5)).date()
+        except ValueError:
+            pass
+    d = str((feed or {}).get("date") or "")[:8]
+    try:
+        return datetime.datetime.strptime(d, "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+def played_day_before(abbr, day):
+    """True when the cache shows this team played the US day before."""
+    if not day:
+        return False
+    want = (day - datetime.timedelta(days=1)).strftime("%b %d, %Y")
+    for row in roster(abbr):
+        for g in log(int(row["PLAYER_ID"]), CUR):
+            if team_of_row(g) == abbr and g.get("GAME_DATE") == want:
+                return True
+    return False
+
+
+# What the other side's absences and a back-to-back do, in words, for the
+# Journal's Tonight tab. Same measured lifts as OPP_LIFT, rounded.
+WHO_EATS_TEXT = {
+    "C": "{opp}'s main centre is out, so {team}'s bigs get about 11% more rebounds and points "
+         "and its guards about 9% more assists.",
+    "F": "{opp}'s main forward is out, so {team}'s forwards get about 7% more assists and 5% "
+         "more points.",
+    "G": "{opp}'s main guard is out, so {team}'s forwards get about 10% more assists and 6% "
+         "more points.",
+}
+
+
+def who_eats_notes(game):
+    """Plain-text lines for a projected game's 'context' block."""
+    away, home = game["away"], game["home"]
+    out = []
+    for team, opp in ((away, home), (home, away)):
+        ctx = (game.get("context") or {}).get(team) or {}
+        for x in ctx.get("their_key_out") or []:
+            if x in WHO_EATS_TEXT:
+                out.append(WHO_EATS_TEXT[x].format(team=team, opp=opp))
+        if ctx.get("back_to_back"):
+            out.append(f"{team} played last night: its starters lose a couple of minutes and "
+                       "the bench picks them up. Not a reason to bet starters under.")
+    return out
+
+
 # ---------------------------------------------------------------- players
-def project_team(abbr, out_ids, league, opp_allowed, home):
+def project_team(abbr, out_ids, league, opp_allowed, home, keys_out=(), b2b=False):
     cur_w = {p: mpg(log(p, CUR)) or mpg(log(p, PREV)) for p in out_ids}
     v_cur = state_by_date(abbr, CUR, out_ids, cur_w)
     prev_ids = prior_absentees(abbr, out_ids)
@@ -267,6 +402,10 @@ def project_team(abbr, out_ids, league, opp_allowed, home):
         })
 
     # minutes allocation: cap and push down the bench
+    if b2b:
+        for p in players:
+            if p["mpg"] >= STARTER_MPG:
+                p["mpg"] *= B2B_STARTER_MIN
     use = sorted([p for p in players if p["mpg"] >= MIN_MPG], key=lambda p: -p["mpg"])
     # an eleven-man rotation at most; beyond that the end of the bench sits.
     # The bench is NOT trimmed to make the sum fit -- that hands its minutes
@@ -292,15 +431,19 @@ def project_team(abbr, out_ids, league, opp_allowed, home):
     out = []
     for p in use:
         m = mins[p["pid"]]
+        lift = lift_for(p["pos"], keys_out)
         line = {"min": m}
         for col in ("PTS", "REB", "AST", "FG3M", "STL", "BLK", "TOV", "FGA", "FTA"):
             v = p["per36"][col] * m / 36
             if col in ("PTS", "AST", "FG3M", "FGA", "FTA", "TOV"):
                 v *= scale
+            # attempts and makes move with points: more shots, not better ones
+            v *= lift["PTS"] if col in ("PTS", "FG3M", "FGA", "FTA") else lift.get(col, 1.0)
             line[col] = v
-        out.append(dict(p, line=line))
+        out.append(dict(p, line=line, lift={c: round(v, 3) for c, v in lift.items() if v != 1.0}))
     out.sort(key=lambda p: -p["line"]["min"])
-    return out, {"cur": counts, "prev": counts_prev, "scale": scale}
+    return out, {"cur": counts, "prev": counts_prev, "scale": scale,
+                 "keys_out": list(keys_out), "b2b": b2b}
 
 
 # ---------------------------------------------------------------- print
@@ -374,8 +517,11 @@ def project_slate(feed, only=None):
         out_a, out_h = absentees(feed, away), absentees(feed, home)
         _for_a, all_a, _ = team_strength(team_pts, away)
         _for_h, all_h, _ = team_strength(team_pts, home)
-        pa, ma = project_team(away, set(out_a), league, all_h, home=False)
-        ph, mh = project_team(home, set(out_h), league, all_a, home=True)
+        day = us_date_of(game, feed)
+        ka, kh = opp_keys_out(home, set(out_h)), opp_keys_out(away, set(out_a))
+        ba, bh = played_day_before(away, day), played_day_before(home, day)
+        pa, ma = project_team(away, set(out_a), league, all_h, home=False, keys_out=ka, b2b=ba)
+        ph, mh = project_team(home, set(out_h), league, all_a, home=True, keys_out=kh, b2b=bh)
         dtd = {}
         for row in game.get("injuries") or []:
             if row.get("severity") != "out":
@@ -384,14 +530,17 @@ def project_slate(feed, only=None):
         entry = {"away": away, "home": home, "tipoff": game.get("tipoff"),
                  "out": {away: sorted(out_a.values()), home: sorted(out_h.values())},
                  "day_to_day": {away: dtd.get(away, []), home: dtd.get(home, [])},
-                 "players": {}, "score": {}, "reads": {}, "states": {}}
+                 "players": {}, "score": {}, "reads": {}, "states": {},
+                 "context": {away: {"their_key_out": ka, "back_to_back": ba},
+                             home: {"their_key_out": kh, "back_to_back": bh}}}
         for team, opp, players, meta, exclude in ((away, home, pa, ma, set(out_h)),
                                                   (home, away, ph, mh, set(out_a))):
             entry["players"][team] = [
                 dict({"name": p["name"], "pid": p["pid"], "min": round(p["line"]["min"], 1),
                       "evidence": {"match": p["n_match"], "games": p["n_cur"],
                                    "prev_weight": round(p["w_prev"], 1),
-                                   "minutes_from": p["minutes_src"]}},
+                                   "minutes_from": p["minutes_src"]},
+                       "lift": p.get("lift") or {}},
                      **{c: round(p["line"][c], 1) for c in LINE_COLS})
                 for p in players]
             entry["score"][team] = round(sum(p["line"]["PTS"] for p in players), 1)
@@ -453,8 +602,15 @@ def main(argv=None):
         print(f"===== {away} @ {home}   "
               f"{away} scores x{for_a:.3f} allows x{all_a:.3f} ({n_a}g)   "
               f"{home} scores x{for_h:.3f} allows x{all_h:.3f} ({n_h}g)")
-        pa, ma = project_team(away, set(out_a), league, all_h, home=False)
-        ph, mh = project_team(home, set(out_h), league, all_a, home=True)
+        day = us_date_of(game, feed)
+        ka, kh = opp_keys_out(home, set(out_h)), opp_keys_out(away, set(out_a))
+        ba, bh = played_day_before(away, day), played_day_before(home, day)
+        for t, k, b in ((away, ka, ba), (home, kh, bh)):
+            if k or b:
+                print(f"    who eats  {t}: " + ", ".join(
+                    [f"their key {x} is out" for x in k] + (["back-to-back"] if b else [])))
+        pa, ma = project_team(away, set(out_a), league, all_h, home=False, keys_out=ka, b2b=ba)
+        ph, mh = project_team(home, set(out_h), league, all_a, home=True, keys_out=kh, b2b=bh)
         ta = fmt_team(away, pa, ma, out_a.values(), home, exclude=set(out_h))
         th = fmt_team(home, ph, mh, out_h.values(), away, exclude=set(out_a))
         print(f"    MODEL  {away} {ta['PTS']:.0f} - {home} {th['PTS']:.0f}   "

@@ -64,6 +64,8 @@ SCOREBOARD = ("https://site.api.espn.com/apis/site/v2/sports/"
               "basketball/nba/scoreboard?dates={date}")
 SUMMARY = ("https://site.api.espn.com/apis/site/v2/sports/"
            "basketball/nba/summary?event={event}")
+ROSTER = ("https://site.api.espn.com/apis/site/v2/sports/"
+          "basketball/nba/teams/{team}/roster")
 TIMEOUT = 20
 
 # ESPN abbreviations that differ from the NBA's. Same table as
@@ -124,6 +126,8 @@ def slate(date):
             "event": event.get("id"),
             "away": ESPN_TO_NBA.get(away, away),
             "home": ESPN_TO_NBA.get(home, home),
+            "espn_ids": {ESPN_TO_NBA.get(away, away): (sides.get("away", {}).get("team") or {}).get("id"),
+                         ESPN_TO_NBA.get(home, home): (sides.get("home", {}).get("team") or {}).get("id")},
             "tipoff": event.get("date"),
             "status": ((comp.get("status") or {}).get("type") or {}).get("detail"),
         })
@@ -152,6 +156,64 @@ def injuries_for(event_id, index):
     return rows
 
 
+def season_of(date):
+    """'2026-27' for any YYYYMMDD from October 2026 to September 2027."""
+    y, m = int(str(date)[:4]), int(str(date)[4:6])
+    start = y if m >= 10 else y - 1
+    return f"{start}-{(start + 1) % 100:02d}"
+
+
+def last_played(player_id, season):
+    """The latest GAME_DATE in the cached log, as a date, or None."""
+    rows = (read_payload(f"gamelog_{player_id}_{season}") or {}).get("data") or []
+    dates = []
+    for r in rows:
+        try:
+            dates.append(datetime.datetime.strptime(r.get("GAME_DATE", ""), "%b %d, %Y").date())
+        except ValueError:
+            continue
+    return max(dates) if dates else None
+
+
+def roster_injuries(team_id, abbr, index, season):
+    """Injuries ESPN keeps on the TEAM ROSTER but leaves off the game.
+
+    On 2 Nov 2026 the game summary listed neither Haliburton (out since
+    28 Oct) nor Butler (out all season); the team rosters had both, and
+    the Tonight tab projected Butler at 31 minutes. A roster entry can
+    also be stale, so one counts only when the cache shows no game for
+    the player since the date ESPN put on it."""
+    if not team_id:
+        return []
+    payload = fetch(ROSTER.format(team=team_id))
+    rows = []
+    for athlete in payload.get("athletes", []):
+        injuries = athlete.get("injuries") or []
+        if not injuries:
+            continue
+        name = (athlete.get("displayName") or "").strip()
+        status = (injuries[0].get("status") or "").strip()
+        hit = index.get(norm(name))
+        since = None
+        try:
+            since = datetime.datetime.fromisoformat(
+                str(injuries[0].get("date")).replace("Z", "+00:00")).date()
+        except ValueError:
+            pass
+        if hit and since:
+            last = last_played(hit[1], season)
+            if last and last >= since:
+                continue                      # played since: the entry is stale
+        rows.append({
+            "team": abbr, "name": name,
+            "nba_name": hit[0] if hit else None,
+            "player_id": hit[1] if hit else None,
+            "matched": hit is not None, "status": status,
+            "detail": "team roster", "source": "roster",
+        })
+    return rows
+
+
 def severity(status):
     low = (status or "").strip().lower()
     if low in OUT_STATUSES:
@@ -166,8 +228,14 @@ def collect(date, index=None):
     returning an empty, reassuring answer."""
     index = index if index is not None else roster_index()
     games = slate(date)
+    season = season_of(date)
     for game in games:
         rows = injuries_for(game["event"], index)
+        listed = {norm(r["name"]) for r in rows}
+        for abbr, team_id in (game.get("espn_ids") or {}).items():
+            for row in roster_injuries(team_id, abbr, index, season):
+                if norm(row["name"]) not in listed:
+                    rows.append(row)
         for row in rows:
             row["severity"] = severity(row["status"])
         game["injuries"] = rows
