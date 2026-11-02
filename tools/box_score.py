@@ -54,8 +54,17 @@ HOW A LINE IS BUILT (the 31 Oct 2026 method, in order)
      of minutes before the roster is filled to 240; that is all the data
      supports -- their production is otherwise flat, and the minutes go
      down the bench, where the measured gain was.
-     Our OWN absentees are not in this step: the state weighting in
-     step 1 already reads the games this roster played without them.
+     Our OWN absentees: the state weighting in step 1 reads the games
+     this roster played without them. When a player has few such games
+     (Podziemski had none without Curry and Draymond on 1 Nov 2026, then
+     went 8 and 8), the measured per-minute shift for his position and
+     role (OWN_RATE) is blended in, fully at zero matched games and not
+     at all from OWN_FULL_AT. A key man is the most USAGE per game at his
+     position, not the most minutes, and a player who has missed every
+     game this season is not one: the team's games already lack him.
+     The shift moves SHARE: the team's totals are rescaled back to what
+     they were, so the players it names gain at their teammates' expense
+     and an injury report cannot inflate a team's score.
 
 WHAT IT DOES NOT KNOW
 Who guards whom (the point-of-attack layer is a note, not a number),
@@ -90,16 +99,46 @@ HOME = 0.015
 # their key man at position X is out -> our players at position Y:
 # per-minute multipliers measured by tools/opponent_absence.py (2 Nov 2026)
 OPP_LIFT = {
-    "C": {"C": {"PTS": 1.112, "REB": 1.109, "AST": 1.065},
-          "F": {"PTS": 1.053, "REB": 1.056, "AST": 1.026},
-          "G": {"PTS": 1.032, "REB": 1.028, "AST": 1.089}},
-    "F": {"C": {"PTS": 1.013, "REB": 1.031, "AST": 1.022},
-          "F": {"PTS": 1.045, "REB": 1.032, "AST": 1.072},
-          "G": {"PTS": 1.030, "REB": 1.033, "AST": 1.045}},
-    "G": {"C": {"PTS": 1.042, "REB": 1.024, "AST": 1.010},
-          "F": {"PTS": 1.063, "REB": 1.038, "AST": 1.096},
-          "G": {"PTS": 1.046, "REB": 1.020, "AST": 1.049}},
+    "C": {"C": {"PTS": 1.112, "REB": 1.111, "AST": 1.061},
+          "F": {"PTS": 1.060, "REB": 1.047, "AST": 1.067},
+          "G": {"PTS": 1.045, "REB": 1.036, "AST": 1.101}},
+    "F": {"C": {"PTS": 1.043, "REB": 1.020, "AST": 1.056},
+          "F": {"PTS": 1.057, "REB": 1.032, "AST": 1.116},
+          "G": {"PTS": 1.044, "REB": 1.017, "AST": 1.055}},
+    "G": {"C": {"PTS": 1.068, "REB": 1.070, "AST": 1.070},
+          "F": {"PTS": 1.057, "REB": 1.017, "AST": 1.114},
+          "G": {"PTS": 1.026, "REB": 1.014, "AST": 1.060}},
 }
+# OUR key man at position X is out -> our players at position Y, by role:
+# per-minute multipliers (tools/who_eats.py per-game change / minutes
+# change, 2 Nov 2026). Minutes themselves are left to the 240-minute fill.
+# Applied only as far as the player has few games without tonight's
+# absentees: those games already carry the effect (see own_weight).
+OWN_RATE = {
+    "G": {"G": {"starter": {"PTS": 1.106, "REB": 1.090, "AST": 1.064},
+                "rotation": {"PTS": 1.130, "REB": 0.990, "AST": 1.197}},
+          "F": {"starter": {"PTS": 1.072, "REB": 1.020, "AST": 1.195},
+                "rotation": {"PTS": 1.163, "REB": 0.985, "AST": 1.210}},
+          "C": {"starter": {"PTS": 1.106, "REB": 1.034, "AST": 1.110},
+                "rotation": {"PTS": 1.062, "REB": 1.026, "AST": 1.141}}},
+    "F": {"G": {"starter": {"PTS": 1.129, "REB": 1.042, "AST": 1.044},
+                "rotation": {"PTS": 1.082, "REB": 0.991, "AST": 1.076}},
+          "F": {"starter": {"PTS": 1.133, "REB": 0.989, "AST": 1.214},
+                "rotation": {"PTS": 1.230, "REB": 1.039, "AST": 1.173}},
+          "C": {"starter": {"PTS": 1.053, "REB": 1.018, "AST": 0.914},
+                "rotation": {"PTS": 1.045, "REB": 0.987, "AST": 0.957}}},
+    "C": {"G": {"starter": {"PTS": 1.121, "REB": 1.004, "AST": 1.003},
+                "rotation": {"PTS": 0.989, "REB": 0.996, "AST": 1.056}},
+          "F": {"starter": {"PTS": 1.113, "REB": 1.068, "AST": 1.087},
+                "rotation": {"PTS": 1.184, "REB": 1.028, "AST": 1.181}},
+          # too few starting centres behind an absent key centre to
+          # measure; the backup's numbers stand in, assists capped
+          "C": {"starter": {"PTS": 1.062, "REB": 1.011, "AST": 1.200},
+                "rotation": {"PTS": 1.062, "REB": 1.011, "AST": 1.200}}},
+}
+MAX_OWN = 1.25
+OWN_FULL_AT = 5      # matched games at which the measured shift is fully in the data
+ROTATION_MPG = 18.0
 MAX_LIFT = 1.15
 B2B_STARTER_MIN = 0.98       # who_eats.py: starters -2% minutes, production flat
 STARTER_MPG = 28.0
@@ -234,22 +273,38 @@ def pos_group(pos):
     return None
 
 
+def usage_pg(rows):
+    if not rows:
+        return 0.0
+    return sum(nf(r.get("FGA")) + 0.44 * nf(r.get("FTA")) + nf(r.get("TOV")) + nf(r.get("AST"))
+               for r in rows) / len(rows)
+
+
 def key_players(abbr):
-    """{group: pid}: the most minutes per game at each position group for
-    this team this season (3+ games), else last season with this team."""
+    """{group: pid}: the most usage per game at each position group for
+    this team -- this season's games with the team when he has three,
+    else last season's with it (ten or more). Nobody who has missed every
+    game this season while the team has played four or more."""
+    team_games = len({g.get("GAME_DATE") for row in roster(abbr)
+                      for g in log(int(row["PLAYER_ID"]), CUR) if team_of_row(g) == abbr})
     best = {}
-    for season in (CUR, PREV):
-        for row in roster(abbr):
-            g = pos_group(row.get("POSITION"))
-            if not g or g in best and best[g][2] == CUR and season == PREV:
-                continue
-            pid = int(row["PLAYER_ID"])
-            rows = [r for r in log(pid, season) if team_of_row(r) == abbr]
-            if len(rows) < KEY_MIN_GAMES:
-                continue
-            m = mpg(rows)
-            if g not in best or (best[g][2] == season and m > best[g][1]):
-                best[g] = (pid, m, season)
+    for row in roster(abbr):
+        g = pos_group(row.get("POSITION"))
+        if not g:
+            continue
+        pid = int(row["PLAYER_ID"])
+        cur = [r for r in log(pid, CUR) if team_of_row(r) == abbr]
+        prev = [r for r in log(pid, PREV) if team_of_row(r) == abbr]
+        if len(cur) >= KEY_MIN_GAMES:
+            u = usage_pg(cur)
+        elif not cur and team_games >= 4:
+            continue
+        elif len(prev) >= 10:
+            u = usage_pg(prev)
+        else:
+            continue
+        if g not in best or u > best[g][1]:
+            best[g] = (pid, u)
     return {g: v[0] for g, v in best.items()}
 
 
@@ -268,6 +323,30 @@ def lift_for(pos, keys_out):
         for col, v in OPP_LIFT[x][g].items():
             lift[col] *= v
     return {c: min(v, MAX_LIFT) for c, v in lift.items()}
+
+
+def role_of(minutes):
+    if minutes >= STARTER_MPG:
+        return "starter"
+    return "rotation" if minutes >= ROTATION_MPG else None
+
+
+def own_weight(n_matched):
+    """1.0 with no games without tonight's absentees, 0 from OWN_FULL_AT."""
+    return max(0.0, 1.0 - n_matched / OWN_FULL_AT)
+
+
+def own_lift(pos, minutes, own_out, n_matched):
+    """{col: multiplier} from OUR absent key men, for one player."""
+    g, r = pos_group(pos), role_of(minutes)
+    lift = {"PTS": 1.0, "REB": 1.0, "AST": 1.0}
+    w = own_weight(n_matched)
+    if not g or not r or not w:
+        return lift
+    for x in own_out:
+        for col, v in OWN_RATE[x][g][r].items():
+            lift[col] *= v
+    return {c: min(1 + w * (v - 1), MAX_OWN) for c, v in lift.items()}
 
 
 def us_date_of(game, feed=None):
@@ -301,6 +380,7 @@ def played_day_before(abbr, day):
 
 # What the other side's absences and a back-to-back do, in words, for the
 # Journal's Tonight tab. Same measured lifts as OPP_LIFT, rounded.
+OWN_NAMES = {"G": "guard", "F": "forward", "C": "centre"}
 WHO_EATS_TEXT = {
     "C": "{opp}'s main centre is out, so {team}'s bigs get about 11% more rebounds and points "
          "and its guards about 9% more assists.",
@@ -320,6 +400,15 @@ def who_eats_notes(game):
         for x in ctx.get("their_key_out") or []:
             if x in WHO_EATS_TEXT:
                 out.append(WHO_EATS_TEXT[x].format(team=team, opp=opp))
+        thin = [p["name"] for p in (game.get("players") or {}).get(team, [])
+                if (p.get("lift") or {}) and (p.get("evidence") or {}).get("match", 0) < OWN_FULL_AT
+                and ctx.get("own_key_out")]
+        if ctx.get("own_key_out") and thin:
+            names = ", ".join(OWN_NAMES[x] for x in ctx["own_key_out"])
+            out.append(f"{team} is missing its main {names} and has few games without "
+                       f"{'them' if len(ctx['own_key_out']) > 1 else 'him'}, so the measured "
+                       f"shift is added for {', '.join(thin[:4])}"
+                       + (" and others" if len(thin) > 4 else "") + ".")
         if ctx.get("back_to_back"):
             out.append(f"{team} played last night: its starters lose a couple of minutes and "
                        "the bench picks them up. Not a reason to bet starters under.")
@@ -328,6 +417,7 @@ def who_eats_notes(game):
 
 # ---------------------------------------------------------------- players
 def project_team(abbr, out_ids, league, opp_allowed, home, keys_out=(), b2b=False):
+    own_out = sorted(g for g, pid in key_players(abbr).items() if pid in out_ids)
     cur_w = {p: mpg(log(p, CUR)) or mpg(log(p, PREV)) for p in out_ids}
     v_cur = state_by_date(abbr, CUR, out_ids, cur_w)
     prev_ids = prior_absentees(abbr, out_ids)
@@ -432,6 +522,8 @@ def project_team(abbr, out_ids, league, opp_allowed, home, keys_out=(), b2b=Fals
     for p in use:
         m = mins[p["pid"]]
         lift = lift_for(p["pos"], keys_out)
+        mine = own_lift(p["pos"], p["mpg"], own_out, p["n_match"] + p["n_match_prev"])
+        lift = {c: lift[c] * mine[c] for c in lift}
         line = {"min": m}
         for col in ("PTS", "REB", "AST", "FG3M", "STL", "BLK", "TOV", "FGA", "FTA"):
             v = p["per36"][col] * m / 36
@@ -441,9 +533,22 @@ def project_team(abbr, out_ids, league, opp_allowed, home, keys_out=(), b2b=Fals
             v *= lift["PTS"] if col in ("PTS", "FG3M", "FGA", "FTA") else lift.get(col, 1.0)
             line[col] = v
         out.append(dict(p, line=line, lift={c: round(v, 3) for c, v in lift.items() if v != 1.0}))
+    # Our own absences change WHO gets the shots, not how many the team
+    # takes: the boxes are rescaled so the own-team shift moves share
+    # between players and leaves the team's totals where they were.
+    if own_out:
+        for col, key in (("PTS", "PTS"), ("FG3M", "PTS"), ("FGA", "PTS"), ("FTA", "PTS"),
+                         ("REB", "REB"), ("AST", "AST")):
+            mine = [own_lift(p["pos"], p["mpg"], own_out, p["n_match"] + p["n_match_prev"])[key]
+                    for p in out]
+            total = sum(p["line"][col] for p in out)
+            before = sum(p["line"][col] / m for p, m in zip(out, mine))
+            if total:
+                for p in out:
+                    p["line"][col] *= before / total
     out.sort(key=lambda p: -p["line"]["min"])
     return out, {"cur": counts, "prev": counts_prev, "scale": scale,
-                 "keys_out": list(keys_out), "b2b": b2b}
+                 "keys_out": list(keys_out), "own_out": own_out, "b2b": b2b}
 
 
 # ---------------------------------------------------------------- print
@@ -531,8 +636,10 @@ def project_slate(feed, only=None):
                  "out": {away: sorted(out_a.values()), home: sorted(out_h.values())},
                  "day_to_day": {away: dtd.get(away, []), home: dtd.get(home, [])},
                  "players": {}, "score": {}, "reads": {}, "states": {},
-                 "context": {away: {"their_key_out": ka, "back_to_back": ba},
-                             home: {"their_key_out": kh, "back_to_back": bh}}}
+                 "context": {away: {"their_key_out": ka, "back_to_back": ba,
+                                    "own_key_out": ma["own_out"]},
+                             home: {"their_key_out": kh, "back_to_back": bh,
+                                    "own_key_out": mh["own_out"]}}}
         for team, opp, players, meta, exclude in ((away, home, pa, ma, set(out_h)),
                                                   (home, away, ph, mh, set(out_a))):
             entry["players"][team] = [

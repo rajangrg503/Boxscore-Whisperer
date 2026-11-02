@@ -17,8 +17,11 @@ METHOD
 1. Every cached game log is read, and each row is tied to its game and
    team (the MATCHUP column names the player's team first).
 2. Each team-season gets one KEY player per position group (G, F, C,
-   from the current rosters' POSITION): the one with the most minutes
-   for that team, provided he played at least MIN_KEY_GAMES for it.
+   from the current rosters' POSITION): the one with the most USAGE per
+   game for that team (shots + 0.44 free throws + turnovers + assists),
+   provided he played at least MIN_KEY_GAMES for it. (Until 2 Nov 2026
+   this was most minutes; Curry, managed to 28 a night, was not Golden
+   State's key guard by minutes.)
 3. A team game "misses its key C" when the team played and the key C
    has no row for that game.
 4. For every player at the same position group on the other side (at
@@ -86,21 +89,32 @@ def load(seasons):
     return games
 
 
-def keys(games, pos):
-    """{(season, team): {group: pid}} -- most minutes for that team."""
-    mins = collections.defaultdict(lambda: collections.defaultdict(float))
+def usage(row):
+    """Possessions a player finishes, roughly: shots, trips to the line,
+    turnovers, plus the plays he makes for others. A key man is who the
+    offence runs through, not who stands on the floor longest -- Curry
+    played fewer minutes than Podziemski in October 2026."""
+    f = lambda k: float(row.get(k) or 0)                          # noqa: E731
+    return f("FGA") + 0.44 * f("FTA") + f("TOV") + f("AST")
+
+
+def keys(games, pos, metric="usage"):
+    """{(season, team): {group: pid}} -- the most usage (or minutes) per
+    game at each position group, among players with MIN_KEY_GAMES games."""
+    tot = collections.defaultdict(lambda: collections.defaultdict(float))
     count = collections.defaultdict(lambda: collections.defaultdict(int))
     for (season, _), teams in games.items():
         for team, rows in teams.items():
             for pid, row in rows.items():
-                mins[(season, team)][pid] += float(row["MIN"] or 0)
+                tot[(season, team)][pid] += usage(row) if metric == "usage" else float(row["MIN"] or 0)
                 count[(season, team)][pid] += 1
     out = {}
-    for k, m in mins.items():
+    for k, m in tot.items():
         best = {}
-        for pid, total in sorted(m.items(), key=lambda kv: -kv[1]):
+        per_game = {pid: v / count[k][pid] for pid, v in m.items() if count[k][pid] >= MIN_KEY_GAMES}
+        for pid, _ in sorted(per_game.items(), key=lambda kv: -kv[1]):
             g = pos.get(pid)
-            if g and g not in best and count[k][pid] >= MIN_KEY_GAMES:
+            if g and g not in best:
                 best[g] = pid
         out[k] = best
     return out

@@ -51,21 +51,33 @@ def test_back_to_back_reads_the_cache(monkeypatch):
     assert not B.played_day_before("BOS", None)
 
 
-def test_key_players_prefers_this_season(monkeypatch):
-    roster = [{"PLAYER_ID": 1, "POSITION": "C"}, {"PLAYER_ID": 2, "POSITION": "C"},
-              {"PLAYER_ID": 3, "POSITION": "G"}]
+def test_key_players_by_usage_and_not_the_long_absent(monkeypatch):
+    roster = [{"PLAYER_ID": 1, "POSITION": "G"}, {"PLAYER_ID": 2, "POSITION": "G"},
+              {"PLAYER_ID": 3, "POSITION": "F"}, {"PLAYER_ID": 4, "POSITION": "F"}]
+    def games(n, mins, fga, ast):
+        return [{"MATCHUP": "GSW vs. LAC", "GAME_DATE": f"Oct {20 + i}, 2026", "MIN": mins,
+                 "FGA": fga, "FTA": 0, "TOV": 0, "AST": ast} for i in range(n)]
     logs = {
-        (1, B.CUR): [{"MATCHUP": "IND vs. BKN", "MIN": 20}] * 3,
-        (2, B.CUR): [{"MATCHUP": "IND vs. BKN", "MIN": 30}] * 2,      # too few games
-        (2, B.PREV): [{"MATCHUP": "IND vs. BKN", "MIN": 34}] * 60,
-        (3, B.PREV): [{"MATCHUP": "IND vs. BKN", "MIN": 33}] * 50,    # out all season
+        (1, B.CUR): games(5, 33, 10, 4),      # Podziemski: more minutes
+        (2, B.CUR): games(5, 28, 19, 6),      # Curry: fewer minutes, the offence
+        (3, B.PREV): games(40, 31, 15, 5),    # Butler: out every game this season
+        (4, B.CUR): games(5, 32, 12, 3),
     }
     monkeypatch.setattr(B, "roster", lambda abbr: roster)
     monkeypatch.setattr(B, "log", lambda pid, season: logs.get((pid, season), []))
-    keys = B.key_players("IND")
-    assert keys["C"] == 1          # this season's man, not last season's
-    assert keys["G"] == 3          # nobody this season, so last season's
+    keys = B.key_players("GSW")
+    assert keys["G"] == 2
+    assert keys["F"] == 4
 
+
+def test_own_lift_only_where_the_games_are_thin():
+    full = B.own_lift("G", 33, ["G", "C"], 0)
+    assert full["PTS"] > 1.15 and full["PTS"] <= B.MAX_OWN
+    half = B.own_lift("G", 33, ["G", "C"], 2)
+    assert 1.0 < half["PTS"] < full["PTS"]
+    assert B.own_lift("G", 33, ["G"], B.OWN_FULL_AT) == {"PTS": 1.0, "REB": 1.0, "AST": 1.0}
+    assert B.own_lift("G", 12, ["G"], 0) == {"PTS": 1.0, "REB": 1.0, "AST": 1.0}   # deep bench
+    assert B.own_lift("G", 33, [], 0) == {"PTS": 1.0, "REB": 1.0, "AST": 1.0}
 
 
 def test_tonight_tab_words():
@@ -77,3 +89,4 @@ def test_tonight_tab_words():
     assert notes[0].startswith("IND's main centre is out, so BKN's bigs")
     assert notes[1].startswith("IND played last night")
     assert B.who_eats_notes({"away": "A", "home": "B"}) == []
+
