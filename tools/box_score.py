@@ -404,11 +404,11 @@ def who_eats_notes(game):
                 if (p.get("lift") or {}) and (p.get("evidence") or {}).get("match", 0) < OWN_FULL_AT
                 and ctx.get("own_key_out")]
         if ctx.get("own_key_out") and thin:
-            names = ", ".join(OWN_NAMES[x] for x in ctx["own_key_out"])
+            names = " and ".join(OWN_NAMES[x] for x in ctx["own_key_out"])
+            who = ", ".join(thin[:4]) + (" and others" if len(thin) > 4 else "")
             out.append(f"{team} is missing its main {names} and has few games without "
                        f"{'them' if len(ctx['own_key_out']) > 1 else 'him'}, so the measured "
-                       f"shift is added for {', '.join(thin[:4])}"
-                       + (" and others" if len(thin) > 4 else "") + ".")
+                       f"shift is added for {who}" + ("" if who.endswith(".") else "."))
         if ctx.get("back_to_back"):
             out.append(f"{team} played last night: its starters lose a couple of minutes and "
                        "the bench picks them up. Not a reason to bet starters under.")
