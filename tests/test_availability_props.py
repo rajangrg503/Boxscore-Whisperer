@@ -57,3 +57,27 @@ def test_real_snapshot_had_curry():
         return
     props = av.props_by_game("2026-11-02", root)
     assert av.norm("Stephen Curry") in props.get("PHX@GSW", set())
+
+
+def test_morning_snapshot_beats_last_nights_by_save_time(tmp_path):
+    """5 Nov: '093737' (morning) sorted before '204116' (the night before)."""
+    day = tmp_path / "2026-11-04"
+    day.mkdir()
+    evening = day / "204116.json"
+    evening.write_text(json.dumps({"events": [{"game": "MIL@BOS", "rows": [{"player": "Josh Hart"}]}]}))
+    morning = day / "093737.json"
+    morning.write_text(json.dumps({"events": [{"game": "MIL@BOS", "rows": [{"player": "Derrick White"}]}]}))
+    os.utime(evening, (1_000_000, 1_000_000))
+    os.utime(morning, (2_000_000, 2_000_000))
+    assert av.props_by_game("2026-11-04", str(tmp_path)) == {"MIL@BOS": {av.norm("Derrick White")}}
+
+
+def test_same_day_ruling_stands_over_props():
+    """5 Nov: Tatum ruled out (rest) that morning; Sportsbet's props were still up."""
+    game = {"away": "MIL", "home": "BOS", "tipoff": "2026-11-05T00:30Z",
+            "injuries": [{"team": "BOS", "name": "Jayson Tatum", "status": "Out",
+                          "severity": "out", "updated": "2026-11-04T17:48Z"},
+                         {"team": "BOS", "name": "Payton Pritchard", "status": "Out",
+                          "severity": "out", "updated": "2026-11-03T21:12Z"}]}
+    av.reconcile_with_props([game], {"MIL@BOS": {av.norm("Jayson Tatum"), av.norm("Payton Pritchard")}})
+    assert [r["name"] for r in game["out"]] == ["Jayson Tatum"]

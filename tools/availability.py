@@ -153,6 +153,7 @@ def injuries_for(event_id, index):
                 "status": (entry.get("status") or "").strip(),
                 "detail": ((entry.get("details") or {}).get("type") or "").strip(),
                 "return_date": (entry.get("details") or {}).get("returnDate"),
+                "updated": entry.get("date"),
             })
     return rows
 
@@ -220,7 +221,13 @@ def props_by_game(us_date, lines_dir):
     in the latest snapshot saved for that US date, or {} if none."""
     import glob as _glob
     day_dir = os.path.join(lines_dir, str(us_date))
-    snaps = sorted(_glob.glob(os.path.join(day_dir, "*.json")))
+    # By save time, not filename: names are HHMMSS, so a morning snapshot
+    # ("093737") sorted before the previous evening's ("204116") and the
+    # 5 Nov slate read yesterday's props -- Tatum and Hart, ruled out that
+    # morning, were projected as playing because their props had been up
+    # the night before.
+    snaps = sorted(_glob.glob(os.path.join(day_dir, "*.json")),
+                   key=lambda p: (os.path.getmtime(p), p))
     if not snaps:
         return {}
     try:
@@ -235,6 +242,18 @@ def props_by_game(us_date, lines_dir):
     return out
 
 
+def _us_day(iso):
+    """The New York calendar date of an ESPN timestamp, or None."""
+    if not iso:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        when = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        return when.astimezone(ZoneInfo("America/New_York")).date()
+    except (ValueError, TypeError):
+        return None
+
+
 def reconcile_with_props(games, props):
     """A player ESPN lists as out but the bookmaker has props up for is
     expected to play: books pull a player's props when he is ruled out.
@@ -245,12 +264,21 @@ def reconcile_with_props(games, props):
     Podziemski over built on his absence lost. Such a player moves from
     "out" to day-to-day with the reason attached. Only a positive signal
     is used: a book with no prop for someone says nothing, since books
-    only list the main players. Mutates and returns `games`."""
+    only list the main players. Mutates and returns `games`.
+
+    5 Nov 2026, the other side: Tatum was ruled out (rest) that morning
+    and Sportsbet still had his props up 90 minutes before tip, so the
+    slate projected him as playing. An entry ESPN updated on the game's
+    own US date is fresh news and stands; the props override is only for
+    entries carried over from an earlier day, like Curry's."""
     for game in games:
         names = props.get(f"{game.get('away')}@{game.get('home')}")
         if not names:
             continue
+        game_day = _us_day(game.get("tipoff"))
         for row in game.get("injuries") or []:
+            if game_day and _us_day(row.get("updated")) == game_day:
+                continue
             if row.get("severity") == "out" and norm(row.get("name")) in names:
                 row["severity"] = "questionable"
                 row["props_up"] = True
