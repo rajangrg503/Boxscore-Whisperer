@@ -93,6 +93,10 @@ STATE_W = {"match": 1.0, "partial": 0.6, "full": 0.35}
 CAP, TEAM_MIN = 36.0, 240.0
 MIN_MPG = 8.0
 MINUTES_MIN_GAMES = 3
+MIN_RECENCY = 0.7      # per-game decay on the minutes average, newest first: over 460
+# player-games (31 Oct - 2 Nov 2026) minutes error 4.80 -> 4.70. A small gain, and it
+# does NOT fix the case that prompted it: Ayo Dosunmu (2 Nov, Edwards out) moves
+# only 30.2 -> 30.8 (he played 37) because the fill to 240 squeezes him back.
 K2, K3, KFT = 150.0, 150.0, 100.0
 K_TEAM = 10.0
 HOME = 0.015
@@ -161,6 +165,13 @@ def nf(v):
 
 def roster(abbr):
     return (read_payload(f"roster_{TEAM_ID_BY_ABBR[abbr]}") or {}).get("data") or []
+
+
+def game_day(row):
+    try:
+        return datetime.datetime.strptime(row.get("GAME_DATE") or "", "%b %d, %Y").date()
+    except ValueError:
+        return datetime.date.min
 
 
 def log(pid, season):
@@ -483,9 +494,14 @@ def project_team(abbr, out_ids, league, opp_allowed, home, keys_out=(), b2b=Fals
         w_cur = [STATE_W[v_cur.get(g.get("GAME_DATE"), "full")] for g in cur]
         w_prev_state = [STATE_W[v_prev.get(g.get("GAME_DATE"), "full")] for g in prev]
 
-        # minutes: current season, state-weighted
+        # minutes: current season, state-weighted, newest games counting most
         if len(cur) >= MINUTES_MIN_GAMES:
-            minutes = sum(w * nf(g.get("MIN")) for w, g in zip(w_cur, cur)) / sum(w_cur)
+            order = sorted(range(len(cur)), key=lambda i: game_day(cur[i]), reverse=True)
+            rec = [0.0] * len(cur)
+            for rank, i in enumerate(order):
+                rec[i] = MIN_RECENCY ** rank
+            wm = [w * r for w, r in zip(w_cur, rec)]
+            minutes = sum(w * nf(g.get("MIN")) for w, g in zip(wm, cur)) / sum(wm)
             minutes_src = "cur"
         elif cur and prev:
             minutes = (mpg(cur) + mpg(prev)) / 2
