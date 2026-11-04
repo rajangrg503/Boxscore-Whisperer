@@ -152,6 +152,7 @@ def injuries_for(event_id, index):
                 "matched": hit is not None,
                 "status": (entry.get("status") or "").strip(),
                 "detail": ((entry.get("details") or {}).get("type") or "").strip(),
+                "return_date": (entry.get("details") or {}).get("returnDate"),
             })
     return rows
 
@@ -212,6 +213,50 @@ def roster_injuries(team_id, abbr, index, season):
             "detail": "team roster", "source": "roster",
         })
     return rows
+
+
+def props_by_game(us_date, lines_dir):
+    """{game "AWY@HOM": set of folded player names} with a Sportsbet prop
+    in the latest snapshot saved for that US date, or {} if none."""
+    import glob as _glob
+    day_dir = os.path.join(lines_dir, str(us_date))
+    snaps = sorted(_glob.glob(os.path.join(day_dir, "*.json")))
+    if not snaps:
+        return {}
+    try:
+        payload = json.load(open(snaps[-1]))
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for event in payload.get("events") or []:
+        names = {norm(r.get("player")) for r in event.get("rows") or [] if r.get("player")}
+        if names:
+            out[event.get("game")] = names
+    return out
+
+
+def reconcile_with_props(games, props):
+    """A player ESPN lists as out but the bookmaker has props up for is
+    expected to play: books pull a player's props when he is ruled out.
+
+    3 Nov 2026: ESPN still carried Curry and Draymond as out the morning
+    after they rested the front end of a back-to-back; Sportsbet had
+    Curry at 26.5 points. He played 33 minutes (31/6/7) and the
+    Podziemski over built on his absence lost. Such a player moves from
+    "out" to day-to-day with the reason attached. Only a positive signal
+    is used: a book with no prop for someone says nothing, since books
+    only list the main players. Mutates and returns `games`."""
+    for game in games:
+        names = props.get(f"{game.get('away')}@{game.get('home')}")
+        if not names:
+            continue
+        for row in game.get("injuries") or []:
+            if row.get("severity") == "out" and norm(row.get("name")) in names:
+                row["severity"] = "questionable"
+                row["props_up"] = True
+                row["status"] = f"{row.get('status')}, but Sportsbet has props up"
+        game["out"] = [r for r in game.get("injuries") or [] if r.get("severity") == "out"]
+    return games
 
 
 def severity(status):

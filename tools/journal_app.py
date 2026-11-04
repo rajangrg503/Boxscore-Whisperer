@@ -1026,6 +1026,8 @@ def build_slate(day, area):
         if not games:
             area.info("No games on that US date.")
             return None
+        av.reconcile_with_props(games, av.props_by_game(day.isoformat(),
+                                                        os.path.join(JOURNAL_DIR, "lines")))
         slate = bs.project_slate({"games": games})
         for g in slate["games"]:
             g["stale"] = {}
@@ -1087,10 +1089,10 @@ def render_tonight():
     if st.button(label, type="secondary" if slate else "primary", key="tonight_go",
                  help="Reads who's out from ESPN now and projects every game. Takes a few "
                       "seconds."):
+        save_lines(area)      # first: the props say who the book expects to play
         fresh = build_slate(day, area)
         if fresh:
             slate = fresh
-            save_lines(area)
     if st.button("Save Sportsbet's lines now", key="tonight_lines",
                  help="Every player line on the listed games, saved with the time. The lines "
                       "job does this on its own in the 45 minutes before each tip."):

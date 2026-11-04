@@ -96,6 +96,12 @@ MINUTES_MIN_GAMES = 3
 K2, K3, KFT = 150.0, 150.0, 100.0
 K_TEAM = 10.0
 HOME = 0.015
+# Team totals: blend the sum of the players' boxes with a top-down number
+# (league points per game x the team's scoring rating x the opponent's
+# points-allowed rating x home). The bottom-up sum ran 7 points a team high
+# over 26 games (31 Oct - 2 Nov 2026, point-in-time); blending half-way cut
+# team-points error from 12.7 to 11.0 and called 20 winners of 26, not 17.
+TEAM_ANCHOR = 0.5
 # their key man at position X is out -> our players at position Y:
 # per-minute multipliers measured by tools/opponent_absence.py (2 Nov 2026)
 OPP_LIFT = {
@@ -313,15 +319,48 @@ def opp_keys_out(opp, opp_out_ids):
     return sorted(g for g, pid in key_players(opp).items() if pid in opp_out_ids)
 
 
-def lift_for(pos, keys_out):
-    """{col: multiplier} for one of our players, from the opponent's absences."""
+def opp_key_factors(opp, keys_out):
+    """{group: share of the measured lift still to add} for the opponent's
+    absent key men.
+
+    The lift (OPP_LIFT) is measured against games the key man played. But
+    the opponent's points-allowed rating (team_strength) is this season's,
+    and if he has already missed many of those games his absence is partly
+    in it -- adding the full lift counts it twice. 3 Nov 2026: Duren had
+    played 2 of Detroit's 6 and Chet 3 of OKC's 7; we projected CHA by 8
+    (DET won by 33) and CLE by 24 (OKC won by 5). The part already counted
+    is the share of games he missed, times the rating's own shrinkage
+    n / (n + K_TEAM)."""
+    if not keys_out:
+        return {}
+    keys = key_players(opp)
+    dates = {g.get("GAME_DATE") for row in roster(opp)
+             for g in log(int(row["PLAYER_ID"]), CUR) if team_of_row(g) == opp}
+    n = len(dates)
+    if not n:
+        return {x: 1.0 for x in keys_out}
+    shrink = n / (n + K_TEAM)
+    out = {}
+    for x in keys_out:
+        pid = keys.get(x)
+        played = len({g.get("GAME_DATE") for g in log(pid, CUR)
+                      if team_of_row(g) == opp}) if pid else n
+        missed = max(0, n - played) / n
+        out[x] = round(1 - missed * shrink, 3)
+    return out
+
+
+def lift_for(pos, keys_out, factors=None):
+    """{col: multiplier} for one of our players, from the opponent's absences.
+    `factors` scales each absence's lift toward 1 (opp_key_factors)."""
     g = pos_group(pos)
     lift = {"PTS": 1.0, "REB": 1.0, "AST": 1.0}
     if not g:
         return lift
     for x in keys_out:
+        f = (factors or {}).get(x, 1.0)
         for col, v in OPP_LIFT[x][g].items():
-            lift[col] *= v
+            lift[col] *= 1 + (v - 1) * f
     return {c: min(v, MAX_LIFT) for c, v in lift.items()}
 
 
@@ -397,9 +436,15 @@ def who_eats_notes(game):
     out = []
     for team, opp in ((away, home), (home, away)):
         ctx = (game.get("context") or {}).get(team) or {}
+        factors = ctx.get("their_key_factor") or {}
         for x in ctx.get("their_key_out") or []:
             if x in WHO_EATS_TEXT:
-                out.append(WHO_EATS_TEXT[x].format(team=team, opp=opp))
+                line = WHO_EATS_TEXT[x].format(team=team, opp=opp)
+                f = factors.get(x, 1.0)
+                if f < 0.95:
+                    line += (f" {opp} has already played much of the season without him, so "
+                             f"only about {round(f * 100)}% of that is added.")
+                out.append(line)
         thin = [p["name"] for p in (game.get("players") or {}).get(team, [])
                 if (p.get("lift") or {}) and (p.get("evidence") or {}).get("match", 0) < OWN_FULL_AT
                 and ctx.get("own_key_out")]
@@ -416,7 +461,8 @@ def who_eats_notes(game):
 
 
 # ---------------------------------------------------------------- players
-def project_team(abbr, out_ids, league, opp_allowed, home, keys_out=(), b2b=False):
+def project_team(abbr, out_ids, league, opp_allowed, home, keys_out=(), b2b=False,
+                 key_factors=None):
     own_out = sorted(g for g, pid in key_players(abbr).items() if pid in out_ids)
     cur_w = {p: mpg(log(p, CUR)) or mpg(log(p, PREV)) for p in out_ids}
     v_cur = state_by_date(abbr, CUR, out_ids, cur_w)
@@ -521,7 +567,7 @@ def project_team(abbr, out_ids, league, opp_allowed, home, keys_out=(), b2b=Fals
     out = []
     for p in use:
         m = mins[p["pid"]]
-        lift = lift_for(p["pos"], keys_out)
+        lift = lift_for(p["pos"], keys_out, key_factors)
         mine = own_lift(p["pos"], p["mpg"], own_out, p["n_match"] + p["n_match_prev"])
         lift = {c: lift[c] * mine[c] for c in lift}
         line = {"min": m}
@@ -548,7 +594,8 @@ def project_team(abbr, out_ids, league, opp_allowed, home, keys_out=(), b2b=Fals
                     p["line"][col] *= before / total
     out.sort(key=lambda p: -p["line"]["min"])
     return out, {"cur": counts, "prev": counts_prev, "scale": scale,
-                 "keys_out": list(keys_out), "own_out": own_out, "b2b": b2b}
+                 "keys_out": list(keys_out), "key_factors": dict(key_factors or {}),
+                 "own_out": own_out, "b2b": b2b}
 
 
 # ---------------------------------------------------------------- print
@@ -625,8 +672,24 @@ def project_slate(feed, only=None):
         day = us_date_of(game, feed)
         ka, kh = opp_keys_out(home, set(out_h)), opp_keys_out(away, set(out_a))
         ba, bh = played_day_before(away, day), played_day_before(home, day)
-        pa, ma = project_team(away, set(out_a), league, all_h, home=False, keys_out=ka, b2b=ba)
-        ph, mh = project_team(home, set(out_h), league, all_a, home=True, keys_out=kh, b2b=bh)
+        fa, fh = opp_key_factors(home, ka), opp_key_factors(away, kh)
+        pa, ma = project_team(away, set(out_a), league, all_h, home=False, keys_out=ka, b2b=ba,
+                              key_factors=fa)
+        ph, mh = project_team(home, set(out_h), league, all_a, home=True, keys_out=kh, b2b=bh,
+                              key_factors=fh)
+        lg = st.mean(team_pts[CUR].values()) if team_pts[CUR] else 0.0
+        anchor = {}
+        for team, opp, players, home_side in ((away, home, pa, False), (home, away, ph, True)):
+            bu = sum(p["line"]["PTS"] for p in players)
+            f_t = team_strength(team_pts, team)[0]
+            al_o = team_strength(team_pts, opp)[1]
+            target = lg * f_t * al_o * (1 + HOME if home_side else 1 - HOME)
+            k = (TEAM_ANCHOR * target + (1 - TEAM_ANCHOR) * bu) / bu if bu and lg else 1.0
+            for p in players:
+                for col in ("PTS", "FG3M", "FGA", "FTA"):
+                    p["line"][col] *= k
+            anchor[team] = {"bottom_up": round(bu, 1), "target": round(target, 1),
+                            "k": round(k, 3)}
         dtd = {}
         for row in game.get("injuries") or []:
             if row.get("severity") != "out":
@@ -635,10 +698,12 @@ def project_slate(feed, only=None):
         entry = {"away": away, "home": home, "tipoff": game.get("tipoff"),
                  "out": {away: sorted(out_a.values()), home: sorted(out_h.values())},
                  "day_to_day": {away: dtd.get(away, []), home: dtd.get(home, [])},
-                 "players": {}, "score": {}, "reads": {}, "states": {},
-                 "context": {away: {"their_key_out": ka, "back_to_back": ba,
+                 "players": {}, "score": {}, "reads": {}, "states": {}, "anchor": anchor,
+                 "context": {away: {"their_key_out": ka, "their_key_factor": fa,
+                                    "back_to_back": ba,
                                     "own_key_out": ma["own_out"]},
-                             home: {"their_key_out": kh, "back_to_back": bh,
+                             home: {"their_key_out": kh, "their_key_factor": fh,
+                                    "back_to_back": bh,
                                     "own_key_out": mh["own_out"]}}}
         for team, opp, players, meta, exclude in ((away, home, pa, ma, set(out_h)),
                                                   (home, away, ph, mh, set(out_a))):
@@ -716,8 +781,11 @@ def main(argv=None):
             if k or b:
                 print(f"    who eats  {t}: " + ", ".join(
                     [f"their key {x} is out" for x in k] + (["back-to-back"] if b else [])))
-        pa, ma = project_team(away, set(out_a), league, all_h, home=False, keys_out=ka, b2b=ba)
-        ph, mh = project_team(home, set(out_h), league, all_a, home=True, keys_out=kh, b2b=bh)
+        fa, fh = opp_key_factors(home, ka), opp_key_factors(away, kh)
+        pa, ma = project_team(away, set(out_a), league, all_h, home=False, keys_out=ka, b2b=ba,
+                              key_factors=fa)
+        ph, mh = project_team(home, set(out_h), league, all_a, home=True, keys_out=kh, b2b=bh,
+                              key_factors=fh)
         ta = fmt_team(away, pa, ma, out_a.values(), home, exclude=set(out_h))
         th = fmt_team(home, ph, mh, out_h.values(), away, exclude=set(out_a))
         print(f"    MODEL  {away} {ta['PTS']:.0f} - {home} {th['PTS']:.0f}   "
