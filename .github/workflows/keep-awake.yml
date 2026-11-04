@@ -7,7 +7,7 @@
 # counts as traffic; a plain curl does not -- and presses the wake-up
 # button if it finds the sleep page.
 #
-# A red run means the app did not come up within five minutes. GitHub
+# A red run means the app did not come up within nine minutes of reloads. GitHub
 # emails the repo owner on a failed scheduled run, so that is the alert.
 #
 # Free: Actions minutes cost nothing on a public repository. GitHub
@@ -30,7 +30,7 @@ concurrency:
 jobs:
   wake:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 14
     steps:
       - uses: actions/checkout@v4
 
