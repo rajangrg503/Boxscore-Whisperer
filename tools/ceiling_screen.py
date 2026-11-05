@@ -41,6 +41,11 @@ is the exact number the book doubts (Reed got 8 minutes on 3 Nov). Now:
     - fewer than 20 real games behind p_seen (rookies, VanVleet back from
       a season out) and the row is dropped.
 
+MOTOR PLAYERS (data/player_notes.json, karma's reads). A player tagged
+'motor' whose team has someone out is kept even when his minutes swing
+and is marked in the output: his output rises with his minutes, which is
+exactly the night the swing is upward (Scheierman, 4 Nov: 29 min, 9/11).
+
 READ THE EV COLUMN AS A RANKING, NOT A PROMISE. The screen picks the
 biggest gaps out of ~3,000 rungs, so the top rows are the ones where
 every estimate happened to run high together. The true edge is smaller.
@@ -61,6 +66,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import slip_check as sc  # noqa: E402
 import rank_lines as rl  # noqa: E402
+import player_notes as pn  # noqa: E402
 from engine.season import season_for_date  # noqa: E402
 from engine.cache import read_payload  # noqa: E402
 
@@ -131,6 +137,7 @@ def screen(us_date, lo=2.5, hi=8.0, extra_out=(), limit=15, swing=False, min_gam
         team, name = spec.split(":", 1)
         outs.setdefault(team, []).append(name)
 
+    notes = pn.load()
     rows = []
     for ev in lines["events"]:
         for r in ev["rows"]:
@@ -163,7 +170,8 @@ def screen(us_date, lo=2.5, hi=8.0, extra_out=(), limit=15, swing=False, min_gam
             rec = chk.get("recent") or {}
             p_recent = rec["over"] / rec["of"] if rec.get("of") else 0.0
             mins = chk.get("minutes") or {}
-            if not swing and mins and not mins.get("steady", True):
+            motor = "motor" in pn.tags(p["name"], notes) and bool(outs.get(team))
+            if not swing and not motor and mins and not mins.get("steady", True):
                 continue
             if p_recent < implied or n_seen < min_games:
                 continue
@@ -174,7 +182,7 @@ def screen(us_date, lo=2.5, hi=8.0, extra_out=(), limit=15, swing=False, min_gam
                          "leg": f"{int(r['threshold'])}+ {r['stat']}", "price": float(r["price"]),
                          "implied": implied, "p_box": p_box, "p_hist": p_hist, "p_seen": ps, "n_seen": n_seen, "recent": f"{rec.get('over')}/{rec.get('of')}",
                          "ev": low * float(r["price"]) - 1, "box_mean": box_mean,
-                         "min": p.get("min"), "assist": "AST" in COLS[r["stat"]],
+                         "min": p.get("min"), "assist": "AST" in COLS[r["stat"]], "motor": motor,
                          "flags": chk.get("flags", [])})
     rows.sort(key=lambda x: -x["ev"])
     # one row per player-stat: the best rung of each ladder
@@ -197,7 +205,7 @@ def main(argv=None):
     ap.add_argument("--swing", action="store_true", help="keep players whose minutes swing")
     a = ap.parse_args(argv)
     for x in screen(a.us_date, a.lo, a.hi, a.out, a.limit, a.swing):
-        tag = " [AST]" if x["assist"] else ""
+        tag = (" [AST]" if x["assist"] else "") + (" [MOTOR: role up, karma's read]" if x["motor"] else "")
         print(f"{x['player']:24s} {x['team']} {x['leg']:9s} @{x['price']:<5} "
               f"implied {x['implied']:.0%}  box {x['p_box']:.0%} (mean {x['box_mean']:.1f}, "
               f"{x['min']:.0f}m)  hist {x['p_hist']:.0%}  seen {x['p_seen']:.0%}/{x['n_seen']}g  last10 {x['recent']}  ev {x['ev']:+.0%}{tag}")
