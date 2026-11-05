@@ -11,8 +11,11 @@
     "tags": [
       "motor"
     ],
-    "note": "Playing like a high-intensity player right now (karma, 5 Nov 2026), so review later in the season. Rebounding well above his minutes: 31 Oct 20 min, 11 reb; 2 Nov 27 min, 12/8; 4 Nov 23 min, 12/8 after Allen left injured in Q1.",
+    "note": "Playing like a high-intensity player right now (karma, 5 Nov 2026), so review later in the season. Rebounding well above his minutes: 31 Oct 20 min, 11 reb; 2 Nov 27 min, 12/8; 4 Nov 23 min, 12/8 after Allen left injured in Q1. karma: with Peyton Watson out he may be trying to prove his role on the team.",
     "added": "2026-11-05",
-    "review": "2026-12-01"
+    "review": "when Peyton Watson returns (or 2026-12-01)",
+    "depends_on_out": [
+      "Peyton Watson"
+    ]
   }
 }
