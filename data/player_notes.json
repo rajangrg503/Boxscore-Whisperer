@@ -1,8 +1,18 @@
 {
   "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out.",
   "Baylor Scheierman": {
-    "tags": ["motor"],
+    "tags": [
+      "motor"
+    ],
     "note": "High-intensity player, maximises any minutes he gets (karma, 5 Nov 2026). Started for the resting Tatum on 4 Nov: 29 min, 9 pts, 11 reb; our under 12.5 PR lost. The model had him at 24.6 min and 4.5 reb.",
     "added": "2026-11-05"
+  },
+  "Mario Hezonja": {
+    "tags": [
+      "motor"
+    ],
+    "note": "Playing like a high-intensity player right now (karma, 5 Nov 2026), so review later in the season. Rebounding well above his minutes: 31 Oct 20 min, 11 reb; 2 Nov 27 min, 12/8; 4 Nov 23 min, 12/8 after Allen left injured in Q1.",
+    "added": "2026-11-05",
+    "review": "2026-12-01"
   }
 }
