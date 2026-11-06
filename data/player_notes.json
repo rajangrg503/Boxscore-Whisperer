@@ -93,7 +93,7 @@
     "GSW": "Source: Dunker Spot, 4 Nov. Forcing lots of turnovers; extra offensive rebounds from guards and wings; ice/shade sideline handoffs. Steph and Draymond sit some nights for maintenance. Niang +20 in 21 min vs PHX; Bassey a strong screener in random starts. Porzingis is out long-term (karma, 6 Nov): Draymond, Horford and Bassey cover centre. UPDATE 7 Nov AEDT: Porzingis announced he is stepping away from basketball to prioritise his health (Underdog / Bleacher Report; some outlets call it retirement). Treat him as gone for good: Draymond, Horford and Bassey are the centre rotation, Draymond in big games (karma).",
     "DAL": "Source: Dunker Spot, 4 Nov. Leads the league in zone possessions by a wide margin. Gafford leads them in offensive rebounds, with Risacher second. Max Christie's defence has been weak.",
     "MIA": "Source: Dunker Spot, 4 Nov. Luka torched them on the second night of a back-to-back: Davion Mitchell too small, Wiggins no answer, Bam only some good possessions. Elite guards can get loose against their perimeter defence.",
-    "OKC": "karma, 7 Nov: with SGA and whoever else, OKC know how to win; they have won through constant lineup changes for two seasons. Measured (SGA's game logs): with SGA playing and one of Holmgren / J. Williams missing, 38-7 in 2024-25 and 40-5 in 2025-26; with both missing 5-0 and 5-1 (3-2 so far in 2026-27). So do not let our absence penalty sink OKC's team total/margin the way it would for a normal team; their system holds. Example (karma, verified in game logs): 9 Mar 2026 v DEN, OKC beat Jokic's Nuggets without J. Williams, Holmgren, Caruso AND Hartenstein; SGA 35/9/15 with 0 TO, tying Wilt's 126 straight 20-point games."
+    "OKC": "karma, 7 Nov: with SGA and whoever else, OKC know how to win; they have won through constant lineup changes for two seasons. Measured (SGA's game logs): with SGA playing and one of Holmgren / J. Williams missing, 38-7 in 2024-25 and 40-5 in 2025-26; with both missing 5-0 and 5-1 (3-2 so far in 2026-27). So do not let our absence penalty sink OKC's team total/margin the way it would for a normal team; their system holds. Example (karma, verified in game logs): 9 Mar 2026 v DEN, OKC beat Jokic's Nuggets without J. Williams, Holmgren, Caruso AND Hartenstein; SGA 35/9/15 with 0 TO, tying Wilt's 126 straight 20-point games. Thunder Collective (6 Nov): Caruso back; new pieces Micah Peavy (POA defender) and Dalen Terry; Jaylin Williams out (back spasms). OKC lack wing size, so Cam Boozer could give them problems; Mara likely draws Edey/Boozer. Reporters expect a close OKC win at MEM with SGA closing (MEM's only closer is Jerome). Next: WAS on the 2nd night of a back-to-back (Caruso may rest), then POR twice in Portland."
   },
   "Bam Adebayo": {
     "tags": [
@@ -196,10 +196,12 @@
     "tags": []
   },
   "Shai Gilgeous-Alexander": {
-    "note": "karma, 7 Nov: he rises in big head-to-heads against other MVP candidates on national TV. Measured (game logs incl. playoffs): vs DEN/Jokic 2025-26 3-0 at 35.0 ppg (season 30.5); 2024-25 6-5 at 29.9 incl. the 7-game series OKC won. vs Luka's Lakers 2025-26 7-0 but only 25.9 ppg (wins, not points). Exception: vs SAS/Wemby 2025-26 4-7 at 27.2 ppg; his scoring dips against Wemby's rim protection. Lean his points over vs Jokic; be wary vs Wemby.",
+    "note": "karma, 7 Nov: he rises in big head-to-heads against other MVP candidates on national TV. Measured (game logs incl. playoffs): vs DEN/Jokic 2025-26 3-0 at 35.0 ppg (season 30.5); 2024-25 6-5 at 29.9 incl. the 7-game series OKC won. vs Luka's Lakers 2025-26 7-0 but only 25.9 ppg (wins, not points). Exception: vs SAS/Wemby 2025-26 4-7 at 27.2 ppg; his scoring dips against Wemby's rim protection. Lean his points over vs Jokic; be wary vs Wemby. Since J. Williams/Holmgren/Wallace went down, his shot volume jumped (35 and 26 FGA in his last two, 43 and 42 pts) and the ball is in his hands far more; our projection (31 pts) lags this usage spike, a role-change blind spot for a star. Beat reporters: his 19 FTA v CLE was inflated, about 10 were intentional fouls late; he is not top-10 in FTA this season, so don't bet his points on a free-throw story.",
     "source": "karma + game logs",
     "added": "2026-11-07",
-    "tags": []
+    "tags": [
+      "usage_up"
+    ]
   },
   "Keldon Johnson": {
     "tags": [
@@ -207,6 +209,20 @@
     ],
     "note": "karma, 7 Nov: a high-motor, intentional player (chases rebounds on purpose). His minutes depend on whether he is contributing: if he is a minus in his stint, SAS go to someone else. So his rebound/PR overs need him to be plus early; a bad first stint caps the night. Game log (min, +/-, reb): [('Nov 04', 19, -13, 5), ('Nov 02', 27, -2, 7), ('Oct 31', 24, 9, 6), ('Oct 28', 23, -1, 6), ('Oct 27', 22, 6, 4), ('Oct 24', 26, 14, 6), ('Oct 23', 19, -6, 6), ('Oct 20', 20, -12, 4)]",
     "source": "karma",
+    "added": "2026-11-07"
+  },
+  "Jared McCain": {
+    "note": "Shooting slump (about 1 of 20+ from three over two games) but an elite shooter by track record (OKC staff like his shots); still rebounding (9 at CLE). Expect regression up; avoid his unders.",
+    "tags": [],
+    "source": "Thunder Collective podcast (OKC beat reporters), 6 Nov 2026",
+    "added": "2026-11-07"
+  },
+  "Micah Peavy": {
+    "note": "New OKC two-way: point-of-attack defender, hustle rebounder (8-9 boards), first off the bench and in the closing lineup v CLE (SGA, Ajay Mitchell, two rookies, Peavy). Coach plays whoever is going well.",
+    "tags": [
+      "motor"
+    ],
+    "source": "Thunder Collective podcast (OKC beat reporters), 6 Nov 2026",
     "added": "2026-11-07"
   }
 }
