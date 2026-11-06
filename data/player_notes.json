@@ -1,5 +1,5 @@
 {
-  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting.",
+  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting. 'rebounds_suppressed_with_giannis': fade this player's rebound overs when Giannis plays.",
   "Baylor Scheierman": {
     "tags": [
       "motor"
@@ -93,5 +93,21 @@
     "GSW": "Source: Dunker Spot, 4 Nov. Forcing lots of turnovers; extra offensive rebounds from guards and wings; ice/shade sideline handoffs. Steph and Draymond sit some nights for maintenance. Niang +20 in 21 min vs PHX; Bassey a strong screener in random starts.",
     "DAL": "Source: Dunker Spot, 4 Nov. Leads the league in zone possessions by a wide margin. Gafford leads them in offensive rebounds, with Risacher second. Max Christie's defence has been weak.",
     "MIA": "Source: Dunker Spot, 4 Nov. Luka torched them on the second night of a back-to-back: Davion Mitchell too small, Wiggins no answer, Bam only some good possessions. Elite guards can get loose against their perimeter defence."
+  },
+  "Bam Adebayo": {
+    "tags": [
+      "rebounds_suppressed_with_giannis"
+    ],
+    "note": "karma, watching MIA@GSW live (5 Nov US): Bam plays power forward next to Giannis, who takes the rebounds. Bam is pulled away from the rim to contest corner threes, so he is out of rebounding position. When Giannis sits, Portis comes in at centre (not Bam). In-game check: 1 reb in 11 min in Q1. So fade Bam's rebound overs when Giannis plays; Giannis's rebound overs look better.",
+    "source": "karma (watching live), 6 Nov AEDT",
+    "added": "2026-11-06",
+    "review": "check over the next 3-5 MIA games with Giannis playing"
+  },
+  "Bobby Portis Jr.": {
+    "tags": [],
+    "note": "Backup centre when Giannis sits (karma, live 5 Nov US).",
+    "source": "karma (watching live), 6 Nov AEDT",
+    "added": "2026-11-06",
+    "review": "2026-11-20"
   }
 }
