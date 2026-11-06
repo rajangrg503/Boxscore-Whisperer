@@ -144,5 +144,18 @@
     "source": "karma (live) + game logs, 6 Nov AEDT",
     "added": "2026-11-06",
     "review": "when Paolo Banchero returns"
+  },
+  "Draymond Green": {
+    "tags": [
+      "small_ball_5",
+      "low_mistake_trusted"
+    ],
+    "note": "karma (live, 5 Nov US): floor general and master small-ball centre who runs the offence from the 5. With Porzingis out he plays centre and the offence runs through him: 6 ast by halftime vs MIA, and 9 of his last 10 at 6+ ast before tonight. Our model's 24 min looks low when GSW's other bigs are out. Bet him on assists/RA, not points.",
+    "source": "karma (watching live), 6 Nov AEDT",
+    "added": "2026-11-06",
+    "review": "when Kristaps Porzingis returns",
+    "depends_on_out": [
+      "Kristaps Porzi\u0146\u0123is"
+    ]
   }
 }
