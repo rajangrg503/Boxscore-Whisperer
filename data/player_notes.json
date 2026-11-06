@@ -1,5 +1,5 @@
 {
-  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting. 'rebounds_suppressed_with_giannis': fade this player's rebound overs when Giannis plays. 'low_mistake_trusted': the coach trusts him and his minutes are steady, but his output moves between stats, so prefer combo props.",
+  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting. 'rebounds_suppressed_with_giannis': fade this player's rebound overs when Giannis plays. 'low_mistake_trusted': the coach trusts him and his minutes are steady, but his output moves between stats, so prefer combo props. 'big_game_closer': plays more and is on the floor at the end of close or big games.",
   "Baylor Scheierman": {
     "tags": [
       "motor"
@@ -147,10 +147,11 @@
   },
   "Draymond Green": {
     "tags": [
-      "small_ball_5",
-      "low_mistake_trusted"
+      "big_game_closer",
+      "low_mistake_trusted",
+      "small_ball_5"
     ],
-    "note": "karma (live, 5 Nov US): floor general and master small-ball centre who runs the offence from the 5. With Porzingis out he plays centre and the offence runs through him: 6 ast by halftime vs MIA, and 9 of his last 10 at 6+ ast before tonight. Our model's 24 min looks low when GSW's other bigs are out. Bet him on assists/RA, not points. Porzingis's absence is long-term (illness, no end point), so treat Draymond-at-centre as GSW's base setup this season.",
+    "note": "karma (live, 5 Nov US): floor general and master small-ball centre who runs the offence from the 5. With Porzingis out he plays centre and the offence runs through him: 6 ast by halftime vs MIA, and 9 of his last 10 at 6+ ast before tonight. Our model's 24 min looks low when GSW's other bigs are out. Bet him on assists/RA, not points. Porzingis's absence is long-term (illness, no end point), so treat Draymond-at-centre as GSW's base setup this season. karma: Horford and Bassey are listed at centre and may start, but in big games (close games, closing lineups, Cup and playoff-type nights) it is still Draymond at the 5. Expect more Draymond minutes and assists on those nights.",
     "source": "karma (watching live), 6 Nov AEDT",
     "added": "2026-11-06",
     "review": "2026-12-15 (Porzingis out long-term: karma 'out forever'; the Dunker Spot says no end point in sight)"
