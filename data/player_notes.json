@@ -251,5 +251,13 @@
     "tags": [
       "mvp_race"
     ]
+  },
+  "Isaiah Hartenstein": {
+    "note": "karma, 7 Nov: dominates the boards when he plays real minutes (14.7 reb/36). His 2026-27 duds are explained: the 3-reb opener at SAS was foul trouble with Chet and Aday Mara there to take his minutes, and the 7 at HOU was a blowout loss. Every other game since has been 12+. Rebound props hinge on minutes (~25 cap), not on matchup.",
+    "source": "karma",
+    "added": "2026-11-07",
+    "tags": [
+      "minutes_driven"
+    ]
   }
 }
