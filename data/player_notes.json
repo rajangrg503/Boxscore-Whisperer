@@ -1,5 +1,5 @@
 {
-  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting. 'rebounds_suppressed_with_giannis': fade this player's rebound overs when Giannis plays.",
+  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting. 'rebounds_suppressed_with_giannis': fade this player's rebound overs when Giannis plays. 'low_mistake_trusted': the coach trusts him and his minutes are steady, but his output moves between stats, so prefer combo props.",
   "Baylor Scheierman": {
     "tags": [
       "motor"
@@ -114,11 +114,13 @@
   },
   "De'Anthony Melton": {
     "tags": [
+      "low_mistake_trusted",
       "motor"
     ],
-    "note": "karma (live, 5 Nov US): high-motor player, but too small to win rebounds against big frontcourts (MIA: Giannis, Bam, Portis). His RA leans on assists and steals-into-transition against big teams. The Dunker Spot: part of GSW's full-court pressure package, takes the ball off dribblers. Tentative: check against how the game ends (he had 2 reb, 2 ast in his first 5 min).",
+    "note": "karma (live, 5 Nov US): high-motor player, but too small to win rebounds against big frontcourts (MIA: Giannis, Bam, Portis). His RA leans on assists and steals-into-transition against big teams. The Dunker Spot: part of GSW's full-court pressure package, takes the ball off dribblers. Tentative: check against how the game ends (he had 2 reb, 2 ast in his first 5 min). karma: plays like a championship-core role player. Doesn't make mistakes and gives the team whatever it needs that night, which earns steady coach trust and minutes. His output moves between stats game to game, so bet him on combos (RA/PRA), not single stats.",
     "source": "karma (watching live), 6 Nov AEDT",
     "added": "2026-11-06",
-    "review": "2026-11-20"
+    "review": "2026-11-20",
+    "bet_as": "combo (RA/PRA)"
   }
 }
