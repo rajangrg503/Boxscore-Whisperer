@@ -201,6 +201,7 @@
     "added": "2026-11-07",
     "tags": [
       "no_unders",
+      "slow_starter",
       "usage_up"
     ]
   },
@@ -232,6 +233,14 @@
       "usage_up"
     ],
     "source": "Hoop Collective (Windhorst, MacMahon, Goodwill), 7 Nov 2026",
+    "added": "2026-11-07"
+  },
+  "Luka Dončić": {
+    "note": "karma, 7 Nov: the opposite of Shai - Luka wants to get himself going first, hunting his own shot from the opening possessions. So his early-game scoring props (1Q points, first-half points, first basket) are where he fits; Shai's do not. Untested: check his 1Q points over the next few games (PBP) before betting quarter props.",
+    "tags": [
+      "fast_starter"
+    ],
+    "source": "karma",
     "added": "2026-11-07"
   }
 }
