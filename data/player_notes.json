@@ -194,5 +194,11 @@
     "source": "measured from game logs (karma question)",
     "added": "2026-11-07",
     "tags": []
+  },
+  "Shai Gilgeous-Alexander": {
+    "note": "karma, 7 Nov: he rises in big head-to-heads against other MVP candidates on national TV. Measured (game logs incl. playoffs): vs DEN/Jokic 2025-26 3-0 at 35.0 ppg (season 30.5); 2024-25 6-5 at 29.9 incl. the 7-game series OKC won. vs Luka's Lakers 2025-26 7-0 but only 25.9 ppg (wins, not points). Exception: vs SAS/Wemby 2025-26 4-7 at 27.2 ppg; his scoring dips against Wemby's rim protection. Lean his points over vs Jokic; be wary vs Wemby.",
+    "source": "karma + game logs",
+    "added": "2026-11-07",
+    "tags": []
   }
 }
