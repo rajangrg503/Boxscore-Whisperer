@@ -84,7 +84,7 @@
   },
   "Cooper Flagg": {
     "tags": [],
-    "note": "About 26 ppg on 24% from three. Teams are starting to load up on him (two on the ball, zone, switch to flatten), so expect his scoring inside the arc to regress somewhat.",
+    "note": "About 26 ppg on 24% from three. Teams are starting to load up on him (two on the ball, zone, switch to flatten), so expect his scoring inside the arc to regress somewhat. Measured 7 Nov (karma asked when he reaches 8+ reb & 8+ ast): 4 of 77 games, all at 38-41 min with ~20 FGA, 3 of 4 with AD or Klay out. It needs ~40 minutes as the clear first option; with Kyrie playing and a blowout risk it is unlikely.",
     "review": "2026-11-20",
     "added": "2026-11-06",
     "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
@@ -188,5 +188,11 @@
     "source": "karma",
     "added": "2026-11-07",
     "review": "2026-12-07"
+  },
+  "LeBron James": {
+    "note": "Measured 7 Nov: 8+ reb & 8+ ast in 14 of 70 games in 2025-26; 11 of the 14 came with Luka and/or Reaves out (he became the main ball-handler), mostly in comfortable wins (+/- +7 avg), not tight games. 2 of 7 so far with PHI. Best spot: when PHI's other handlers (Maxey, Edgecombe) sit.",
+    "source": "measured from game logs (karma question)",
+    "added": "2026-11-07",
+    "tags": []
   }
 }
