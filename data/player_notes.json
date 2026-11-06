@@ -90,7 +90,7 @@
     "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
   },
   "_team_notes": {
-    "GSW": "Source: Dunker Spot, 4 Nov. Forcing lots of turnovers; extra offensive rebounds from guards and wings; ice/shade sideline handoffs. Steph and Draymond sit some nights for maintenance. Niang +20 in 21 min vs PHX; Bassey a strong screener in random starts.",
+    "GSW": "Source: Dunker Spot, 4 Nov. Forcing lots of turnovers; extra offensive rebounds from guards and wings; ice/shade sideline handoffs. Steph and Draymond sit some nights for maintenance. Niang +20 in 21 min vs PHX; Bassey a strong screener in random starts. Porzingis is out long-term (karma, 6 Nov): Draymond, Horford and Bassey cover centre.",
     "DAL": "Source: Dunker Spot, 4 Nov. Leads the league in zone possessions by a wide margin. Gafford leads them in offensive rebounds, with Risacher second. Max Christie's defence has been weak.",
     "MIA": "Source: Dunker Spot, 4 Nov. Luka torched them on the second night of a back-to-back: Davion Mitchell too small, Wiggins no answer, Bam only some good possessions. Elite guards can get loose against their perimeter defence."
   },
@@ -150,12 +150,9 @@
       "small_ball_5",
       "low_mistake_trusted"
     ],
-    "note": "karma (live, 5 Nov US): floor general and master small-ball centre who runs the offence from the 5. With Porzingis out he plays centre and the offence runs through him: 6 ast by halftime vs MIA, and 9 of his last 10 at 6+ ast before tonight. Our model's 24 min looks low when GSW's other bigs are out. Bet him on assists/RA, not points.",
+    "note": "karma (live, 5 Nov US): floor general and master small-ball centre who runs the offence from the 5. With Porzingis out he plays centre and the offence runs through him: 6 ast by halftime vs MIA, and 9 of his last 10 at 6+ ast before tonight. Our model's 24 min looks low when GSW's other bigs are out. Bet him on assists/RA, not points. Porzingis's absence is long-term (illness, no end point), so treat Draymond-at-centre as GSW's base setup this season.",
     "source": "karma (watching live), 6 Nov AEDT",
     "added": "2026-11-06",
-    "review": "when Kristaps Porzingis returns",
-    "depends_on_out": [
-      "Kristaps Porzi\u0146\u0123is"
-    ]
+    "review": "2026-12-15 (Porzingis out long-term: karma 'out forever'; the Dunker Spot says no end point in sight)"
   }
 }
