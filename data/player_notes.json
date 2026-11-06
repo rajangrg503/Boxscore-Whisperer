@@ -200,5 +200,13 @@
     "source": "karma + game logs",
     "added": "2026-11-07",
     "tags": []
+  },
+  "Keldon Johnson": {
+    "tags": [
+      "motor"
+    ],
+    "note": "karma, 7 Nov: a high-motor, intentional player (chases rebounds on purpose). His minutes depend on whether he is contributing: if he is a minus in his stint, SAS go to someone else. So his rebound/PR overs need him to be plus early; a bad first stint caps the night. Game log (min, +/-, reb): [('Nov 04', 19, -13, 5), ('Nov 02', 27, -2, 7), ('Oct 31', 24, 9, 6), ('Oct 28', 23, -1, 6), ('Oct 27', 22, 6, 4), ('Oct 24', 26, 14, 6), ('Oct 23', 19, -6, 6), ('Oct 20', 20, -12, 4)]",
+    "source": "karma",
+    "added": "2026-11-07"
   }
 }
