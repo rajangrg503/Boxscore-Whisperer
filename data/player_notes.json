@@ -1,5 +1,5 @@
 {
-  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out.",
+  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting.",
   "Baylor Scheierman": {
     "tags": [
       "motor"
@@ -9,13 +9,16 @@
   },
   "Mario Hezonja": {
     "tags": [
-      "motor"
+      "motor",
+      "primary_guard_defender",
+      "small_ball_5"
     ],
-    "note": "Playing like a high-intensity player right now (karma, 5 Nov 2026), so review later in the season. Rebounding well above his minutes: 31 Oct 20 min, 11 reb; 2 Nov 27 min, 12/8; 4 Nov 23 min, 12/8 after Allen left injured in Q1. karma: with Peyton Watson out he may be trying to prove his role on the team.",
+    "note": "Big role for now (karma, 6 Nov). Peyton Watson has a nagging hamstring and could be in and out of the lineup all season. Hezonja is probably CLE's best defender on opposing primary guards, which keeps his minutes steady, and he plays the 5 when they go small, which is where the rebounds come from. Rebounding above his minutes: 31 Oct 20 min, 11 reb; 2 Nov 27 min, 12/8; 4 Nov 23 min, 12/8 after Allen left injured in Q1.",
     "added": "2026-11-05",
-    "review": "when Peyton Watson returns (or 2026-12-01)",
+    "review": "2026-12-01 (Watson coming back no longer ends the role on its own, given the nagging hamstring)",
     "depends_on_out": [
       "Peyton Watson"
-    ]
+    ],
+    "updated": "2026-11-06"
   }
 }
