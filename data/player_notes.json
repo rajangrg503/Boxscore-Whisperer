@@ -168,5 +168,14 @@
     "2026-11-06 POR@LAL": "karma, 6 Nov AEDT: expects lots of free throws between Luka Doncic, Deni Avdija and Austin Reaves. An observation to check after the game (their free-throw attempts vs their usual), NOT a betting instruction: do not pick or favour bets because of it.",
     "2026-11-06 MVP stars": "karma, 7 Nov AEDT: the MVP race has begun, so Wembanyama (at SAC), Luka (v POR) and Tatum (at CHA) will try to push their scoring. Observation to check after the game (their points vs their season average), NOT a betting instruction.",
     "2026-11-06 OKC@MEM": "karma, 7 Nov AEDT: OKC will try to take Ty Jerome out of the game; his line depends on how well they do it. Observation to check after the game (Jerome's points/usage vs norm, and whether Spencer/Coward got the shots instead), NOT a betting instruction."
+  },
+  "Darius Acuff Jr.": {
+    "tags": [
+      "checks_out_in_blowouts"
+    ],
+    "note": "karma, 7 Nov AEDT (from watching him): when the Kings are losing by a big margin, Acuff checks out -- stands in the corner, his rebounds are accidental rather than chased. Avoid his overs (especially REB/PRA) when SAC is a big underdog / blowout risk.",
+    "source": "karma",
+    "added": "2026-11-07",
+    "review": "2026-12-07"
   }
 }
