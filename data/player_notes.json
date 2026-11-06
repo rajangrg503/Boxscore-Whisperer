@@ -243,5 +243,13 @@
     ],
     "source": "karma",
     "added": "2026-11-07"
+  },
+  "Victor Wembanyama": {
+    "note": "karma, 7 Nov: he has openly said he wants the MVP this year (confirmed: preseason MVP favourite, said so publicly), so he will want to follow a big game with another. Game log so far (chronological pts): [12, 25, 23, 29, 36, 43, 12, 52] - one big game was followed by a 12-point dud, so the follow-up isn't automatic; check minutes/blowout script.",
+    "source": "karma",
+    "added": "2026-11-07",
+    "tags": [
+      "mvp_race"
+    ]
   }
 }
