@@ -20,5 +20,78 @@
       "Peyton Watson"
     ],
     "updated": "2026-11-06"
+  },
+  "Stephen Curry": {
+    "tags": [
+      "form_hot"
+    ],
+    "note": "On a 30-point streak during GSW's five-game win streak: about 33 ppg, nearly 48% from three on 11-12 attempts, about 8.5 FTA and 5.5 ast. More rim attacks and fouls drawn than usual. GSW rest him on some nights for maintenance (7 starting lineups in 8 games), which drags his season minutes down.",
+    "review": "2026-11-20",
+    "added": "2026-11-06",
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+  },
+  "Yaxel Lendeborg": {
+    "tags": [
+      "usage_up",
+      "volatile"
+    ],
+    "note": "Rookie with a big and growing usage: post-ups, one-on-one, playmaking out of drives. First rookie with multiple 6+ three games in his first 7. The hosts expect up-and-down nights (quiet vs PHX and the night before LAC).",
+    "review": "2026-11-20",
+    "added": "2026-11-06",
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+  },
+  "Brandin Podziemski": {
+    "tags": [],
+    "note": "The hosts rate him as just good: shoots, drives, playmakes, crashes the offensive glass, takes charges. GSW guards and wings are getting extra offensive rebounds as a team.",
+    "review": "2026-11-20",
+    "added": "2026-11-06",
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+  },
+  "Paul Reed": {
+    "tags": [
+      "starter_while_out"
+    ],
+    "note": "Starting for DET while Jalen Duren is out (hamstring). Active defensively and on the offensive glass, and willing to shoot. His role holds while Duren is out.",
+    "depends_on_out": [
+      "Jalen Duren"
+    ],
+    "review": "when Jalen Duren returns",
+    "added": "2026-11-06",
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+  },
+  "Neemias Queta": {
+    "tags": [],
+    "note": "Boston's best centre so far: screens, offensive rebounds, rim protection, and is spaced more (already 2 threes). Mitchell Robinson has started slowly.",
+    "review": "2026-11-20",
+    "added": "2026-11-06",
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+  },
+  "Jeremiah Fears": {
+    "tags": [
+      "usage_up"
+    ],
+    "note": "Year-two strides, especially during NOP's win streak: reads pick-and-roll and changes speed. Does more with a NOP guard out. Herb Jones is back in the starting lineup.",
+    "review": "2026-11-20",
+    "added": "2026-11-06",
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+  },
+  "Naji Marshall": {
+    "tags": [],
+    "note": "DAL secondary playmaker: 7 assists in the loss to SAC with Kyrie out. Flagg plus Marshall had 13 of 19 assists.",
+    "review": "2026-11-20",
+    "added": "2026-11-06",
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+  },
+  "Cooper Flagg": {
+    "tags": [],
+    "note": "About 26 ppg on 24% from three. Teams are starting to load up on him (two on the ball, zone, switch to flatten), so expect his scoring inside the arc to regress somewhat.",
+    "review": "2026-11-20",
+    "added": "2026-11-06",
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+  },
+  "_team_notes": {
+    "GSW": "Source: Dunker Spot, 4 Nov. Forcing lots of turnovers; extra offensive rebounds from guards and wings; ice/shade sideline handoffs. Steph and Draymond sit some nights for maintenance. Niang +20 in 21 min vs PHX; Bassey a strong screener in random starts.",
+    "DAL": "Source: Dunker Spot, 4 Nov. Leads the league in zone possessions by a wide margin. Gafford leads them in offensive rebounds, with Risacher second. Max Christie's defence has been weak.",
+    "MIA": "Source: Dunker Spot, 4 Nov. Luka torched them on the second night of a back-to-back: Davion Mitchell too small, Wiggins no answer, Bam only some good possessions. Elite guards can get loose against their perimeter defence."
   }
 }
