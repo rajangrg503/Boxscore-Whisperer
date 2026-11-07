@@ -180,10 +180,11 @@
     "tags": [
       "checks_out_in_blowouts"
     ],
-    "note": "karma, 7 Nov AEDT (from watching him): when the Kings are losing by a big margin, Acuff checks out -- stands in the corner, his rebounds are accidental rather than chased. Avoid his overs (especially REB/PRA) when SAC is a big underdog / blowout risk.",
+    "note": "karma, 7 Nov AEDT (from watching him): when the Kings are losing by a big margin, Acuff checks out -- stands in the corner, his rebounds are accidental rather than chased. Avoid his overs (especially REB/PRA) when SAC is a big underdog / blowout risk. Evidence 7 Nov (SAS@SAC, SAC down 15+ from Q2): kept shooting (11 pts on 11 FGA while down 15+; 22p 8a total in 33 min) but only 2 reb in that stretch. In blowouts his rebounding drops, his shot volume doesn't: points OK, rebounds no.",
     "source": "karma",
     "added": "2026-11-07",
-    "review": "2026-12-07"
+    "review": "2026-12-07",
+    "updated": "2026-11-07"
   },
   "Tyrese Maxey": {
     "tags": [
@@ -215,9 +216,10 @@
     "tags": [
       "motor"
     ],
-    "note": "karma, 7 Nov: a high-motor, intentional player (chases rebounds on purpose). His minutes depend on whether he is contributing: if he is a minus in his stint, SAS go to someone else. So his rebound/PR overs need him to be plus early; a bad first stint caps the night. Game log (min, +/-, reb): [('Nov 04', 19, -13, 5), ('Nov 02', 27, -2, 7), ('Oct 31', 24, 9, 6), ('Oct 28', 23, -1, 6), ('Oct 27', 22, 6, 4), ('Oct 24', 26, 14, 6), ('Oct 23', 19, -6, 6), ('Oct 20', 20, -12, 4)]",
+    "note": "karma, 7 Nov: a high-motor, intentional player (chases rebounds on purpose). His minutes depend on whether he is contributing: if he is a minus in his stint, SAS go to someone else. So his rebound/PR overs need him to be plus early; a bad first stint caps the night. Game log (min, +/-, reb): [('Nov 04', 19, -13, 5), ('Nov 02', 27, -2, 7), ('Oct 31', 24, 9, 6), ('Oct 28', 23, -1, 6), ('Oct 27', 22, 6, 4), ('Oct 24', 26, 14, 6), ('Oct 23', 19, -6, 6), ('Oct 20', 20, -12, 4)] Evidence 7 Nov: SAS +24, he stayed on as a closer: 27 min, +27, 6 reb 6 ast. Positive +/- = minutes (karma's read confirmed).",
     "source": "karma",
-    "added": "2026-11-07"
+    "added": "2026-11-07",
+    "updated": "2026-11-07"
   },
   "Jared McCain": {
     "note": "Shooting slump (about 1 of 20+ from three over two games) but an elite shooter by track record (OKC staff like his shots); still rebounding (9 at CLE). Expect regression up; avoid his unders.",
@@ -234,12 +236,13 @@
     "added": "2026-11-07"
   },
   "Ajay Mitchell": {
-    "note": "Hoop Collective: OKC's legit No. 2 with the stars out - about 21 pts on 53% over the last 6 games, but only ~3.7 ast. Defences load up on SGA and make him beat them, so his points have real upside; assists don't.",
+    "note": "Hoop Collective: OKC's legit No. 2 with the stars out - about 21 pts on 53% over the last 6 games, but only ~3.7 ast. Defences load up on SGA and make him beat them, so his points have real upside; assists don't. 7 Nov at MEM: 35 pts on 14-20 (projected 18.7) with Holmgren/J. Williams out; the missing usage went to him, not SGA.",
     "tags": [
       "usage_up"
     ],
     "source": "Hoop Collective (Windhorst, MacMahon, Goodwill), 7 Nov 2026",
-    "added": "2026-11-07"
+    "added": "2026-11-07",
+    "updated": "2026-11-07"
   },
   "Luka Dončić": {
     "note": "karma, 7 Nov: the opposite of Shai - Luka wants to get himself going first, hunting his own shot from the opening possessions. So his early-game scoring props (1Q points, first-half points, first basket) are where he fits; Shai's do not. Untested: check his 1Q points over the next few games (PBP) before betting quarter props. MEASURED 7 Nov (ESPN play-by-play): 2026-27 1Q points 13, 6, 17, 16, 21, 16, 16, 10 (avg 14.4, 37% of his points, ~9 1Q shots, first shot inside the first 1-2 minutes every game); last 10 games of 2025-26: 1Q avg 12.8, 38% of his points, 10+ in 8 of 10. So 10+ 1Q points in 15 of 18. Read CONFIRMED. Candidate market: Luka 1Q points over at a line around 9.5-10.5.",
@@ -258,14 +261,16 @@
     ]
   },
   "Isaiah Hartenstein": {
-    "note": "karma, 7 Nov: dominates the boards when he plays real minutes (14.7 reb/36). His 2026-27 duds are explained: the 3-reb opener at SAS was foul trouble with Chet and Aday Mara there to take his minutes, and the 7 at HOU was a blowout loss. Every other game since has been 12+. Rebound props hinge on minutes (~25 cap), not on matchup. karma: a master rebounder who reads angles and is very intentional, and always chases offensive boards because OKC isn't a good shooting team. Measured 2026-27: 27 of his 81 rebounds offensive (33%), 3.4 OREB a game in ~25 min.",
+    "note": "karma, 7 Nov: dominates the boards when he plays real minutes (14.7 reb/36). His 2026-27 duds are explained: the 3-reb opener at SAS was foul trouble with Chet and Aday Mara there to take his minutes, and the 7 at HOU was a blowout loss. Every other game since has been 12+. Rebound props hinge on minutes (~25 cap), not on matchup. karma: a master rebounder who reads angles and is very intentional, and always chases offensive boards because OKC isn't a good shooting team. Measured 2026-27: 27 of his 81 rebounds offensive (33%), 3.4 OREB a game in ~25 min. 7 Nov result: 6 reb (5 in Q1), 0 OREB, 7 ast in 26 min as OKC shot 55%/46%. His boards need OKC misses: on hot-shooting/blowout nights prefer AST or PRA.",
     "source": "karma",
     "added": "2026-11-07",
     "tags": [
       "minutes_driven",
       "motor",
+      "needs_team_misses",
       "offensive_glass"
-    ]
+    ],
+    "updated": "2026-11-07"
   },
   "Kyshawn George": {
     "note": "karma, 7 Nov: really likes him, 'doing everything' vs ATL (attacking, rebounding, passing). 2026-27: 32.8 min, 17.2/4.2/4.8 (up from 14.8/5.1/4.5); 11 ast vs CLE, 25/4/7 last game vs ATL. Watch as a combo (PRA / pts+ast) candidate. Minutes are NOT tied to Anthony Davis: all 8 games of his 32.8-min, 17.2-pt start came WITH AD (AD plays 4/5, George the wing). AD returning is not a reason to drop him; AD out (first time 7 Nov) may add usage on top.",
