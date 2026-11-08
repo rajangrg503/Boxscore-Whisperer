@@ -42,10 +42,12 @@
   },
   "Brandin Podziemski": {
     "tags": [],
-    "note": "The hosts rate him as just good: shoots, drives, playmakes, crashes the offensive glass, takes charges. GSW guards and wings are getting extra offensive rebounds as a team.",
+    "note": "The hosts rate him as just good: shoots, drives, playmakes, crashes the offensive glass, takes charges. GSW guards and wings are getting extra offensive rebounds as a team. karma, 8 Nov: prefer his PRA over PA. 8 Nov: 15p 7r 1a, so PA 16 missed 19.5 but PRA was 23. He rebounds; his assists swing.",
     "review": "2026-11-20",
     "added": "2026-11-06",
-    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma",
+    "updated": "2026-11-08",
+    "bet_as": "PRA"
   },
   "Paul Reed": {
     "tags": [
@@ -99,7 +101,14 @@
         "improving_with_new_group"
       ]
     },
-    "UTA": "karma, 7 Nov: Utah are better than 1-7; their losing has been surprising. Measured: 7 of 8 games against MEM (x2), SAS (x2), POR, LAL, NOP; four of the seven losses by 9 or fewer (MEM 5, SAS 6, NOP 7, LAL 9); one win (NOP by 1). Their record is mostly schedule. Win the possession battle v DAL per game_lens (DAL -5.5/g, 27th)."
+    "UTA": "karma, 7 Nov: Utah are better than 1-7; their losing has been surprising. Measured: 7 of 8 games against MEM (x2), SAS (x2), POR, LAL, NOP; four of the seven losses by 9 or fewer (MEM 5, SAS 6, NOP 7, LAL 9); one win (NOP by 1). Their record is mostly schedule. Win the possession battle v DAL per game_lens (DAL -5.5/g, 27th).",
+    "SAS": {
+      "note": "karma, 8 Nov: the Spurs' defence is like OKC's: they take away a lot. To score on them an opponent needs a middle game (good midrange) and a stretch big to pull Wembanyama out of the paint. POR had neither (Clingan is a rim big): Avdija PA 16 (1 ast), Camara PR 8, SAS by 22, though opp_allows had SAS wings at 1.11x. Treat overs against SAS as risky unless the team has midrange creators + a stretch 5.",
+      "tags": [
+        "elite_defense",
+        "needs_stretch_big_to_beat"
+      ]
+    }
   },
   "Bam Adebayo": {
     "tags": [
@@ -158,10 +167,12 @@
       "low_mistake_trusted",
       "small_ball_5"
     ],
-    "note": "karma (live, 5 Nov US): floor general and master small-ball centre who runs the offence from the 5. With Porzingis out he plays centre and the offence runs through him: 6 ast by halftime vs MIA, and 9 of his last 10 at 6+ ast before tonight. Our model's 24 min looks low when GSW's other bigs are out. Bet him on assists/RA, not points. Porzingis's absence is long-term (illness, no end point), so treat Draymond-at-centre as GSW's base setup this season. karma: Horford and Bassey are listed at centre and may start, but in big games (close games, closing lineups, Cup and playoff-type nights) it is still Draymond at the 5. Expect more Draymond minutes and assists on those nights.",
+    "note": "karma (live, 5 Nov US): floor general and master small-ball centre who runs the offence from the 5. With Porzingis out he plays centre and the offence runs through him: 6 ast by halftime vs MIA, and 9 of his last 10 at 6+ ast before tonight. Our model's 24 min looks low when GSW's other bigs are out. Bet him on assists/RA, not points. Porzingis's absence is long-term (illness, no end point), so treat Draymond-at-centre as GSW's base setup this season. karma: Horford and Bassey are listed at centre and may start, but in big games (close games, closing lineups, Cup and playoff-type nights) it is still Draymond at the 5. Expect more Draymond minutes and assists on those nights. karma, 8 Nov: 'did the RA part as usual': 6r 13a = RA 19 vs the 11.5 lean (34 min, 2 pts). RA is his bet, not points.",
     "source": "karma (watching live), 6 Nov AEDT",
     "added": "2026-11-06",
-    "review": "2026-12-15 (Porzingis out long-term: karma 'out forever'; the Dunker Spot says no end point in sight)"
+    "review": "2026-12-15 (Porzingis out long-term: karma 'out forever'; the Dunker Spot says no end point in sight)",
+    "updated": "2026-11-08",
+    "bet_as": "RA"
   },
   "Davion Mitchell": {
     "tags": [],
@@ -297,5 +308,11 @@
       "shooter"
     ],
     "updated": "2026-11-08"
+  },
+  "Alperen Sengun": {
+    "note": "karma, 8 Nov: was a bit sick; his shots only started falling late (makes by quarter: Q1 1, Q2 0, Q3 2, Q4 6; 5-16 FG, 26 PRA in 32 min, benched for Q2 with 0 fouls). Check illness news before his overs.",
+    "tags": [],
+    "updated": "2026-11-08",
+    "source": "karma"
   }
 }
