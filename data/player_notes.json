@@ -1,5 +1,5 @@
 {
-  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting. 'rebounds_suppressed_with_giannis': fade this player's rebound overs when Giannis plays. 'low_mistake_trusted': the coach trusts him and his minutes are steady, but his output moves between stats, so prefer combo props. 'big_game_closer': plays more and is on the floor at the end of close or big games. Team tag 'trapping_defense' (karma, 8 Nov): good defences come in two styles. TRAPPING (DET, TOR, CLE lately, OKC historically) forces turnovers by pressuring the playmaker; CONTAINING (SAS, current OKC) contests and stays home and forces few. Only trapping moves playmakers' TOV/AST props.",
+  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting. 'rebounds_suppressed_with_giannis': fade this player's rebound overs when Giannis plays. 'low_mistake_trusted': the coach trusts him and his minutes are steady, but his output moves between stats, so prefer combo props. 'big_game_closer': plays more and is on the floor at the end of close or big games. Team tag 'trapping_defense' (karma, 8 Nov): good defences come in two styles. TRAPPING (DET, TOR, CLE lately, OKC historically) forces turnovers by pressuring the playmaker; CONTAINING (SAS, current OKC) contests and stays home and forces few. Only trapping moves playmakers' TOV/AST props. Tag 'rim_assists' (karma, 8 Nov): about half or more of his assists are dunks/layups, so his assist props depend less on teammates' shooting than a kick-out passer's.",
   "Baylor Scheierman": {
     "tags": [
       "blowout_or_not",
@@ -366,6 +366,20 @@
       "passive"
     ],
     "note": "karma, 8 Nov: dislikes his passiveness; can disappear (13 PRA, 7 pts in 35 min vs MIN on 6 Nov). Avoid him as a 'safe' multi leg.",
+    "added": "2026-11-08"
+  },
+  "Cade Cunningham": {
+    "tags": [
+      "rim_assists"
+    ],
+    "note": "karma, 8 Nov: good at rim assists. Measured (ESPN PBP, 8 games 2026-27): 48% of his assists at the rim, 33% threes, 20% mid. Without Duren he still gets 2-6 rim assists/night via Paul Reed (15) and John Collins (11); top target overall Duncan Robinson (20). Assist props less dependent on teammates' shooting.",
+    "added": "2026-11-08"
+  },
+  "Darius Garland": {
+    "tags": [
+      "rim_assists"
+    ],
+    "note": "karma, 8 Nov: good at rim assists. Measured (ESPN PBP, 8 games 2026-27): 47% of assists at the rim, 36% threes. Top targets Isaiah Jackson 12, Derrick Jones Jr. 10, Brook Lopez 10; a little weaker when Isaiah Jackson is out.",
     "added": "2026-11-08"
   }
 }
