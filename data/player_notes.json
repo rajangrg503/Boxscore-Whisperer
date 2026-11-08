@@ -220,7 +220,7 @@
     "2026-11-06 MVP stars": "karma, 7 Nov AEDT: the MVP race has begun, so Wembanyama (at SAC), Luka (v POR) and Tatum (at CHA) will try to push their scoring. Observation to check after the game (their points vs their season average), NOT a betting instruction.",
     "2026-11-06 OKC@MEM": "karma, 7 Nov AEDT: OKC will try to take Ty Jerome out of the game; his line depends on how well they do it. Observation to check after the game (Jerome's points/usage vs norm, and whether Spencer/Coward got the shots instead), NOT a betting instruction. | karma also expects OKC to WIN; our projection has MEM 124-113 (market had OKC by 3.5). If OKC wins: deep post-mortem of why the model missed (absence penalty for Holmgren/J. Williams/Wallace/Topic, OKC turnover pressure, SGA usage, Memphis home/role changes).",
     "2026-11-08 PHI@CHI": "karma (8 Nov eve): Chicago will play hard to avoid a losing streak; Caleb Wilson looked very disappointed in his post-game interview. karma is high on Giddey PRA (26.5): a competitive game keeps him at 30+ min (3/3 over at 30+, 0/5 under 30). Check after: CHI effort/margin, Giddey minutes.",
-    "2026-11-08 LAL@DET": "karma, 8 Nov AEDT: Detroit's trap (Ausar/Cade pressure, helpers jumping lanes) should force Luka into turnovers. OBSERVATION ONLY, no bet (Sportsbet has no TOV props; Dabble had Cade 2+ steals @2.08, ~fair on numbers, karma passed). Check after: Luka TOV (last 9 avg 4.9), DET forced TOV (17.1/g), Cade and Ausar steals. If it holds over several games, apply to other turnover-prone stars vs trapping teams (karma: Donovan Mitchell, LaMelo Ball)."
+    "2026-11-08 LAL@DET": "karma, 8 Nov AEDT: Detroit's trap (Ausar/Cade pressure, helpers jumping lanes) should force Luka into turnovers. OBSERVATION ONLY, no bet (Sportsbet has no TOV props; Dabble had Cade 2+ steals @2.08, ~fair on numbers, karma passed). Check after: Luka TOV (last 9 avg 4.9), DET forced TOV (17.1/g), Cade and Ausar steals. If it holds over several games, apply to other turnover-prone stars vs trapping teams (karma: Donovan Mitchell, LaMelo Ball). Also Reaves (karma): struggling vs good POA defenders; check his FG and TOV vs DET."
   },
   "Darius Acuff Jr.": {
     "tags": [
@@ -349,5 +349,12 @@
     "tags": [],
     "updated": "2026-11-08",
     "source": "karma"
+  },
+  "Austin Reaves": {
+    "tags": [
+      "struggles_vs_poa"
+    ],
+    "note": "karma, 8 Nov: struggles recently against good point-of-attack defenders. Measured: vs LAC (Dunn, 28 Oct, Luka out) 16 pts on 6/16, 8 TOV; @GSW (30 Oct) 8 TOV; vs TOR (1 Nov, trapping) 6/16; vs POR (6 Nov) 8/22, 1/8 3PT. vs softer guard defence: MIA 10/15, UTA 7/12, POR (27 Oct) 8/13. Be wary of his scoring overs and assist overs vs trapping/POA defences (DET, TOR, LAC, GSW).",
+    "added": "2026-11-08"
   }
 }
