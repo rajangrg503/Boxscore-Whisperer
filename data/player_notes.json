@@ -37,10 +37,11 @@
       "usage_up",
       "volatile"
     ],
-    "note": "Rookie with a big and growing usage: post-ups, one-on-one, playmaking out of drives. First rookie with multiple 6+ three games in his first 7. The hosts expect up-and-down nights (quiet vs PHX and the night before LAC).",
-    "review": "2026-11-20",
+    "note": "Rookie with a big and growing usage: post-ups, one-on-one, playmaking out of drives. First rookie with multiple 6+ three games in his first 7. The hosts expect up-and-down nights (quiet vs PHX and the night before LAC). [The Dunker Spot, 7 Nov 2026] ~21 pts, 7.1 reb, 4.1 ast; 70% in the restricted area, 54% on catch-and-shoot threes. Kerr keeps him on the floor even in foul trouble and uses him when Steph/Draymond sit.",
+    "review": "2026-11-22",
     "added": "2026-11-06",
-    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma",
+    "updated": "2026-11-08"
   },
   "Brandin Podziemski": {
     "tags": [],
@@ -228,13 +229,15 @@
   },
   "Darius Acuff Jr.": {
     "tags": [
-      "checks_out_in_blowouts"
+      "checks_out_in_blowouts",
+      "usage_up",
+      "volatile"
     ],
-    "note": "karma, 7 Nov AEDT (from watching him): when the Kings are losing by a big margin, Acuff checks out -- stands in the corner, his rebounds are accidental rather than chased. Avoid his overs (especially REB/PRA) when SAC is a big underdog / blowout risk. Evidence 7 Nov (SAS@SAC, SAC down 15+ from Q2): kept shooting (11 pts on 11 FGA while down 15+; 22p 8a total in 33 min) but only 2 reb in that stretch. In blowouts his rebounding drops, his shot volume doesn't: points OK, rebounds no.",
+    "note": "karma, 7 Nov AEDT (from watching him): when the Kings are losing by a big margin, Acuff checks out -- stands in the corner, his rebounds are accidental rather than chased. Avoid his overs (especially REB/PRA) when SAC is a big underdog / blowout risk. Evidence 7 Nov (SAS@SAC, SAC down 15+ from Q2): kept shooting (11 pts on 11 FGA while down 15+; 22p 8a total in 33 min) but only 2 reb in that stretch. In blowouts his rebounding drops, his shot volume doesn't: points OK, rebounds no. [The Dunker Spot, 7 Nov 2026] 88.5 touches/g (3rd in NBA behind Jokic and Haliburton), 3rd in drives, 2nd in FGA, ~9.8 3PA; 25.6 pts and 7 ast. Defences now send extra attention (deep drop, doubles from LAL). Volume is locked in by role; efficiency swings. Flag: rookie-wall/stamina risk by January.",
     "source": "karma",
     "added": "2026-11-07",
-    "review": "2026-12-07",
-    "updated": "2026-11-07"
+    "review": "2026-11-22",
+    "updated": "2026-11-08"
   },
   "Tyrese Maxey": {
     "tags": [
@@ -382,5 +385,37 @@
     ],
     "note": "karma, 8 Nov: good at rim assists. Measured (ESPN PBP, 8 games 2026-27): 47% of assists at the rim, 36% threes. Top targets Isaiah Jackson 12, Derrick Jones Jr. 10, Brook Lopez 10; a little weaker when Isaiah Jackson is out.",
     "added": "2026-11-08"
+  },
+  "Cam Boozer": {
+    "tags": [
+      "usage_up"
+    ],
+    "note": "MEM rookie, plays the 4 and the 5. ~16.5 pts, 9.8 reb, 5.4 ast; strong post-up passer (1.13 PPP on post-ups incl. passes), screens and seals well, but finishing inside is still poor (36% on twos). Combo props (PRA/RA) fit better than points.",
+    "source": "The Dunker Spot, 7 Nov 2026",
+    "added": "2026-11-08",
+    "review": "2026-11-22"
+  },
+  "AJ Dybantsa": {
+    "tags": [],
+    "note": "WAS rookie: ~16.5 pts on 53% twos, only ~3 threes a game, sits between Trae Young and Anthony Davis so not asked to carry usage; gets to his spots at will, some passing on drives.",
+    "source": "The Dunker Spot, 7 Nov 2026",
+    "added": "2026-11-08",
+    "review": "2026-11-22"
+  },
+  "Caleb Wilson": {
+    "tags": [
+      "usage_up"
+    ],
+    "note": "Bulls' half-court offence lacks a creator, so Wilson gets the ball to create far more than expected (karma's 'geometry' read). Transition is where he's best (~49% conversion vs 38% half court; 68% at the rim, under 33% elsewhere), so fast, scrappy games suit him. ~1.9 OREB, 1.9 stl, 1.1 blk; jumper-heavy diet in the half court.",
+    "source": "The Dunker Spot, 7 Nov 2026",
+    "added": "2026-11-08",
+    "review": "2026-11-22"
+  },
+  "Kingston Flemings": {
+    "tags": [],
+    "note": "ATL rookie guard: ~8 pts, 4.5 ast, 47% from three; trusted decision-maker, defends bigger players. Low-usage role.",
+    "source": "The Dunker Spot, 7 Nov 2026",
+    "added": "2026-11-08",
+    "review": "2026-11-22"
   }
 }
