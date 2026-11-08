@@ -111,6 +111,13 @@
         "elite_defense",
         "needs_stretch_big_to_beat"
       ]
+    },
+    "CHI": {
+      "note": "karma, 8 Nov: Chicago try to win by outscoring opponents (offence over defence), and have for ~2 years. team_defense.py (8 Nov): CHI defence worst in the league (+6.7 pts/100), offence +3.2, pace 106.7 (2nd fastest). High-possession games: good for counting-stat overs on both sides (Giddey PRA).",
+      "tags": [
+        "bad_defense",
+        "run_and_gun"
+      ]
     }
   },
   "Bam Adebayo": {
