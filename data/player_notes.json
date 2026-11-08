@@ -311,7 +311,7 @@
     ]
   },
   "Isaiah Hartenstein": {
-    "note": "karma, 7 Nov: dominates the boards when he plays real minutes (14.7 reb/36). His 2026-27 duds are explained: the 3-reb opener at SAS was foul trouble with Chet and Aday Mara there to take his minutes, and the 7 at HOU was a blowout loss. Every other game since has been 12+. Rebound props hinge on minutes (~25 cap), not on matchup. karma: a master rebounder who reads angles and is very intentional, and always chases offensive boards because OKC isn't a good shooting team. Measured 2026-27: 27 of his 81 rebounds offensive (33%), 3.4 OREB a game in ~25 min. 7 Nov result: 6 reb (5 in Q1), 0 OREB, 7 ast in 26 min as OKC shot 55%/46%. His boards need OKC misses: on hot-shooting/blowout nights prefer AST or PRA. karma, 8 Nov: vs MEM (6 reb) the problem was guards crashing the boards on BOTH sides (MEM: Coward 9 reb, 3 OREB, team 13 OREB; OKC: Caruso 6, McCain 5, Terry 4 in 5 min). vs WAS (8 Nov) with Mara beside him in the double-big start: 13 reb in 16 min. So the double big does NOT cap his boards; guard-crashing opponents (and OKC's own guards crashing) do. Check the opponent's guard rebounding (opp_allows REB guard row) before his REB props.",
+    "note": "karma, 7 Nov: dominates the boards when he plays real minutes (14.7 reb/36). His 2026-27 duds are explained: the 3-reb opener at SAS was foul trouble with Chet and Aday Mara there to take his minutes, and the 7 at HOU was a blowout loss. Every other game since has been 12+. Rebound props hinge on minutes (~25 cap), not on matchup. karma: a master rebounder who reads angles and is very intentional, and always chases offensive boards because OKC isn't a good shooting team. Measured 2026-27: 27 of his 81 rebounds offensive (33%), 3.4 OREB a game in ~25 min. 7 Nov result: 6 reb (5 in Q1), 0 OREB, 7 ast in 26 min as OKC shot 55%/46%. His boards need OKC misses: on hot-shooting/blowout nights prefer AST or PRA. karma, 8 Nov: vs MEM (6 reb) the problem was guards crashing the boards on BOTH sides (MEM: Coward 9 reb, 3 OREB, team 13 OREB; OKC: Caruso 6, McCain 5, Terry 4 in 5 min). vs WAS (8 Nov) with Mara beside him in the double-big start: 13 reb in 16 min. So the double big does NOT cap his boards; guard-crashing opponents (and OKC's own guards crashing) do. Check the opponent's guard rebounding (opp_allows REB guard row) before his REB props. WATCH (karma, 8 Nov): Hart AST. Recent hub role pushed his assists up (2026-27 by game, newest first: 6,7,4,4,0,3,3,1,2,3), so books will price it high now. When the line drops back (~2.5-3.5), look for the OVER in the right spot. Measured 2025-26: 3.3 ast in 24 min, 4+ in 21/62; vs top-10 block teams 3.6 (4+ in 10/26) vs bottom-10 2.9; Chet out 4.4 (n=5). Right spot = hub role (Chet out or double-big with Mara) and a rim-protecting opponent that pulls him to the elbow.",
     "source": "karma",
     "added": "2026-11-07",
     "tags": [
@@ -319,7 +319,8 @@
       "minutes_driven",
       "motor",
       "needs_team_misses",
-      "offensive_glass"
+      "offensive_glass",
+      "watch_ast_line"
     ],
     "updated": "2026-11-07"
   },
