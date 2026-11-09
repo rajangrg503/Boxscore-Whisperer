@@ -81,3 +81,16 @@ def test_same_day_ruling_stands_over_props():
                           "severity": "out", "updated": "2026-11-03T21:12Z"}]}
     av.reconcile_with_props([game], {"MIL@BOS": {av.norm("Jayson Tatum"), av.norm("Payton Pritchard")}})
     assert [r["name"] for r in game["out"]] == ["Jayson Tatum"]
+
+
+def test_stale_snapshot_cannot_overrule_out(tmp_path):
+    """10 Nov: the 9:42 rebuild read the 9:20 snapshot, which still priced Reaves."""
+    day = tmp_path / "2026-11-09"
+    day.mkdir()
+    snap = day / "092022.json"
+    snap.write_text(json.dumps({"events": [{"game": "LAL@ATL", "rows": [{"player": "Austin Reaves"}]}]}))
+    os.utime(snap, (1_000_000, 1_000_000))
+    now = 1_000_000 + 22 * 60
+    assert av.props_by_game("2026-11-09", str(tmp_path), max_age_min=15, now=now) == {}
+    assert av.props_by_game("2026-11-09", str(tmp_path), max_age_min=30, now=now) == {
+        "LAL@ATL": {av.norm("Austin Reaves")}}

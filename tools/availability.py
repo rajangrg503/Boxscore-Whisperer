@@ -216,9 +216,16 @@ def roster_injuries(team_id, abbr, index, season):
     return rows
 
 
-def props_by_game(us_date, lines_dir):
+def props_by_game(us_date, lines_dir, max_age_min=None, now=None):
     """{game "AWY@HOM": set of folded player names} with a Sportsbet prop
-    in the latest snapshot saved for that US date, or {} if none."""
+    in the latest snapshot saved for that US date, or {} if none.
+
+    With `max_age_min`, a latest snapshot saved longer ago than that
+    returns {} too: an old snapshot can't say a player is still priced.
+    10 Nov 2026: Reaves was ruled out that morning; the slate was rebuilt
+    at 9:42 while the 9:41 lines pull was still saving, so it read the
+    9:20 snapshot (Reaves priced) and projected him for 36 minutes. A
+    props override needs a fresh positive signal."""
     import glob as _glob
     day_dir = os.path.join(lines_dir, str(us_date))
     # By save time, not filename: names are HHMMSS, so a morning snapshot
@@ -230,6 +237,11 @@ def props_by_game(us_date, lines_dir):
                    key=lambda p: (os.path.getmtime(p), p))
     if not snaps:
         return {}
+    if max_age_min is not None:
+        import time as _time
+        age = ((now if now is not None else _time.time()) - os.path.getmtime(snaps[-1])) / 60
+        if age > max_age_min:
+            return {}
     try:
         payload = json.load(open(snaps[-1]))
     except (OSError, ValueError):

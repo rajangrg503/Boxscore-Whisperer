@@ -1011,6 +1011,11 @@ def load_slate(day):
         return None
 
 
+# A Sportsbet snapshot older than this can't overrule ESPN's "out"
+# (availability.props_by_game). Pull lines, then rebuild the slate.
+PROPS_FRESH_MIN = 15
+
+
 def build_slate(day, area):
     """Who's playing (ESPN, from this Mac) and every game's box score
     projected from it (tools/box_score.py), saved before tip so the
@@ -1027,7 +1032,8 @@ def build_slate(day, area):
             area.info("No games on that US date.")
             return None
         av.reconcile_with_props(games, av.props_by_game(day.isoformat(),
-                                                        os.path.join(JOURNAL_DIR, "lines")))
+                                                        os.path.join(JOURNAL_DIR, "lines"),
+                                                        max_age_min=PROPS_FRESH_MIN))
         slate = bs.project_slate({"games": games})
         for g in slate["games"]:
             g["stale"] = {}
