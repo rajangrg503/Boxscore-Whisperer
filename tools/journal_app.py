@@ -1020,8 +1020,10 @@ def build_slate(day, area):
     """Who's playing (ESPN, from this Mac) and every game's box score
     projected from it (tools/box_score.py), saved before tip so the
     numbers can be scored against the night once it's written."""
+    import importlib
     import availability as av
     import box_score as bs
+    av = importlib.reload(av)   # a running Journal keeps the old module otherwise
     with area.status("Reading the games and the injury report from ESPN…", expanded=False):
         try:
             games = av.collect(day.strftime("%Y%m%d"))
