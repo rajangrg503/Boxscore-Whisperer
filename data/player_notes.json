@@ -123,7 +123,7 @@
       ]
     },
     "DET": {
-      "note": "karma, 8 Nov: trapping defence: pressure the handler, make him pass in distress, help defenders jump the lanes. Forces 17.1 TOV/g (4th, league 15.1). Ausar Thompson/Kris Dunn-type point-of-attack pressure. Lean to opposing playmakers' TURNOVER overs; be wary of their assist overs. karma, 8 Nov: the trap does NOT work on SGA. vs DET: 48 pts on 17/26, 2 TOV (15 Mar 2025, Ausar 21 min); 47 on 12/19, 21/25 FT, 4 TOV, Ausar FOULED OUT (6 PF, 26 min) (30 Mar 2026); 33 pts, 1 TOV (2 Apr 2025). Elite, low-turnover handlers punish the pressure with free throws and Ausar foul trouble; it only bites turnover-prone handlers (Luka, Reaves, LeBron).",
+      "note": "karma, 8 Nov: trapping defence: pressure the handler, make him pass in distress, help defenders jump the lanes. Forces 17.1 TOV/g (4th, league 15.1). Ausar Thompson/Kris Dunn-type point-of-attack pressure. Lean to opposing playmakers' TURNOVER overs; be wary of their assist overs. karma, 8 Nov: the trap does NOT work on SGA. vs DET: 48 pts on 17/26, 2 TOV (15 Mar 2025, Ausar 21 min); 47 on 12/19, 21/25 FT, 4 TOV, Ausar FOULED OUT (6 PF, 26 min) (30 Mar 2026); 33 pts, 1 TOV (2 Apr 2025). Elite, low-turnover handlers punish the pressure with free throws and Ausar foul trouble; it only bites turnover-prone handlers (Luka, Reaves, LeBron). UPDATE 9 Nov (LAL@DET, Luka out): DET did NOT trap Reaves early; they played him one-on-one with light help (karma, watching). Reaves 43 pts, 11/11 FT, 1 TOV in 37 min; DET trapped him only late, after 30+. Read: the trap is for the opponent's star; a stand-in creator (star out) gets single coverage, so his usage bump goes straight into points. Don't apply trapping_defense to a stand-in lead handler.",
       "tags": [
         "trapping_defense"
       ],
@@ -228,8 +228,8 @@
     "2026-11-06 POR@LAL": "karma, 6 Nov AEDT: expects lots of free throws between Luka Doncic, Deni Avdija and Austin Reaves. An observation to check after the game (their free-throw attempts vs their usual), NOT a betting instruction: do not pick or favour bets because of it.",
     "2026-11-06 MVP stars": "karma, 7 Nov AEDT: the MVP race has begun, so Wembanyama (at SAC), Luka (v POR) and Tatum (at CHA) will try to push their scoring. Observation to check after the game (their points vs their season average), NOT a betting instruction.",
     "2026-11-06 OKC@MEM": "karma, 7 Nov AEDT: OKC will try to take Ty Jerome out of the game; his line depends on how well they do it. Observation to check after the game (Jerome's points/usage vs norm, and whether Spencer/Coward got the shots instead), NOT a betting instruction. | karma also expects OKC to WIN; our projection has MEM 124-113 (market had OKC by 3.5). If OKC wins: deep post-mortem of why the model missed (absence penalty for Holmgren/J. Williams/Wallace/Topic, OKC turnover pressure, SGA usage, Memphis home/role changes).",
-    "2026-11-08 PHI@CHI": "karma (8 Nov eve): Chicago will play hard to avoid a losing streak; Caleb Wilson looked very disappointed in his post-game interview. karma is high on Giddey PRA (26.5): a competitive game keeps him at 30+ min (3/3 over at 30+, 0/5 under 30). Check after: CHI effort/margin, Giddey minutes.",
-    "2026-11-08 LAL@DET": "karma, 8 Nov AEDT: Detroit's trap (Ausar/Cade pressure, helpers jumping lanes) should force Luka into turnovers. OBSERVATION ONLY, no bet (Sportsbet has no TOV props; Dabble had Cade 2+ steals @2.08, ~fair on numbers, karma passed). Check after: Luka TOV (last 9 avg 4.9), DET forced TOV (17.1/g), Cade and Ausar steals. If it holds over several games, apply to other turnover-prone stars vs trapping teams (karma: Donovan Mitchell, LaMelo Ball). Also Reaves (karma): struggling vs good POA defenders; check his FG and TOV vs DET. Also watch Ausar's fouls: SGA fouled him out on 30 Mar 2026 (47 pts, 21/25 FT); Luka draws fouls too. UPDATE 9 Nov: Luka OUT. karma: Reaves's lines are always too high (snapshots 1-6 Nov: PRA under 3/4, AST under 4/4, REB under 4/4). Without Luka vs top-10 defences/trapping teams in 2025-26 he averaged 23-24 pts, ~5 TOV, 8 FTA (foul drawer); line 25.5. No bet on the under (FTs cushion it; rule on short-handed stars). Watch his FG%, TOV and FTA. karma bet Sexton PRA o15.5 and Grimes PTS o11.5 ($2 each). NOTE: the box-score card's Reaves 31 was a scaling artefact (Luka's points spread onto teammates).",
+    "2026-11-08 PHI@CHI": "karma (8 Nov eve): Chicago will play hard to avoid a losing streak; Caleb Wilson looked very disappointed in his post-game interview. karma is high on Giddey PRA (26.5): a competitive game keeps him at 30+ min (3/3 over at 30+, 0/5 under 30). Check after: CHI effort/margin, Giddey minutes. RESULT: PHI 127-121 (close game). Giddey 34 min, 19/7/15 = 41 PRA: karma's read right. karma: PHI had no rim protection or deterrence on his drives; 'that should apply to players like Giddey too' -> downhill_playmaker test. Jalen Smith 8 reb, 30 min on 5 fouls. LeBron 5 ast (one short of 6; Brown missed an open layup off his pass).",
+    "2026-11-08 LAL@DET": "karma, 8 Nov AEDT: Detroit's trap (Ausar/Cade pressure, helpers jumping lanes) should force Luka into turnovers. OBSERVATION ONLY, no bet (Sportsbet has no TOV props; Dabble had Cade 2+ steals @2.08, ~fair on numbers, karma passed). Check after: Luka TOV (last 9 avg 4.9), DET forced TOV (17.1/g), Cade and Ausar steals. If it holds over several games, apply to other turnover-prone stars vs trapping teams (karma: Donovan Mitchell, LaMelo Ball). Also Reaves (karma): struggling vs good POA defenders; check his FG and TOV vs DET. Also watch Ausar's fouls: SGA fouled him out on 30 Mar 2026 (47 pts, 21/25 FT); Luka draws fouls too. UPDATE 9 Nov: Luka OUT. karma: Reaves's lines are always too high (snapshots 1-6 Nov: PRA under 3/4, AST under 4/4, REB under 4/4). Without Luka vs top-10 defences/trapping teams in 2025-26 he averaged 23-24 pts, ~5 TOV, 8 FTA (foul drawer); line 25.5. No bet on the under (FTs cushion it; rule on short-handed stars). Watch his FG%, TOV and FTA. karma bet Sexton PRA o15.5 and Grimes PTS o11.5 ($2 each). NOTE: the box-score card's Reaves 31 was a scaling artefact (Luka's points spread onto teammates). RESULT: LAL 121-116. Reaves 43 (11/11 FT, 1 TOV): DET played him one-on-one with light help and trapped only late (karma), so the trap read did not apply to a stand-in. Sexton 21 PRA, Grimes 12 (started): both won and both beat the close. DET forced TOV: Lakers had 14. Cade 8 ast, 4 TO. Ausar 4 PF (no foul-out). Jenkins 31 (8-15 3PT) and Huerter 24 took the guard-three opening, not Duncan Robinson (12, 3-11, 5 PF).",
     "2026-11-10/11 OKC@POR x2": "karma, 8 Nov: OKC play at POR twice (Wed 11 Nov 3:00 PM and Thu 12 Nov 2:00 PM AEDT). POR commit 16.3 TOV/g (6th most) and 22.4 PF; OKC commit 12.0 (fewest) and foul least (18.8); POR take 42.4 3PA (5th). POR fan view after the SAS loss: frustration turns into turnovers and silly fouls. Check: OKC TOV margin, Shai vs POR bench, Hart AST with Clingan as rim protector (watch_ast_line), Hart REB vs long rebounds. Game 2: adjust from game 1. Observation only."
   },
   "Darius Acuff Jr.": {
@@ -371,8 +371,9 @@
     "tags": [
       "struggles_vs_poa"
     ],
-    "note": "karma, 8 Nov: struggles recently against good point-of-attack defenders. Measured: vs LAC (Dunn, 28 Oct, Luka out) 16 pts on 6/16, 8 TOV; @GSW (30 Oct) 8 TOV; vs TOR (1 Nov, trapping) 6/16; vs POR (6 Nov) 8/22, 1/8 3PT. vs softer guard defence: MIA 10/15, UTA 7/12, POR (27 Oct) 8/13. Be wary of his scoring overs and assist overs vs trapping/POA defences (DET, TOR, LAC, GSW).",
-    "added": "2026-11-08"
+    "note": "karma, 8 Nov: struggles recently against good point-of-attack defenders. Measured: vs LAC (Dunn, 28 Oct, Luka out) 16 pts on 6/16, 8 TOV; @GSW (30 Oct) 8 TOV; vs TOR (1 Nov, trapping) 6/16; vs POR (6 Nov) 8/22, 1/8 3PT. vs softer guard defence: MIA 10/15, UTA 7/12, POR (27 Oct) 8/13. Be wary of his scoring overs and assist overs vs trapping/POA defences (DET, TOR, LAC, GSW). UPDATE 9 Nov: as the lead handler with Luka out, @DET: 43 pts, 4/6 3PT, 11/11 FT, 1 TOV, 37 min. DET guarded him one-on-one with light help until late (karma). struggles_vs_poa came from games as the second option facing help; it did not hold as first option vs single coverage. Review this tag after his next 2-3 games vs trapping/POA teams.",
+    "added": "2026-11-08",
+    "review": "2026-11-20"
   },
   "Dejounte Murray": {
     "tags": [
@@ -449,5 +450,36 @@
     "source": "ThreeCone (YouTube), 8 Nov 2026",
     "added": "2026-11-08",
     "review": "2026-11-22"
+  },
+  "Ziaire Williams": {
+    "tags": [
+      "transition_defender"
+    ],
+    "note": "karma, 9 Nov (LAL@DET, watching): he doesn't crash the boards; on a miss he sprints back for transition defence. His minutes come from defence (karma: 'they give him minutes for defense'), so more minutes do NOT mean more rebounds. 9 Nov: 17 pts, 2 reb in 21 min off the bench (Luka out). karma: 'only pts for him'. No REB or PR legs; points only.",
+    "bet_as": "PTS",
+    "source": "karma (watching live), 9 Nov AEDT",
+    "added": "2026-11-09",
+    "review": "2026-11-30"
+  },
+  "Josh Giddey": {
+    "tags": [
+      "downhill_playmaker_candidate"
+    ],
+    "note": "karma, 9 Nov: ceiling spot when he is CHI's main creator in a fast game vs a team with no rim protection or deterrence on his drives. 9 Nov vs PHI (Embiid immobile, no backup rim protector): 19 pts, 7 reb, 15 ast = 41 PRA in 34 min (line 26.5). Earlier (karma, 8 Nov): 3/3 over 26.5 at 30+ min, 0/5 under 30, so minutes come first. To test: his PRA vs weak vs strong rim-protecting teams (with Cade, LaMelo, Shai) before this becomes a downhill_playmaker tag.",
+    "bet_as": "PRA",
+    "source": "karma (watching live), 9 Nov AEDT",
+    "added": "2026-11-09"
+  },
+  "Precious Achiuwa": {
+    "tags": [
+      "starter_while_out"
+    ],
+    "note": "SAC backup big. Started in Sabonis's spot on 9 Nov (Sabonis out, knee): 14 reb (5 off.), 7 pts in 35 min vs MIA. We missed it: the pre-tip check held the Sabonis straight but never named the backup big. When Sabonis is out, look at his REB/PR line.",
+    "depends_on_out": [
+      "Domantas Sabonis"
+    ],
+    "review": "when Domantas Sabonis returns",
+    "added": "2026-11-09",
+    "source": "ESPN box score 9 Nov; karma"
   }
 }
