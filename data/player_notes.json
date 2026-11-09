@@ -152,7 +152,7 @@
       "added": "2026-11-08"
     },
     "BKN": {
-      "note": "karma, 9 Nov: from now on, no bets on the teams PLAYING BKN (their opponents' player props), because those games turn into blowouts and the opponents' starters sit (9 Nov: DAL beat BKN 130-93, P.J. Washington PRA 11 in 25 min; BOS beat MIL 117-97, Tatum RA 10 in 29 min, Jaquez PR 6 in 23 min). Applies to straights, multi legs and ceiling legs. Props on BKN's own players are not covered by this rule.",
+      "note": "karma, 9 Nov: from now on, no bets on the teams PLAYING BKN (their opponents' player props), because those games turn into blowouts and the opponents' starters sit (9 Nov: DAL beat BKN 130-93, P.J. Washington PRA 11 in 25 min; BOS beat MIL 117-97, Tatum RA 10 in 29 min, Jaquez PR 6 in 23 min). Applies to straights, multi legs and ceiling legs. Props on BKN's own players are not covered by this rule. EXCEPTION (karma, 9 Nov): the rule does not apply when both teams are bad (the opponent is also a bottom-8 team by record), because those games stay competitive.",
       "tags": [
         "no_bets_on_opponents"
       ],
@@ -160,7 +160,7 @@
       "source": "karma, 9 Nov AEDT"
     },
     "MIL": {
-      "note": "karma, 9 Nov: from now on, no bets on the teams PLAYING MIL (their opponents' player props), because those games turn into blowouts and the opponents' starters sit (9 Nov: DAL beat BKN 130-93, P.J. Washington PRA 11 in 25 min; BOS beat MIL 117-97, Tatum RA 10 in 29 min, Jaquez PR 6 in 23 min). Applies to straights, multi legs and ceiling legs. Props on MIL's own players are not covered by this rule.",
+      "note": "karma, 9 Nov: from now on, no bets on the teams PLAYING MIL (their opponents' player props), because those games turn into blowouts and the opponents' starters sit (9 Nov: DAL beat BKN 130-93, P.J. Washington PRA 11 in 25 min; BOS beat MIL 117-97, Tatum RA 10 in 29 min, Jaquez PR 6 in 23 min). Applies to straights, multi legs and ceiling legs. Props on MIL's own players are not covered by this rule. EXCEPTION (karma, 9 Nov): the rule does not apply when both teams are bad (the opponent is also a bottom-8 team by record), because those games stay competitive.",
       "tags": [
         "no_bets_on_opponents"
       ],
@@ -497,5 +497,14 @@
     "review": "when Domantas Sabonis returns",
     "added": "2026-11-09",
     "source": "ESPN box score 9 Nov; karma"
+  },
+  "Brayden Burries": {
+    "tags": [
+      "blowout_or_not"
+    ],
+    "note": "karma, 9 Nov AEDT (morning): liked Burries PR in BOS@MIL, a rookie-heavy MIL where he plays big minutes; we dropped it because the model was weak on him. He started, 29 min, 13p 8r 4a = PR 21 (line 16.5), PRA 25 (line 18.5), even in a 20-point home loss. His minutes held in the blowout. Lesson: on a rookie-heavy losing team, the young starters keep their minutes in blowouts, so the model's weak number undersold him.",
+    "added": "2026-11-09",
+    "updated": "2026-11-09",
+    "source": "karma, 9 Nov AEDT"
   }
 }
