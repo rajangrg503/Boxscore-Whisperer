@@ -150,6 +150,22 @@
     "POR": {
       "note": "[ThreeCone (YouTube), 8 Nov 2026] Missing Ja Morant; lost to SAS 116-85 with 39% FG, 25% 3PT, 15 TOV.",
       "added": "2026-11-08"
+    },
+    "BKN": {
+      "note": "karma, 9 Nov: from now on, no bets on the teams PLAYING BKN (their opponents' player props), because those games turn into blowouts and the opponents' starters sit (9 Nov: DAL beat BKN 130-93, P.J. Washington PRA 11 in 25 min; BOS beat MIL 117-97, Tatum RA 10 in 29 min, Jaquez PR 6 in 23 min). Applies to straights, multi legs and ceiling legs. Props on BKN's own players are not covered by this rule.",
+      "tags": [
+        "no_bets_on_opponents"
+      ],
+      "added": "2026-11-09",
+      "source": "karma, 9 Nov AEDT"
+    },
+    "MIL": {
+      "note": "karma, 9 Nov: from now on, no bets on the teams PLAYING MIL (their opponents' player props), because those games turn into blowouts and the opponents' starters sit (9 Nov: DAL beat BKN 130-93, P.J. Washington PRA 11 in 25 min; BOS beat MIL 117-97, Tatum RA 10 in 29 min, Jaquez PR 6 in 23 min). Applies to straights, multi legs and ceiling legs. Props on MIL's own players are not covered by this rule.",
+      "tags": [
+        "no_bets_on_opponents"
+      ],
+      "added": "2026-11-09",
+      "source": "karma, 9 Nov AEDT"
     }
   },
   "Bam Adebayo": {
