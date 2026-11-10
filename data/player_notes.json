@@ -173,8 +173,10 @@
       "source": "karma, 9 Nov AEDT"
     },
     "HOU": {
-      "note": "ALL NBA 9 Nov: Sengun is a pick-and-roll target on defence (LaMelo, Booker toasted him): up at the level they get to the rim, in drop they get midrange. Rockets turning it over more (transition defence issues) and cooled from three in back-to-back losses. Tari Eason can't shoot (8/30 C&S 3); Eason + Amen lineups 106.5 ORtg. -> Opposing lead guards' scoring vs HOU.",
-      "tags": [],
+      "note": "ALL NBA 9 Nov: Sengun is a pick-and-roll target on defence (LaMelo, Booker toasted him): up at the level they get to the rim, in drop they get midrange. Rockets turning it over more (transition defence issues) and cooled from three in back-to-back losses. Tari Eason can't shoot (8/30 C&S 3); Eason + Amen lineups 106.5 ORtg. -> Opposing lead guards' scoring vs HOU. | karma 10 Nov: HOU guards' assist edges are weak: self-creators (Durant, Sengun, Amen, Eason) don't need setting up; with the bigs out Durant became the hub (8 ast). Avoid HOU guard AST/PA overs.",
+      "tags": [
+        "self_creators"
+      ],
       "updated": "2026-11-10"
     },
     "LAL": {
@@ -555,5 +557,16 @@
     "note": "DEN bench forward: 7'4 wingspan, layered help-side rim protection, top-5 in blocked jump shots (ALL NBA 9 Nov). Raises DEN's rim protection when he plays: a small check on opposing drivers vs DEN.",
     "updated": "2026-11-10",
     "source": "ALL NBA Podcast (Adam Mares & Jason Timpf), 9 Nov 2026 — shared by karma"
+  },
+  "Fred VanVleet": {
+    "note": "karma 10 Nov: HOU are full of self-creators (Durant isos, Sengun post-ups, Amen drives, Eason putbacks), so VanVleet mostly initiates and spaces; his assists stay low even with a good matchup. 9 Nov vs DEN (Capela/Adams/Tshiebwe out): biggest-edge PA o16.5 lost at 14 (2 ast) while Durant had 8 ast. Contrast Nembhard (IND shooters/cutters need setting up): 12 ast.",
+    "tags": [
+      "playmaking_shared_with_self_creators"
+    ],
+    "bet_as": "avoid AST/PA overs",
+    "source": "karma, 10 Nov 2026",
+    "added": "2026-11-10",
+    "updated": "2026-11-10",
+    "review": "2026-11-24"
   }
 }
