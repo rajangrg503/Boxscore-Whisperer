@@ -73,12 +73,14 @@
   },
   "Jeremiah Fears": {
     "tags": [
-      "usage_up"
+      "usage_up",
+      "needs_star_spacing"
     ],
-    "note": "Year-two strides, especially during NOP's win streak: reads pick-and-roll and changes speed. Does more with a NOP guard out. Herb Jones is back in the starting lineup.",
-    "review": "2026-11-20",
+    "note": "Year-two strides, especially during NOP's win streak: reads pick-and-roll and changes speed. Does more with a NOP guard out. Herb Jones is back in the starting lineup. | karma 10 Nov: Fears needs Zion or Murphy on the floor. With BOTH out (9 Nov @GSW) defences loaded up on him: 5 TO, PR 14 at Q3 in a 37-pt loss vs PR o20.5. With them playing he attacks closeouts (25 and 36 PRA the two games before). Avoid his overs when both are out; a guard being out still helps him.",
+    "review": "2026-11-24",
     "added": "2026-11-06",
-    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma"
+    "source": "The Dunker Spot podcast (Yahoo Sports, Nekias Duncan & Steve Jones), 4 Nov 2026 -- shared by karma; karma read 10 Nov",
+    "updated": "2026-11-10"
   },
   "Naji Marshall": {
     "tags": [],
