@@ -1,5 +1,5 @@
 {
-  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting. 'rebounds_suppressed_with_giannis': fade this player's rebound overs when Giannis plays. 'low_mistake_trusted': the coach trusts him and his minutes are steady, but his output moves between stats, so prefer combo props. 'big_game_closer': plays more and is on the floor at the end of close or big games. Team tag 'trapping_defense' (karma, 8 Nov): good defences come in two styles. TRAPPING (DET, TOR, CLE lately, OKC historically) forces turnovers by pressuring the playmaker; CONTAINING (SAS, current OKC) contests and stays home and forces few. Only trapping moves playmakers' TOV/AST props. Tag 'rim_assists' (karma, 8 Nov): about half or more of his assists are dunks/layups, so his assist props depend less on teammates' shooting than a kick-out passer's.",
+  "_about": "karma's reads on players that the numbers can't see. Kept by hand. 'motor': high-intensity player whose output rises with his minutes; never take an under on him when a starter at his position is out. 'small_ball_5': plays centre in small lineups, so there is rebound upside when the bigs sit. 'primary_guard_defender': guards the opponent's main ball-handler, so his minutes hold up whatever happens to his shooting. 'rebounds_suppressed_with_giannis': fade this player's rebound overs when Giannis plays. 'low_mistake_trusted': the coach trusts him and his minutes are steady, but his output moves between stats, so prefer combo props. 'big_game_closer': plays more and is on the floor at the end of close or big games. Team tag 'trapping_defense' (karma, 8 Nov): good defences come in two styles. TRAPPING (DET, TOR, CLE lately, OKC historically) forces turnovers by pressuring the playmaker; CONTAINING (SAS, current OKC) contests and stays home and forces few. Only trapping moves playmakers' TOV/AST props. Tag 'rim_assists' (karma, 8 Nov): about half or more of his assists are dunks/layups, so his assist props depend less on teammates' shooting than a kick-out passer's. Tag 'low_effort' (karma, 12 Nov): a disengaged, quiet-quitting or lazy player (\"we dont want those type of players including lazy ones\"): no overs on him at all -- straights, multis or ceiling legs -- until karma clears the tag.",
   "Baylor Scheierman": {
     "tags": [
       "blowout_or_not",
@@ -580,5 +580,14 @@
     "review": "when Keyonte George returns",
     "added": "2026-11-10",
     "source": "karma, 10 Nov 2026"
+  },
+  "Domantas Sabonis": {
+    "tags": [
+      "low_effort"
+    ],
+    "note": "karma, 12 Nov AEDT: avoid ALL his overs (especially points and combos) until he plays normally again. Evidence US 10 Nov vs ORL: 0 pts, 2 reb, 5 ast in 24 min (listed Q, knee) -- our PRA o32.5 straight lost by 25; the ORL-bigs AST edge still showed (5 ast). Report (light read, not measured): Kevin O'Connor via @Fullcourtpass, 12 Nov 2026 -- Sabonis is 'quiet quitting' in Sacramento and does not want to be there.",
+    "source": "karma",
+    "added": "2026-11-12",
+    "review": "2026-11-26"
   }
 }
