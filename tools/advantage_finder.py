@@ -87,8 +87,21 @@ def load(season):
 
 _KIND = {}
 
+# Hand corrections where the body-type archetype puts a player in the wrong
+# matchup group (karma, 12 Nov 2026). Body type still decides everyone else:
+# a play-style classifier (rebounds/assists per 36) backtested worse
+# (strong+moderate ROI +3.0% vs +10.1%, 28 Oct-10 Nov), and these three
+# overrides were neutral (+10.5%). Add a player only with a reason.
+ROLE_OVERRIDES = {
+    201142: "wing",    # Kevin Durant: archetype "big"; plays the wing
+    1642273: "wing",   # Kyshawn George: archetype "guard"; 6'8" wing ("IND isn't a hard matchup for him")
+    1641710: "guard",  # Anthony Black: archetype "wing"; starts at point guard for ORL
+}
+
 
 def kind(pid):
+    if pid in ROLE_OVERRIDES:
+        return ROLE_OVERRIDES[pid]
     if pid not in _KIND:
         try:
             from engine import archetype as _arch

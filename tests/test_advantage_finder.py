@@ -28,3 +28,9 @@ def test_summary_counts_ceiling_games():
 def test_context_is_neutral_without_history():
     af.TG = []
     assert af.context("BBB", "REB", dt.date(2026, 11, 9)) == 1.0
+
+
+def test_role_overrides_win_over_archetype():
+    for pid, role in af.ROLE_OVERRIDES.items():
+        assert af.kind(pid) == role
+    assert set(af.ROLE_OVERRIDES.values()) <= {"guard", "wing", "big"}
