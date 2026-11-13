@@ -15,9 +15,10 @@ beat the close shows up in weeks.
 
 WHAT IS SAVED
 journal/lines/<US date>/<HHMMSS>.json, one file per snapshot, with every
-player over/under market (line and both prices) and every "To Record N+"
+player over/under market (line and both prices) and every threshold
 market (price per player) in the points, rebounds, assists, threes and
-combo groupings. journal/ data is gitignored: bookmaker lines never go
+combo groupings. Sportsbet names the threshold markets three ways:
+"To Record 8+ Rebounds", "To Score 20+ Points" and "2+ Made Threes". journal/ data is gitignored: bookmaker lines never go
 into the repository or the public app.
 
 WHERE IT RUNS
@@ -53,7 +54,11 @@ TIMEOUT = 20
 NEW_YORK = ZoneInfo("America/New_York")
 SYDNEY = ZoneInfo("Australia/Sydney")
 LINES_DIR = os.path.join(dj.JOURNAL_DIR, "lines")
-_ALT = re.compile(r"^to record (\d{1,3})\+\s*(.+)$", re.I)
+# "To Record 8+ Rebounds", "To Score 20+ Points", "2+ Made Threes". Until
+# 13 Nov 2026 only the first form matched, so no points or threes rung was
+# ever saved and the alternate-line backtest could not cover them. Anchored
+# at the start so "1st Quarter - To Record 2+ Made Threes" stays out.
+_ALT = re.compile(r"^(?:to (?:record|score)\s+)?(\d{1,3})\+\s*(.+)$", re.I)
 
 
 class Unreachable(RuntimeError):

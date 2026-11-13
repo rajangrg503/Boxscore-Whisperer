@@ -75,3 +75,33 @@ def test_clv_uses_the_last_pre_tip_snapshot(tmp_path, monkeypatch):
     assert ls.clv(over, close)["line"] == 1.0
     under = dict(over, side="under")
     assert ls.clv(under, close)["line"] == -1.0
+
+
+def test_points_and_threes_thresholds_are_saved(tmp_path, monkeypatch):
+    """Sportsbet names these "To Score 20+ Points" and "2+ Made Threes", not
+    "To Record ...". They were silently dropped until 13 Nov 2026."""
+    comp = {"events": [{"id": 1, "name": "Boston Celtics At Orlando Magic",
+                        "startTime": int(START.timestamp())}]}
+    markets = {
+        567: [{"name": "To Score 20+ Points", "selections": [
+                  {"name": "Jayson Tatum", "price": {"winPrice": 1.28}}]},
+              {"name": "1st Quarter - To Score 6+ Points", "selections": [
+                  {"name": "Jayson Tatum", "price": {"winPrice": 1.31}}]}],
+        710: [{"name": "3+ Made Threes", "selections": [
+                  {"name": "Jayson Tatum", "price": {"winPrice": 2.0}}]},
+              {"name": "1st Quarter - To Record 2+ Made Threes", "selections": [
+                  {"name": "Jayson Tatum", "price": {"winPrice": 4.0}}]}],
+        568: [{"name": "To Record 8+ Rebounds", "selections": [
+                  {"name": "Jayson Tatum", "price": {"winPrice": 1.5}}]}],
+    }
+
+    def get(path):
+        if path.startswith("Competitions/"):
+            return comp
+        g = int(path.split("MarketGroupings/")[1].split("/")[0])
+        return markets.get(g, [])
+    monkeypatch.setattr(ls, "_get", get)
+    ls.snapshot(now=START - datetime.timedelta(hours=5), out_dir=str(tmp_path))
+    rows = ls._snapshots("2026-11-01", str(tmp_path))[0]["events"][0]["rows"]
+    alts = {(r["stat"], r["threshold"], r["price"]) for r in rows if r["kind"] == "alt"}
+    assert alts == {("PTS", 20, 1.28), ("FG3M", 3, 2.0), ("REB", 8, 1.5)}
