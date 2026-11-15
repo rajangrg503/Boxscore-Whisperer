@@ -87,13 +87,17 @@ def leg_clv(leg, placed, snaps):
     tip = start_of(snaps, leg.get("game"))
     before_bet = [d for t, d in snaps if placed and t <= placed]
     before_tip = [d for t, d in snaps if tip and t < tip]
-    if not before_bet or not before_tip:
+    # No snapshot before the bet (the line job only saves games near tip):
+    # fall back to the price logged on the leg, which is the price taken.
+    if not before_tip or (not before_bet and not leg.get("price")):
         return None
     op, oline = None, None
     for d in reversed(before_bet):
         op, oline = price_in(d, leg)
         if op:
             break
+    if not op and leg.get("price"):
+        op = float(leg["price"])  # line move needs a snapshot; price CLV does not
     cp, cline = None, None
     for d in reversed(before_tip):
         cp, cline = price_in(d, leg)

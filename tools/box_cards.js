@@ -1,0 +1,20 @@
+// Browser half of tools/box_cards.py: Chrome can't open journal/cards/*.html
+// from the Mac (file:// is blocked for the extension) and X only takes
+// uploads from screenshots, so the cards are drawn in an example.com tab.
+// Install once:  localStorage.boxcards = <this file's text>
+// Each night:    eval(localStorage.boxcards); boxCards(<python3 tools/box_cards.py DATE --json>);
+//                then scrollToSection(i) and screenshot each viewport.
+function boxCards(games){
+  const CSS=`*{box-sizing:border-box}html,body{margin:0;background:#0b0f14;font-family:Inter,Helvetica,Arial,sans-serif}section{height:100vh;display:flex;gap:4px;padding:4px}.card{flex:1;height:100%;background:linear-gradient(180deg,#111827,#0b0f14);border:1px solid #1f2937;border-radius:14px;padding:12px 18px;color:#e5e7eb;display:flex;flex-direction:column;overflow:hidden}.top{font-size:13px;letter-spacing:2px;color:#22c55e;font-weight:700}.mt{font-size:30px;font-weight:800;margin:2px 0 4px}.mt span{color:#6b7280;font-weight:600}.mt .tip{font-size:13px;margin-left:10px;color:#9ca3af}.team{margin-top:8px}.th{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #374151;padding-bottom:2px}.ab{font-size:21px;font-weight:800}.sc{font-size:30px;font-weight:800}.win{color:#22c55e}table{width:100%;border-collapse:collapse;font-size:16px}td{padding:2.6px 4px;text-align:right;color:#d1d5db}td.n{text-align:left;color:#f3f4f6}td.b{font-weight:700;color:#fff}tr.hd td{font-size:11.5px;color:#6b7280;letter-spacing:1px}.ou{font-size:13px;color:#9ca3af;margin-top:3px}.ou b{color:#d1d5db}.flag{color:#f59e0b}.ft{margin-top:auto;font-size:11px;color:#6b7280;border-top:1px solid #1f2937;padding-top:5px}`, FOOT=`<div class=ft>Score: team ratings (no injury adjustment). Players: our player model.<br>@BoxscoreWhisper · Not betting advice. 18+</div>`, esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const team=(c,t)=>{const d=c.teams[t], sc=t===c.away?c.score[0]:c.score[1], win=sc===Math.max(...c.score)&&c.score[0]!==c.score[1];
+    const rows=d.rows.map(r=>`<tr><td class=n>${esc(r[0])}</td><td>${r[1]}</td><td class=b>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td></tr>`).join('');
+    let notes='<b>Out:</b> '+(esc(d.out.join(', '))||'none'); if(d.questionable.length) notes+=' &nbsp;·&nbsp; <b>Questionable:</b> '+esc(d.questionable.join(', ')); if(d.capped) notes+=' &nbsp;·&nbsp; <span class=flag>minutes capped by the model</span>';
+    return `<div class=team><div class=th><span class=ab>${t}</span><span class='sc${win?' win':''}'>${sc}</span></div><table><tr class=hd><td class=n>PLAYER</td><td>MIN</td><td>PTS</td><td>REB</td><td>AST</td></tr>${rows}</table><div class=ou>${notes}</div></div>`};
+  const card=c=>`<div class=card><div class=top>OUR MODEL'S MOST LIKELY BOX SCORE</div><div class=mt>${c.away} <span>@</span> ${c.home} <span class=tip>${c.day} · ${c.tip} AEDT</span></div>${team(c,c.away)}${team(c,c.home)}${FOOT}</div>`;
+  const late=[].concat(...games.map(c=>[...c.teams[c.away].questionable,...c.teams[c.home].questionable]));
+  const summary=()=>`<div class=card><div class=top>${games[0].day.toUpperCase()} · SLATE SUMMARY</div><div class=mt>${games.length} games</div><table><tr class=hd><td class=n>GAME</td><td>TIP (AEDT)</td><td>OUR SCORE</td></tr>${games.map(c=>`<tr><td class=n>${c.away} @ ${c.home}</td><td>${c.tip}</td><td class=b>${c.score[0]}–${c.score[1]}</td></tr>`).join('')}</table>${late.length?`<div class=ou style='font-size:13px;margin-top:12px'><b>Late calls:</b> ${esc(late.join(' · '))}</div>`:''}${FOOT}</div>`;
+  let s=''; for(let i=0;i<games.length;i+=2){ s+=`<section id=s${i/2}>${card(games[i])}${games[i+1]?card(games[i+1]):summary()}</section>`;}
+  document.open(); document.write(`<!doctype html><html><head><meta charset=utf-8><style>${CSS}</style></head><body>${s}</body></html>`); document.close();
+  return Math.ceil(games.length/2);
+}
+function scrollToSection(i){ document.getElementById('s'+i).scrollIntoView(); return innerHeight; }
