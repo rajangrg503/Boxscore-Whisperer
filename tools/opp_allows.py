@@ -86,13 +86,54 @@ def allows(opp, stat, min_min=20.0, season="2026-27", L=None):
     return {k: {"ratio": st.mean(x[0] for x in v), "n": len(v)} for k, v in by.items()}
 
 
+def allows_all(stat, min_min=20.0, season="2026-27", L=None):
+    """One pass over the logs: {opp: {kind: (ratio, n)}} for every team."""
+    L = L or logs(season)
+    cols = COLS[stat]
+    by = defaultdict(lambda: defaultdict(list))
+    for pid, rows in L.items():
+        mins = sum(nf(r["MIN"]) for r in rows)
+        if mins < 60:
+            continue
+        rate = sum(sum(nf(r.get(c)) for c in cols) for r in rows) / mins
+        if rate <= 0:
+            continue
+        k = kind(pid)
+        for r in rows:
+            if nf(r["MIN"]) < min_min:
+                continue
+            opp = str(r.get("MATCHUP", "")).split()[-1]
+            by[opp][k].append(sum(nf(r.get(c)) for c in cols) / (rate * nf(r["MIN"])))
+    return {o: {k: (st.mean(v), len(v)) for k, v in d.items()} for o, d in by.items()}
+
+
+def rank_table(stat, min_min=20.0, season="2026-27"):
+    """Rank 1 = allows the MOST vs that archetype's norm (best matchup)."""
+    res = allows_all(stat, min_min, season)
+    kinds = sorted({k for d in res.values() for k in d})
+    table = {}
+    for k in kinds:
+        teams = sorted(((o, d[k][0], d[k][1]) for o, d in res.items() if k in d), key=lambda x: -x[1])
+        for i, (o, ratio, n) in enumerate(teams, 1):
+            table.setdefault(o, {})[k] = (i, ratio, n, len(teams))
+    return table
+
+
 def main():
     ap = argparse.ArgumentParser(description="What does OPP allow to guards/wings/bigs, against their own norms?")
     ap.add_argument("opp")
     ap.add_argument("stat", choices=sorted(COLS))
     ap.add_argument("--min", type=float, default=20.0, help="minimum minutes for a game to count")
+    ap.add_argument("--rank", action="store_true",
+                    help="also show the league rank 1-30 per archetype (1 = gives up the most)")
     a = ap.parse_args()
-    res = allows(ALIAS.get(a.opp.upper(), a.opp.upper()), a.stat, a.min)
+    opp = ALIAS.get(a.opp.upper(), a.opp.upper())
+    if a.rank:
+        table = rank_table(a.stat, a.min).get(opp, {})
+        for k, (rank, ratio, n, of) in sorted(table.items()):
+            print(f"{k:6s} {ratio:.2f}x their norm  rank {rank}/{of} (1 = gives up most)  (n={n} player games)")
+        return
+    res = allows(opp, a.stat, a.min)
     for k, v in sorted(res.items()):
         print(f"{k:6s} {v['ratio']:.2f}x their norm  (n={v['n']} player games)")
 

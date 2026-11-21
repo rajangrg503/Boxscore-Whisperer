@@ -475,6 +475,18 @@ def check_leg(leg, out_names=None):
             out["flags"].append(text[0].upper() + text[1:] + ".")
             t_mults = {}
     out["opponent"] = opponent
+    # Display only (karma, 21 Nov 2026): the line's hit rate vs this
+    # opponent, all games and since its last roster change.
+    try:
+        import tools.prop_context as pc
+        if opponent:
+            h = pc.h2h(leg["pid"], opponent, leg["stat"], leg["line"],
+                       "under" if under else "over", day)
+            out["h2h"] = h
+            if h.get("n"):
+                out["notes"].append(pc.h2h_text(h) + f" vs {opponent}.")
+    except Exception:
+        out["h2h"] = None
 
     # Karma's question, asked of every leg: does this player have an
     # advantage in THIS matchup? Shown beside the chance, never folded

@@ -56,6 +56,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.cache import read_payload                      # noqa: E402
 from engine.players import fold_diacritics                 # noqa: E402
 from engine.team_ids import TEAM_ID_BY_ABBR                # noqa: E402
+import tools.prop_context as pc                             # noqa: E402  (display-only H2H)
 
 PRIOR_W = 12.0
 MIN_GAMES_CUR = 4
@@ -171,6 +172,23 @@ def rate(player, stat, line, side):
     return p_cur, p_prev, blend, vc
 
 
+def _h2h_cell(p, game, stat, line, side):
+    """Display only (karma, 21 Nov 2026, from PropFinder): this line's hit
+    rate vs tonight's opponent over the two seasons in the index, plus games
+    since the opponent's last roster change (data/roster_changes.json)."""
+    teams = [t for t in str(game).split("@") if t]
+    if len(teams) != 2 or p.get("team") not in teams:
+        return ""
+    opp = teams[1] if teams[0] == p["team"] else teams[0]
+    since = pc.roster_changes().get(opp, {}).get("since")
+    rows = list(p["cur"]) + list(p["prev"])
+    try:
+        h = pc.h2h_from_rows(rows, opp, stat, line, side.lower(), since)
+    except Exception:
+        return ""
+    return pc.h2h_text(h).replace("H2H ", "") if h.get("n") else "-"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -216,6 +234,7 @@ def main(argv=None):
                 "mpg": p["mpg"], "log": [int(v) for v in vc],
                 "minutes_up": p["scale"] > 1.12,
                 "sim": p["sim"],
+                "h2h": _h2h_cell(p, game, stat, float(line), side),
             })
 
     keep = [r for r in rows
@@ -227,13 +246,13 @@ def main(argv=None):
           f"blend>={args.min_blend:.0%}, both seasons>=50%, mcv<={args.max_mcv}, edge>0\n")
     print(f"{'game':9s}{'player':25s}{'stat':5s}{'side':6s}{'line':>6s}{'$':>6s}"
           f"{'cur':>6s}{'prev':>6s}{'role':>6s}{'blend':>7s}{'edge':>7s}"
-          f"{'mpg':>6s}{'mcv':>6s}  log")
+          f"{'mpg':>6s}{'mcv':>6s}  {'H2H':>8s}  log")
     for r in keep[:args.top]:
         flag = "  ^minutes up vs last season (p_prev optimistic)" if r["minutes_up"] else ""
         print(f"{r['game']:9s}{r['name']:25s}{r['stat']:5s}{r['side']:6s}"
               f"{r['line']:6.1f}{r['price']:6.2f}{r['p_cur']:6.0%}{r['p_prev']:6.0%}"
               f"{r['sim']:6.2f}{r['blend']:7.0%}{r['edge']:+7.1%}"
-              f"{r['mpg']:6.1f}{r['mcv']:6.2f}  {r['log']}{flag}")
+              f"{r['mpg']:6.1f}{r['mcv']:6.2f}  {r['h2h']:>8s}  {r['log']}{flag}")
     if skipped:
         print(f"\nno two-season sample, dropped: {', '.join(sorted(set(skipped)))}")
     return 0

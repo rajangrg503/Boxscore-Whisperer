@@ -1,0 +1,22 @@
+{
+  "_about": "Player-type tags from karma's reads (21 Nov 2026), display only. See the project doc claude/archetype-matchup-idea-2026-11-21.md. 'rim runner' = REB is the bet, PTS volatile; 'bag big' = has his own post/face-up/shooting, PTS is the bet; 'tall skilled big' = 7'+ with a bag, edge vs small or weak-rim bigs; 'physical forward' = edge vs OKC-style small switching defences; 'downhill creator' = young handler/attacker, edge vs OKC. Add tags as karma calls them or the play-by-play tagging backtest confirms them.",
+  "Aday Mara": ["tall skilled big", "bag big", "improving"],
+  "Victor Wembanyama": ["tall skilled big", "bag big"],
+  "Walker Kessler": ["rim runner"],
+  "Moussa Diabaté": ["rim runner"],
+  "Jarrett Allen": ["rim runner"],
+  "Naz Reid": ["bag big"],
+  "Evan Mobley": ["bag big"],
+  "PJ Washington": ["physical forward"],
+  "Zion Williamson": ["physical forward"],
+  "Andrew Wiggins": ["physical forward"],
+  "Jeremiah Fears": ["downhill creator"],
+  "Cedric Coward": ["downhill creator"],
+  "Anthony Black": ["downhill creator"],
+  "Bennett Stirtz": ["improving", "shooter"],
+  "Jared McCain": ["three-level scorer"],
+  "Shai Gilgeous-Alexander": ["active star"],
+  "Luka Doncic": ["active star"],
+  "Jamal Murray": ["can defer"],
+  "Nikola Jokic": ["can defer"]
+}

@@ -1,0 +1,5 @@
+{
+  "_about": "Per-team date from which H2H numbers describe the CURRENT roster (karma 21 Nov 2026: 'team employ players to stop certain type of player'; the app's 'Opponent just made a major roster change' option, brought to the slate tools). H2H is shown twice: all games (last two seasons) and games since this date. Injuries are not roster changes; note them in 'context' only. Add a row when a trade or signing changes who defends whom.",
+  "OKC": {"since": "2026-10-20", "why": "Lu Dort traded/moved to ATL (first ATL game 21 Oct 2026, from his game log).", "context": "On 20 Nov 2026 OKC were also without Jalen Williams, Chet Holmgren, Cason Wallace and Alex Caruso (injuries, not roster changes)."},
+  "ATL": {"since": "2026-10-20", "why": "Lu Dort joined (first ATL game 21 Oct 2026)."}
+}
