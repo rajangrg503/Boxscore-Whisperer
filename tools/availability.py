@@ -328,6 +328,37 @@ def collect(date, index=None):
     return games
 
 
+def merge_official(games, official_rows):
+    """Put the league's own report beside ESPN's (display + gate).
+
+    Each ESPN row gets row["official"] (the NBA report's status, or None if
+    the player isn't on it). Players only the NBA report lists are appended
+    with source="nba_report", so a late scratch ESPN hasn't caught still gates
+    the pick. Teams that haven't filed come back in game["not_submitted"]."""
+    by_team = {}
+    for r in official_rows:
+        by_team.setdefault(r.get("abbr"), []).append(r)
+    for game in games:
+        game["not_submitted"] = []
+        for abbr in (game["away"], game["home"]):
+            rows = by_team.get(abbr, [])
+            if any(r.get("player") is None for r in rows):
+                game["not_submitted"].append(abbr)
+            named = {norm(r["name"]): r for r in rows if r.get("name")}
+            for row in game.get("injuries", []):
+                if row.get("team") == abbr:
+                    hit = named.pop(norm(row["name"]), None)
+                    row["official"] = hit["status"] if hit else None
+            for r in named.values():
+                extra = {"team": abbr, "name": r["name"], "player_id": None, "matched": False,
+                         "status": r["status"], "detail": (r.get("reason") or "")[:40],
+                         "official": r["status"], "source": "nba_report"}
+                extra["severity"] = severity(extra["status"])
+                game.setdefault("injuries", []).append(extra)
+        game["out"] = [r for r in game.get("injuries", []) if r.get("severity") == "out"]
+    return games
+
+
 def mpg(player_id, season):
     """Minutes per game this season -- how much an absence actually costs."""
     payload = read_payload(f"gamelog_{player_id}_{season}")
@@ -355,6 +386,8 @@ def main(argv=None):
     parser.add_argument("--out", default=None, help="write the JSON here")
     parser.add_argument("--check", nargs="+", default=None,
                         help="names to look up; exits 1 if any is out")
+    parser.add_argument("--official", action="store_true",
+                        help="also read the NBA's own injury report PDF (Mac only) and show it beside ESPN")
     parser.add_argument("--min-mpg", type=float, default=15.0,
                         help="flag an absence above this as rotation-changing")
     args = parser.parse_args(argv)
@@ -369,6 +402,18 @@ def main(argv=None):
               f"This is a gate: treat every pick as ungated rather than as clear.",
               file=sys.stderr)
         return 2
+
+    official_src = None
+    if args.official:
+        try:
+            try:
+                from tools.nba_injury_report import fetch_latest
+            except ImportError:
+                from nba_injury_report import fetch_latest
+            official_src, official_rows = fetch_latest()
+            merge_official(games, official_rows)
+        except Exception as exc:  # display extra: ESPN stays the gate
+            print(f"(official NBA report not read: {exc})", file=sys.stderr)
 
     for game in games:
         for row in game["injuries"]:
@@ -408,6 +453,8 @@ def main(argv=None):
         print(f"no games listed for {date}")
         return 0
 
+    if official_src:
+        print(f"official NBA report: {official_src}")
     unmatched = 0
     for game in games:
         print(f"\n=== {game['away']} @ {game['home']} ===")
@@ -422,8 +469,16 @@ def main(argv=None):
                 flag += "   [UNMATCHED to a cached roster]"
                 unmatched += 1
             mins = f"{row['mpg']:.1f} mpg" if row["mpg"] is not None else "   -   "
+            if official_src is not None:
+                off = row.get("official") or "-"
+                if row.get("source") == "nba_report":
+                    flag += "   [NBA report only]"
+                elif off != "-" and off.lower() != (row["status"] or "").lower():
+                    flag += f"   [NBA report: {off}]"
             print(f"   {row['team']:4s} {row['name']:26s} {row['status']:12s} "
                   f"{row['detail'][:18]:18s} {mins}{flag}")
+        if game.get("not_submitted"):
+            print(f"   NBA report not yet submitted: {', '.join(game['not_submitted'])}")
 
     if unmatched:
         print(f"\n{unmatched} name(s) could not be matched to a cached roster. "
