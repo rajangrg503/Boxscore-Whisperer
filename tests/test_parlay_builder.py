@@ -158,3 +158,27 @@ def test_any_number_of_legs_and_play_mode():
     assert len(long9[0][1]) == 9 and len({x["pid"] for x in long9[0][1]}) == 9
     huge = pb.build_big(legs, CAL, SAME, target=5000, top=1)            # needs more legs than there are teams
     assert huge and huge[0][2]["price"] >= 5000
+
+
+def test_alternatives_keep_the_slip_within_the_rules():
+    legs = []
+    for g, (t1, t2) in enumerate([("AAA", "BBB"), ("CCC", "DDD")]):
+        for t in (t1, t2):
+            for k in range(3):
+                pid = 100 * g + 10 * (t == t2) + k
+                for stat, th, price in (("PTS", 20, 2.4), ("REB", 8, 2.8), ("PRA", 30, 2.2)):
+                    legs.append(leg(f"P{g}{t}{k}", stat, th, price, game=f"{t1}@{t2}", team=t, pid=pid,
+                                    hr_season=0.5 + 0.01 * k, n_season=12, hr_l8=0.5))
+    pb._annotate(legs, CAL)
+    find = lambda name, stat: next(x for x in legs if x["player"] == name and x["stat"] == stat)  # noqa: E731
+    slip = [find("P0AAA0", "PTS"), find("P1CCC0", "PTS")]
+    alts = pb.alternatives(legs, slip, 0, lo=2.0, hi=3.6)
+    assert alts and all(x["pid"] != slip[1]["pid"] and x["team"] != "CCC" for x in alts)       # not the other leg's team
+    assert all(x["stat"] in pb.SINGLE for x in alts)                                           # no combos by the rules
+    assert alts[0]["game"] == "AAA@BBB" and slip[0] not in alts                                # his game first
+    assert any(x["pid"] == slip[0]["pid"] and x["stat"] == "REB" for x in alts)                # his other rung is offered
+    assert any(x["stat"] == "PRA" for x in pb.alternatives(legs, slip, 0, lo=2.0, hi=3.6, loose=True))
+    sgm = [find("P0AAA0", "PTS"), find("P0AAA1", "PTS"), find("P0BBB0", "PTS"), find("P0BBB1", "PTS")]
+    same = pb.alternatives(legs, sgm, 0, purpose="sgm", lo=1.25, hi=3.6, same_game=True)
+    assert same and all(x["game"] == "AAA@BBB" for x in same)
+    assert all(x["team"] == "AAA" for x in same)                # BBB already has two of four: a third would break the cap

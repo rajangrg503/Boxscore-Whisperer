@@ -132,11 +132,48 @@ def render_slip(legs, e, key=None):
         st.toast("Loaded into Check a slip")
 
 
-def render_ranked(ranked, prefix):
+def swap_label(x):
+    return (f"{pb.leg_label(x)}  @{x['price']:.2f}  ·  {x['game']}  ·  season {pct(x.get('hr_season'))}, "
+            f"last 8 {pct(x.get('hr_l8'))}")
+
+
+def render_ranked(ranked, prefix, all_legs=None, rules=None, stake="cash", bet_return=False):
+    """Built slips, each with a 'Swap a leg' box: pick a leg, pick its replacement, and the slip is re-priced.
+    rules = what a replacement must satisfy (the tab's price band and leg rules)."""
     if not ranked:
         st.info("Nothing passes the rules on this night.")
+    by_key = {leg_key(x): x for x in (all_legs or [])}
     for i, (_, legs, e) in enumerate(ranked):
-        render_slip(legs, e, key=f"{prefix}{i}")
+        slot = f"{prefix}{i}"
+        original = [leg_key(x) for x in legs]
+        state = st.session_state.get(f"pb_swap_{slot}")
+        if not state or state["original"] != original or any(k not in by_key for k in state["now"]):
+            state = {"original": original, "now": list(original)}       # a fresh build: forget old swaps
+        slip = [by_key.get(k, x) for k, x in zip(state["now"], legs)] if by_key else legs
+        swapped = state["now"] != original
+        if swapped:
+            e = pb.evaluate(slip, cal=source_cal(), same=pb.load_same(), stake=stake, bet_return=bet_return)
+        render_slip(slip, e, key=slot)
+        if not by_key or rules is None:
+            continue
+        with st.expander("Swap a leg" + ("  (changed from the built slip)" if swapped else "")):
+            pick = st.selectbox("Leg to replace", [None] + list(range(len(slip))), key=f"pb_swapleg_{slot}",
+                                format_func=lambda j, slip=slip: "Choose a leg…" if j is None else pb.leg_label(slip[j]))
+            if pick is not None:
+                options = pb.alternatives(all_legs, slip, pick, **rules)
+                if not options:
+                    st.caption("No other leg fits the rules here. Tick **Loosen the rules** for more.")
+                else:
+                    choice = st.selectbox("Replace it with", [None] + options, key=f"pb_swapto_{slot}_{pick}",
+                                          format_func=lambda x: "Choose a replacement…" if x is None else swap_label(x))
+                    if choice is not None:
+                        state["now"][pick] = leg_key(choice)
+                        st.session_state[f"pb_swap_{slot}"] = state
+                        del st.session_state[f"pb_swapleg_{slot}"]
+                        st.rerun()
+            if swapped and st.button("Undo swaps", key=f"pb_undo_{slot}"):
+                st.session_state.pop(f"pb_swap_{slot}", None)
+                st.rerun()
 
 
 # ------------------------------------------------------------------ page
@@ -247,7 +284,7 @@ with check_tab:
 with ladder_tab:
     st.caption("Singles near 2.00 (and two-game pairs when they beat a single, which is rare). Every single in this "
                "band costs about the same, so they're ordered by the player's own record at the line.")
-    render_ranked(built(date, stamp, fitted, "ladder"), "lad")
+    render_ranked(built(date, stamp, fitted, "ladder"), "lad", legs, dict(purpose="single", lo=1.9, hi=2.15))
 
 PLAY_HELP = ("For playing around, not for betting: any stat (combos and threes too), any player averaging 20+ "
              "minutes, and no limit on legs from one team.")
@@ -268,7 +305,8 @@ with long_tab:
                "With more legs than games, each game takes two or more.")
     ranked = built(date, stamp, fitted, "longshot", n_legs=n_long, bonus=long_bonus, bet_return=long_return, loose=long_loose)
     shown_legs(ranked, n_long)
-    render_ranked(ranked, "lon")
+    render_ranked(ranked, "lon", legs, dict(purpose="multi", lo=2.0, hi=3.6, loose=long_loose),
+                  stake="bonus" if long_bonus else "cash", bet_return=long_return)
 
 with sgm_tab:
     a, b, c, d = st.columns([1.2, 1.4, 1, 1.4])
@@ -280,15 +318,16 @@ with sgm_tab:
                "work against each other). The price shown is an estimate, 0.96 × the product of the legs.")
     ranked = built(date, stamp, fitted, "sgm", n_legs=n_sgm, game=sgm_game, bet_return=sgm_return, loose=sgm_loose)
     shown_legs(ranked, n_sgm)
-    render_ranked(ranked, "sgm")
+    render_ranked(ranked, "sgm", legs, dict(purpose="sgm", lo=1.1 if sgm_loose else 1.25, hi=6.0 if sgm_loose else 3.6,
+                                           loose=sgm_loose, same_game=True), bet_return=sgm_return)
 
 with big_tab:
     target = st.select_slider("Target price", [50, 100, 250, 500, 1000, 2500, 5000, 10000, 50000, 100000, 1000000],
                               value=500, format_func=lambda v: f"{v:,}")
     st.caption("The cheapest route to a big price: the legs that give up least per unit of odds, one per team. "
                "It is still a lottery ticket.")
-    render_ranked(built(date, stamp, fitted, "big", target=float(target)), "big")
+    render_ranked(built(date, stamp, fitted, "big", target=float(target)), "big", legs, dict(purpose="multi", lo=1.8, hi=3.6))
 
 with bonus_tab:
     st.caption("The slips that turn $1 of bonus bet into the most cash on average.")
-    render_ranked(built(date, stamp, fitted, "bonus"), "bon")
+    render_ranked(built(date, stamp, fitted, "bonus"), "bon", legs, dict(purpose="multi", lo=2.0, hi=6.0), stake="bonus")

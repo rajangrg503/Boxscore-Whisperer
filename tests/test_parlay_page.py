@@ -122,3 +122,19 @@ def test_feed_round_trips(tmp_path, monkeypatch):
     assert night["has_slate"] and len(night["legs"]) == len(legs)
     assert "ev" not in night["legs"][0] and night["legs"][0]["price"] == legs[0]["price"]
     assert feed["cal"]["tables"] == fake.CAL["tables"]
+
+
+def test_swap_a_leg_reprices_the_slip_and_can_be_undone(page):
+    at = page.run()
+    before = at.dataframe[0].value["Leg"].tolist()
+    box = next(s for s in at.selectbox if s.key == "pb_swapleg_lad0")
+    box.select(0).run()
+    to = next(s for s in at.selectbox if s.key == "pb_swapto_lad0_0")
+    assert len(to.options) > 1
+    to.select_index(1).run()
+    assert not at.exception
+    after = at.dataframe[0].value["Leg"].tolist()
+    assert after != before
+    assert any("changed from the built slip" in e.label for e in at.expander)
+    next(b for b in at.button if b.key == "pb_undo_lad0").click().run()
+    assert at.dataframe[0].value["Leg"].tolist() == before

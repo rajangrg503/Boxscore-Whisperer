@@ -651,6 +651,44 @@ def build_sgm(legs, cal, same, game, n_legs=4, lo=1.25, hi=3.6, top=5, bet_retur
     return _rank(slips[:600], cal, same, top, bet_return=bet_return)
 
 
+def alternatives(legs, slip, index, purpose="multi", lo=2.0, hi=3.6, loose=False, same_game=False, limit=15):
+    """Other legs that could replace slip[index] and keep the slip within the rules: a different player from
+    the rest of the slip (other rungs of the same player are offered too), the same price band, and --
+    unless loose -- a team the rest of the slip isn't already using (same-game multis: no team over half).
+    same_game keeps the replacement in that leg's game. Best own-record first, at most two rungs a player."""
+    out_leg = slip[index]
+    rest = [x for i, x in enumerate(slip) if i != index]
+    rest_pids = {x["pid"] for x in rest}
+    rest_teams = collections.Counter(x["team"] or x["pid"] for x in rest)
+    pool = []
+    for x in legs:
+        if x["pid"] in rest_pids or not eligible(x, "play" if loose else purpose) or not lo <= x["price"] <= hi:
+            continue
+        if not loose and x["stat"] not in SINGLE:
+            continue
+        if same_game and x["game"] != out_leg["game"]:
+            continue
+        if (x["game"], x["player"], x["stat"], x["kind"], x["th"]) == (
+                out_leg["game"], out_leg["player"], out_leg["stat"], out_leg["kind"], out_leg["th"]):
+            continue
+        team = x["team"] or x["pid"]
+        if not loose:
+            if same_game and rest_teams[team] + 1 > math.ceil(len(slip) / 2):
+                continue
+            if not same_game and rest_teams[team]:
+                continue
+        pool.append(x)
+    pool.sort(key=lambda x: (x["game"] != out_leg["game"], -context(x)))      # his game first, then the others
+    out, per_player = [], collections.Counter()
+    for x in pool:
+        if per_player[x["pid"]] < 2:
+            per_player[x["pid"]] += 1
+            out.append(x)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def build_big(legs, cal, same, target=500.0, top=3):
     """Cheapest route to a big price: the legs that give up least per unit of odds, different players,
     one per team -- then two, then three per team if the target needs more legs than there are teams."""
