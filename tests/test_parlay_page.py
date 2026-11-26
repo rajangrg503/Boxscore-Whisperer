@@ -48,7 +48,7 @@ def page(monkeypatch, tmp_path):
     import game_read as gr
     monkeypatch.setattr(gr, "read_night", lambda date, legs=None, game=None: {"AAA@BBB": {"shape": ["AAA run"], "players": [], "picks": [
         dict(kind="upside", player="P0AAA0", pid=0, team="AAA", stat="PTS", rung=20, share=0.3, mult=1.2, expected=17.5,
-             why=["v BBB he has run at 1.30x his usual rate over 6 games"], dtd=False, price=2.0),
+             why=["v BBB he has run at 1.30x his usual rate over 6 games"], dtd=False, price=2.0, season="5 of 12", v_opp="3 of 6"),
         dict(kind="safe", player="P0AAA1", pid=1, team="AAA", stat="REB", rung=6, share=0.85, mult=1.0, expected=7.9,
              why=[], dtd=False, price=None)]}})
     return AppTest.from_file(PAGE, default_timeout=60)
@@ -170,4 +170,5 @@ def test_game_read_tab_shows_our_picks_with_the_price_last(page):
     table = next(d.value for d in at.dataframe if "Pick" in d.value.columns)
     assert table["Pick"].tolist() == ["P0AAA0 20+ points"] and table["Read"].tolist() == ["x1.20"]
     assert list(table.columns)[-1] == "Sportsbet" and table["Sportsbet"].tolist() == ["2.00"]
+    assert table["This season"].tolist() == ["5 of 12"] and table["v them"].tolist() == ["3 of 6"]
     assert any("no price involved" in c.value for c in at.caption)

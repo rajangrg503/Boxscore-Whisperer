@@ -31,7 +31,7 @@ def test_read_moves_the_expectation_by_history_and_names_why(his_games):
     assert plain["stats"]["PTS"]["mult"] == 1.0 and plain["stats"]["PTS"]["why"] == []
     assert v_bbb["stats"]["PTS"]["mult"] > 1.05 and "v BBB" in v_bbb["stats"]["PTS"]["why"][0]
     assert v_bbb["stats"]["PTS"]["expected"] > plain["stats"]["PTS"]["expected"]
-    assert v_bbb["stats"]["PTS"]["upside"] > plain["stats"]["PTS"]["upside"]                      # 30+ against 25+
+    assert v_bbb["stats"]["PTS"]["upside"] >= plain["stats"]["PTS"]["upside"]                     # never a lower rung
     assert plain["stats"]["PTS"]["safe"] == 20 and plain["stats"]["PTS"]["safe_share"] >= 0.8     # "20+ points"
 
 
@@ -41,7 +41,31 @@ def test_more_minutes_and_what_the_opponent_allows_lift_the_line(his_games):
     assert more["expected"] > base["expected"]
     allows = {"REB": {"CCC": {"big": (1.30, 40)}}}
     soft = gr.player_read(1, "A One", "AAA", "CCC", DAY, allows=allows, kind=lambda pid: "big")["stats"]["REB"]
-    assert soft["mult"] == pytest.approx(1.12) and "CCC allow bigs 1.30x" in soft["why"][0]     # capped
+    assert soft["mult"] == pytest.approx(1.15) and "CCC allow bigs 1.30x" in soft["why"][0]     # half of what they allow
+
+
+def test_the_two_opponent_views_are_averaged_not_stacked_and_thin_history_counts_for_little(his_games):
+    alone = gr.player_read(1, "A One", "AAA", "BBB", DAY)["stats"]["PTS"]
+    assert alone["mult"] == pytest.approx(1 + (1.26 - 1) * 4 / 12, abs=0.01)                   # 4 games: a third of the way
+    allows = {"PTS": {"BBB": {"guard": (1.30, 40)}}}
+    both = gr.player_read(1, "A One", "AAA", "BBB", DAY, allows=allows, kind=lambda pid: "guard")["stats"]["PTS"]
+    assert len(both["why"]) == 2
+    assert both["mult"] == pytest.approx(1 + ((alone["mult"] - 1) + 0.15) / 2, abs=0.005)     # the mean of the two
+    assert both["mult"] < alone["mult"] * 1.15                                                # never the product
+    threes = gr.player_read(1, "A One", "AAA", "BBB", DAY, allows={"FG3M": {"BBB": {"guard": (1.9, 40)}}},
+                            kind=lambda pid: "guard")["stats"]["FG3M"]
+    assert threes["mult"] == pytest.approx(1.12)                                              # threes capped lower
+
+
+def pts_minutes(_):
+    return gr.player_read(1, "A One", "AAA", "BBB", DAY)["usual_minutes"]
+
+
+def test_each_pick_carries_what_he_actually_did(his_games):
+    pts = gr.player_read(1, "A One", "AAA", "BBB", DAY)["stats"]["PTS"]
+    assert pts["safe_record"] == {"season": "14 of 16", "v_opp": "4 of 4"}                     # 20+ points, untouched by the read
+    more = gr.player_read(1, "A One", "AAA", "BBB", DAY, minutes=pts_minutes(his_games) + 6)["stats"]["PTS"]
+    assert " min" in more["safe_record"]["v_opp"] or " min" in more["upside_record"]["v_opp"]   # a bigger role tonight is flagged
 
 
 def test_too_few_games_gives_no_read(monkeypatch):

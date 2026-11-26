@@ -286,7 +286,8 @@ STAT_WORD = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "thre
 def read_table(picks):
     st.dataframe(
         [{"Pick": f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]}" + ("  (day-to-day)" if k.get("dtd") else ""),
-          "Read": f"x{k['mult']:.2f}", "Expects": k["expected"], "Clears it": pct(k["share"]),
+          "Read": f"x{k['mult']:.2f}", "Expects": k["expected"], "Read says": pct(k["share"]),
+          "This season": k.get("season", "--"), "v them": k.get("v_opp", "--"),
           "Why": "  ·  ".join(k["why"]) or "his season, no adjustment",
           "Sportsbet": (f"{k['price']:.2f}" if k.get("price") else "--")} for k in picks],
         hide_index=True, width="stretch")
@@ -296,8 +297,10 @@ with read_tab:
     reads_by_game = (FEED["nights"][date].get("read", {}) if FEED_MODE else game_reads(date, stamp, fitted))
     st.caption("What WE expect from the matchup and each player's own history, with no price involved: his rate "
                "this season at tonight's minutes, moved by how he has played v this opponent, what this opponent "
-               "allows his type of player, and who is out. 'Clears it' is the share of his games this season, "
-               "re-run through that read, that reach the rung. The Sportsbet price is only looked up afterwards.")
+               "allows his type of player, and who is out. 'Read says' is the share of his games this season, "
+               "re-run through that read, that reach the rung; 'This season' and 'v them' are what he actually did. "
+               "A big gap between the two means the read is leaning on thin history. The Sportsbet price is only "
+               "looked up afterwards.")
     if not reads_by_game:
         st.info("No read for this night yet" + (": publish again from the Mac." if FEED_MODE else "."))
     else:

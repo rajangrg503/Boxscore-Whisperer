@@ -10,14 +10,18 @@ grimes 7 3s or sga 15pts. but it should be what it sees of the match up, similar
 So nothing here comes from a price. For each rotation player and each of PTS / REB / AST / 3PM:
 
   1. BASE      his per-minute rate this season x the minutes he should play tonight.
-  2. THE READ  multipliers, each one shown with its reason:
-                 - his history v THIS opponent (per-minute, last three seasons, shrunk when games are few)
-                 - what this opponent allows players of his type (guard / wing / big) this season
+  2. THE READ  adjustments, each one shown with its reason:
+                 - ONE opponent adjustment: his history v THIS opponent (per-minute, last three seasons,
+                   4+ games, shrunk hard when games are few) averaged with what this opponent allows players
+                   of his type this season. Averaged, not multiplied: they are two views of the same games.
+                   Capped at 18% (12% for threes).
                  - the projected slate's lift when teammates are out (once the night is projected)
   3. HIS GAMES this season, each rescaled to tonight's minutes and the read, give the spread:
                  SAFE pick   = the highest rung he clears in 80%+ of those games  ("SGA 15+ points")
                  UPSIDE pick = the highest rung he clears in 25%+ of them        ("Grimes 7+ threes")
-     and the players are ordered by how big the advantage is (the read's multiplier).
+     and the players are ordered by how big the advantage is (the read's multiplier). Beside each pick sits
+     what he ACTUALLY did at that rung this season and v this opponent, so a confident read on thin history
+     shows (27 Nov: Brunson 5+ threes read at 39% when he had done it 3 times in 18).
 
 The Sportsbet price for a pick, when one is saved, is looked up afterwards and shown last.
 
@@ -72,19 +76,23 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
         if per_min <= 0:
             continue
         why, mult = [], 1.0
+        # ONE opponent adjustment. His own games v them and what they allow his type are two views of the same
+        # thing (his games are part of what they allowed), so they are averaged, never multiplied together.
+        opp_moves = []
         ratios = pb._h2h_ratios(prior, opp, stat)
-        if len(ratios) >= 3:
-            m = _clip(1 + (st.mean(ratios) - 1) * len(ratios) / (len(ratios) + 4), 0.80, 1.25)
-            if abs(m - 1) >= 0.03:
+        if len(ratios) >= 4:                            # few games count for little: 4 games move him a third of the way
+            move = (st.mean(ratios) - 1) * len(ratios) / (len(ratios) + 8)
+            if abs(move) >= 0.02:
                 why.append(f"v {opp} he has run at {st.mean(ratios):.2f}x his usual rate over {len(ratios)} games")
-                mult *= m
+                opp_moves.append(move)
         if allows and kind:
             ratio, n = allows.get(stat, {}).get(opp, {}).get(kind(pid), (1.0, 0))
-            if n >= 15:
-                m = _clip(1 + (ratio - 1) * 0.5, 0.90, 1.12)
-                if abs(m - 1) >= 0.02:
-                    why.append(f"{opp} allow {kind(pid)}s {ratio:.2f}x their usual {NAMES[stat]}")
-                    mult *= m
+            if n >= 15 and abs(ratio - 1) >= 0.04:
+                why.append(f"{opp} allow {kind(pid)}s {ratio:.2f}x their usual {NAMES[stat]}")
+                opp_moves.append((ratio - 1) * 0.5)
+        if opp_moves:
+            cap = 0.12 if stat == "FG3M" else 0.18      # threes swing the most from night to night
+            mult *= 1 + _clip(st.mean(opp_moves), -cap, cap)
         if lift and stat in lift and abs(lift[stat] - 1) >= 0.02:
             why.append(f"teammates out lift his {NAMES[stat]} {lift[stat]:.2f}x (projected slate)")
             mult *= _clip(lift[stat], 0.85, 1.30)
@@ -96,8 +104,16 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
         share = lambda rung: sum(g >= rung for g in games) / len(games)  # noqa: E731
         safe = max((r for r in RUNGS[stat] if share(r) >= SAFE), default=None)
         upside = max((r for r in RUNGS[stat] if UPSIDE <= share(r) <= 0.60 and (safe is None or r > safe)), default=None)
+        raw = [pc.value(x, stat) for x in season]       # what he actually did, untouched by the read
+        versus = [pc.value(x, stat) for x in prior if pc.ALIAS.get(pc.opp_of(x), pc.opp_of(x)) == opp]
+        v_min = st.mean(pc.nf(x["MIN"]) for x in prior if pc.ALIAS.get(pc.opp_of(x), pc.opp_of(x)) == opp) if versus else 0
+        then = f" at {v_min:.0f} min" if versus and abs(v_min - minutes) >= 4 else ""   # a different role back then
+        record = lambda rung: None if rung is None else {  # noqa: E731
+            "season": f"{sum(v >= rung for v in raw)} of {len(raw)}",
+            "v_opp": (f"{sum(v >= rung for v in versus)} of {len(versus)}{then}" if versus else "--")}
         out["stats"][stat] = {"expected": round(per_min * minutes * mult, 1), "season": round(per_min * usual, 1),
                               "mult": round(mult, 3), "why": why,
+                              "safe_record": record(safe), "upside_record": record(upside),
                               "safe": safe, "safe_share": round(share(safe), 2) if safe else None,
                               "upside": upside, "upside_share": round(share(upside), 2) if upside else None,
                               "best": round(max(games), 0)}
@@ -140,14 +156,16 @@ def read_night(date, legs=None, game=None):
         picks = []
         for p in players:
             for stat, s in p["stats"].items():
-                for kind_, rung, share in (("safe", s["safe"], s["safe_share"]), ("upside", s["upside"], s["upside_share"])):
+                for kind_, rung, share, rec in (("safe", s["safe"], s["safe_share"], s["safe_record"]),
+                                                ("upside", s["upside"], s["upside_share"], s["upside_record"])):
                     if rung is None or (kind_ == "safe" and rung == RUNGS[stat][0]):
                         continue                        # a floor at the lowest rung says nothing
                     if kind_ == "upside" and s["mult"] < 1.05:
                         continue                        # upside only where the read sees an advantage
                     picks.append({"kind": kind_, "player": p["player"], "pid": p["pid"], "team": p["team"], "stat": stat,
                                   "rung": rung, "share": share, "mult": s["mult"], "expected": s["expected"],
-                                  "why": s["why"], "dtd": p["dtd"], "price": price.get((p["pid"], stat, float(rung)))
+                                  "why": s["why"], "dtd": p["dtd"], "season": rec["season"], "v_opp": rec["v_opp"],
+                                  "price": price.get((p["pid"], stat, float(rung)))
                                   or price.get((p["pid"], stat, rung))})
         picks.sort(key=lambda k: (-k["mult"], -k["share"]))
         away, home = g.split("@")
@@ -177,7 +195,7 @@ def main(argv=None):
             print(f"\n  {title}")
             for k in rows:
                 price = f"Sportsbet {k['price']:.2f}" if k["price"] else "no price saved"
-                print(f"    {pick_label(k):34s} clears it in {100 * k['share']:.0f}% of his games as read"
+                print(f"    {pick_label(k):34s} read {100 * k['share']:.0f}% | actually {k['season']} this season, {k['v_opp']} v them"
                       f" | expects {k['expected']:g} | read x{k['mult']:.2f} | {price}{' | DAY-TO-DAY' if k['dtd'] else ''}")
                 for w in k["why"]:
                     print(f"        - {w}")
