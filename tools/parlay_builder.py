@@ -58,7 +58,7 @@ SAME_PATH = os.path.join(ROOT, "data", "parlay_same_player_corr.json")
 SINGLE = ("PTS", "REB", "AST", "FG3M")
 STAT_CLASS = {"PTS": "P", "REB": "R", "AST": "A", "FG3M": "T", "PR": "C", "PA": "C", "RA": "C", "PRA": "C"}
 EDGES = [1.0, 1.04, 1.1, 1.2, 1.35, 1.5, 1.75, 2.1, 2.6, 3.5, 5, 8, 15, 60]
-VERSION = 4             # bump when load_legs changes shape (the Journal page caches legs by it)
+VERSION = 5             # bump when load_legs changes shape (the Journal page caches legs by it)
 BONUS_VALUE = 0.70      # what $1 of bonus bet is worth, from the `bonus` screen (measured, not promised)
 SGM_HAIRCUT = 0.96      # Sportsbet's price for a different-player SGM / product of its legs (365 quotes, 26 Nov)
 _NORMAL = st.NormalDist()
@@ -115,6 +115,8 @@ def _slate_players(date):
             for p in players:
                 out[p["pid"]] = {"team": team, "opp": opp, "crank": order.index(p) + 1, "pmin": p.get("min"),
                                  "outs": len(g.get("out", {}).get(team, [])),
+                                 "out_names": list(g.get("out", {}).get(team, [])),
+                                 "opp_out_names": list(g.get("out", {}).get(opp, [])),
                                  "dtd": any(pc.norm(p["name"]) in x for x in dtd)}
     return out
 
@@ -134,12 +136,68 @@ def leg_label(leg):
     return f"{leg['player']} {leg['stat']} {'o' if leg['kind'] == 'over' else 'u'}{leg['th']:g}"
 
 
+H2H_BOOST, H2H_VETO = 1.10, 0.85        # same thresholds as tools/h2h_rate.py (n >= 6 and n >= 4)
+
+
+def _h2h_ratios(prior, opp, stat):
+    """His output v this opponent as a multiple of his own per-minute rate that season (20+ minute games)."""
+    by_season = collections.defaultdict(list)
+    for x in prior:
+        by_season[pc.season_of(pc._date(x))].append(x)
+    ratios = []
+    for rows in by_season.values():
+        regular = [x for x in rows if str(x.get("SEASON_ID", "2"))[0] == "2"]
+        minutes = sum(pc.nf(x["MIN"]) for x in regular)
+        per_min = sum(pc.value(x, stat) for x in regular) / minutes if minutes else 0
+        if per_min <= 0:
+            continue
+        ratios += [pc.value(x, stat) / (per_min * pc.nf(x["MIN"])) for x in rows
+                   if pc.ALIAS.get(pc.opp_of(x), pc.opp_of(x)) == opp and pc.nf(x["MIN"]) >= 20]
+    return ratios
+
+
+def reads(leg):
+    """The reasons for and against a leg that come from OUR reads rather than the price: head-to-head
+    history, who is out, and karma's own notes. Returns (for, against) as short sentences. They order
+    equal-priced legs and can filter the lists; over 23 nights they have not been shown to beat the price."""
+    good, bad = [], []
+    over = leg["kind"] != "under"
+    n, ratio = leg.get("h2h_ratio_n") or 0, leg.get("h2h_ratio")
+    if ratio is not None and n >= 6 and ratio >= H2H_BOOST:
+        (good if over else bad).append(f"v {leg.get('opp')}: {ratio:.2f}x his usual rate over {n} games")
+    if ratio is not None and n >= 4 and ratio <= H2H_VETO:
+        (bad if over else good).append(f"v {leg.get('opp')}: only {ratio:.2f}x his usual rate over {n} games")
+    outs, opp_outs = leg.get("out_names") or [], leg.get("opp_out_names") or []
+    if over and outs and leg.get("crank", 99) <= 3:
+        good.append(f"{len(outs)} teammate{'s' if len(outs) != 1 else ''} out ({', '.join(outs[:3])}) and he is a top-3 creator")
+    if over and len(opp_outs) >= 2:
+        good.append(f"{leg.get('opp')} missing {len(opp_outs)} ({', '.join(opp_outs[:3])})")
+    bet_as = leg.get("karma_bet_as")
+    if bet_as and over:
+        if leg["stat"] in [b.strip().upper() for b in bet_as.replace(",", "/").split("/")]:
+            good.append(f"karma: bet him as {bet_as}")
+        else:
+            bad.append(f"karma: bet him as {bet_as}, not {leg['stat']}")
+    if over and "motor" in (leg.get("karma_tags") or []) and outs:
+        good.append("karma: a motor player with a teammate out")
+    return good, bad
+
+
+def _karma_notes():
+    try:
+        d = json.load(open(os.path.join(ROOT, "data", "player_notes.json")))
+    except (OSError, ValueError):
+        return {}
+    return {pc.norm(k): v for k, v in d.items() if not k.startswith("_") and isinstance(v, dict)}
+
+
 def load_legs(date, with_actuals=False):
     """Every priced leg for a US date: alt rungs, and both sides of each over/under."""
     resolve = _resolver()
     slate = _slate_players(date)
+    notes = _karma_notes()
     day = dt.date.fromisoformat(date)
-    logs, legs = {}, []
+    logs, legs, ratio_memo = {}, [], {}
     for game, r in _latest_rows(date):
         if r["stat"] not in STAT_CLASS:
             continue
@@ -147,7 +205,8 @@ def load_legs(date, with_actuals=False):
         if pid is None:
             continue
         if pid not in logs:
-            rows = pc.rows_for(pid, [pc.prev_season(pc.season_of(day)), pc.season_of(day)])
+            last = pc.prev_season(pc.season_of(day))
+            rows = pc.rows_for(pid, [pc.prev_season(last), last, pc.season_of(day)])
             logs[pid] = ([x for x in rows if pc._date(x) < day], [x for x in rows if pc._date(x) == day])
         prior, today = logs[pid]
         s = slate.get(pid, {})
@@ -159,7 +218,15 @@ def load_legs(date, with_actuals=False):
                 "team": team, "opp": s.get("opp") or (next((t for t in sides_of_game if t != team), None) if team else None),
                 "crank": s.get("crank") or 99, "dtd": bool(s.get("dtd")), "outs": s.get("outs"),
                 "min_l10": (st.mean(pc.nf(x["MIN"]) for x in prior[:10]) if prior else None),
-                "_pa": (st.mean(pc.value(x, "PA") for x in prior[:20]) if prior else 0.0)}
+                "_pa": (st.mean(pc.value(x, "PA") for x in prior[:20]) if prior else 0.0),
+                "out_names": s.get("out_names") or [], "opp_out_names": s.get("opp_out_names") or [],
+                "karma_bet_as": notes.get(pc.norm(r["player"]), {}).get("bet_as"),
+                "karma_tags": notes.get(pc.norm(r["player"]), {}).get("tags") or []}
+        if (pid, r["stat"]) not in ratio_memo:
+            ratio_memo[(pid, r["stat"])] = _h2h_ratios(prior, base["opp"], r["stat"]) if base["opp"] else []
+        ratios = ratio_memo[(pid, r["stat"])]
+        base["h2h_ratio_n"] = len(ratios)
+        base["h2h_ratio"] = (sum(ratios) / len(ratios)) if ratios else None
         actual = pc.value(today[0], r["stat"]) if (with_actuals and today) else None
         sides = ([("alt", r["threshold"], r.get("price"))] if r["kind"] == "alt"
                  else [("over", r["line"], r.get("over")), ("under", r["line"], r.get("under"))])
@@ -173,7 +240,7 @@ def load_legs(date, with_actuals=False):
             leg["hr_season"] = (sum(clears(pc.value(x, r["stat"])) for x in season) / len(season)) if season else None
             leg["hr_l8"] = (sum(clears(pc.value(x, r["stat"])) for x in prior[:8]) / len(prior[:8])) if prior else None
             versus = [x for x in prior if base["opp"] and pc.ALIAS.get(pc.opp_of(x), pc.opp_of(x)) == base["opp"]]
-            leg["h2h_n"] = len(versus)                 # tonight's opponent, last season and this one
+            leg["h2h_n"] = len(versus)                 # tonight's opponent, the last three seasons
             leg["h2h_hits"] = sum(clears(pc.value(x, r["stat"])) for x in versus)
             leg["cls"] = ("ou_over" if kind == "over" else "ou_under" if kind == "under"
                           else "alt_single" if r["stat"] in SINGLE else "alt_combo")
@@ -192,6 +259,8 @@ def load_legs(date, with_actuals=False):
         for x in legs:
             if x["crank"] == 99 and x["pid"] in players:
                 x["crank"] = order.index(x["pid"]) + 1
+    for x in legs:
+        x["reads_for"], x["reads_against"] = reads(x)
     return legs
 
 
@@ -554,7 +623,9 @@ def context(leg):
     """How far his own record at this line beats the price's chance (the lower of season and last 8).
     A tie-breaker only: in the 23-night walk-forward test this did NOT beat the price."""
     rates = [r for r in (leg.get("hr_season") if (leg.get("n_season") or 0) >= 8 else None, leg.get("hr_l8")) if r is not None]
-    return (min(rates) - leg["p"]) if rates else -1.0
+    record = (min(rates) - leg["p"]) if rates else -1.0
+    # Each of our reads for the leg counts like 20 points of record; each read against, like 20 off.
+    return record + 0.2 * len(leg.get("reads_for") or []) - 0.2 * len(leg.get("reads_against") or [])
 
 
 RANK_DRAWS = 800
@@ -782,8 +853,10 @@ def record(leg):
     def pct(v):
         return "--" if v is None else f"{100 * v:.0f}%"
     versus = f", v {leg.get('opp')} {leg.get('h2h_hits')}/{leg.get('h2h_n')}" if leg.get("h2h_n") else ""
+    why = "".join(f"\n          + {r}" for r in leg.get("reads_for") or []) + "".join(
+        f"\n          ! {r}" for r in leg.get("reads_against") or [])
     return (f"his record: season {pct(leg.get('hr_season'))} of {leg.get('n_season') or 0}, last 8 {pct(leg.get('hr_l8'))}"
-            f"{versus}, {leg.get('min_l10') or 0:.0f} min")
+            f"{versus}, {leg.get('min_l10') or 0:.0f} min{why}")
 
 
 def backtest(min_train=8, per_night=25, seed=0, budget=140, verbose=True):

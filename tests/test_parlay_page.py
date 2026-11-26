@@ -26,7 +26,9 @@ def made_up_legs(date, with_actuals=False):
                 pid = 100 * g + 10 * (t == t2) + k
                 for stat, th, price in (("PTS", 20, 2.0), ("REB", 6, 2.6), ("AST", 4, 1.45)):
                     legs.append(fake.leg(f"P{g}{t}{k}", stat, th, price, game=f"{t1}@{t2}", team=t, pid=pid,
-                                         hr_season=0.5, n_season=12, hr_l8=0.5, date=date))
+                                         hr_season=0.5, n_season=12, hr_l8=0.5, date=date,
+                                         reads_for=(["v the other lot: 1.20x his usual rate over 6 games"] if k == 0 else []),
+                                         reads_against=[]))
     return legs
 
 
@@ -138,3 +140,12 @@ def test_swap_a_leg_reprices_the_slip_and_can_be_undone(page):
     assert any("changed from the built slip" in e.label for e in at.expander)
     next(b for b in at.button if b.key == "pb_undo_lad0").click().run()
     assert at.dataframe[0].value["Leg"].tolist() == before
+
+
+def test_only_legs_with_a_read_filters_the_built_slips(page):
+    at = page.run()
+    assert "Reads" in at.dataframe[0].value.columns
+    at.checkbox(key="pb_reads_only").check().run()
+    assert not at.exception
+    built_legs = [name for d in at.dataframe for name in d.value["Leg"].tolist()]
+    assert built_legs and all(name.split()[0].endswith("0") for name in built_legs)      # only the k == 0 players have a read

@@ -182,3 +182,30 @@ def test_alternatives_keep_the_slip_within_the_rules():
     same = pb.alternatives(legs, sgm, 0, purpose="sgm", lo=1.25, hi=3.6, same_game=True)
     assert same and all(x["game"] == "AAA@BBB" for x in same)
     assert all(x["team"] == "AAA" for x in same)                # BBB already has two of four: a third would break the cap
+
+
+def test_reads_for_and_against_a_leg():
+    star = leg("A One", "PTS", 20, crank=1, opp="BBB", h2h_ratio=1.21, h2h_ratio_n=7,
+               out_names=["B Guard", "C Wing"], opp_out_names=["X Big", "Y Wing"], karma_bet_as="PRA/PA", karma_tags=["motor"])
+    good, bad = pb.reads(star)
+    assert any("1.21x" in g for g in good) and any("2 teammates out" in g for g in good)
+    assert any("BBB missing 2" in g for g in good) and any("motor" in g for g in good)
+    assert bad == ["karma: bet him as PRA/PA, not PTS"]
+    assert pb.reads(dict(star, stat="PRA", cls="alt_combo"))[1] == []                      # the stat karma named
+    role = leg("A Six", "PTS", 10, crank=6, opp="BBB", h2h_ratio=0.80, h2h_ratio_n=5, out_names=["B Guard"])
+    good, bad = pb.reads(role)
+    assert good == [] and any("only 0.80x" in b for b in bad)          # a role player gets no usage read; H2H veto
+    assert pb.reads(leg("A One", crank=1, opp="BBB", h2h_ratio=1.3, h2h_ratio_n=3))[0] == []   # three games: too few
+    under = leg("A One", "PTS", 20, kind="under", opp="BBB", h2h_ratio=1.21, h2h_ratio_n=7)
+    assert pb.reads(under) == ([], ["v BBB: 1.21x his usual rate over 7 games"])               # a boost argues against the under
+
+
+def test_reads_break_ties_between_equal_priced_legs():
+    plain = leg("A One", "PTS", 20, 2.0, pid=1, hr_season=0.5, n_season=12, hr_l8=0.5)
+    backed = leg("B Two", "PTS", 20, 2.0, pid=2, game="CCC@DDD", team="CCC", hr_season=0.5, n_season=12, hr_l8=0.5,
+                 reads_for=["v DDD: 1.20x his usual rate over 6 games"])
+    doubted = leg("C Three", "PTS", 20, 2.0, pid=3, game="EEE@FFF", team="EEE", hr_season=0.5, n_season=12, hr_l8=0.5,
+                  reads_against=["v FFF: only 0.80x his usual rate over 5 games"])
+    legs = pb._annotate([plain, backed, doubted], CAL)
+    order = [slip[0]["player"] for _, slip, _ in pb.build_ladder(legs, CAL, SAME, top=3)]
+    assert order == ["B Two", "A One", "C Three"]

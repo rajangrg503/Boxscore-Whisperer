@@ -65,8 +65,11 @@ def legs_for(date, stamp, fitted):
 
 
 @st.cache_data(show_spinner="Building…")
-def built(date, stamp, fitted, mode, n_legs=3, game=None, target=500.0, bonus=False, bet_return=False, loose=False):
+def built(date, stamp, fitted, mode, n_legs=3, game=None, target=500.0, bonus=False, bet_return=False, loose=False,
+          reads_only=False):
     legs, cal, same = legs_for(date, stamp, fitted), source_cal(), pb.load_same()
+    if reads_only:
+        legs = [x for x in legs if x.get("reads_for") and not x.get("reads_against")]
     stake = "bonus" if bonus else "cash"
     if mode == "ladder":
         return pb.build_ladder(legs, cal, same, top=8)
@@ -94,6 +97,12 @@ def pct(v):
 
 def chance_text(p):
     return f"{100 * p:.1f}%" if p >= 0.02 else f"1 in {1 / max(p, 1e-9):,.0f}"
+
+
+def reads_text(x):
+    """Our reasons for (+) and against (!) the leg: head-to-head, who is out, karma's notes."""
+    parts = [f"+ {r}" for r in x.get("reads_for") or []] + [f"! {r}" for r in x.get("reads_against") or []]
+    return "  ·  ".join(parts) if parts else "--"
 
 
 def short_line(legs, e):
@@ -125,6 +134,7 @@ def render_slip(legs, e, key=None):
           "Leg return": f"{100 * (p * x['price'] - 1):+.0f}%",
           "Season": f"{pct(x.get('hr_season'))} of {x.get('n_season') or 0}", "Last 8": pct(x.get("hr_l8")),
           "v this team": (f"{x.get('h2h_hits')} of {x.get('h2h_n')}" if x.get("h2h_n") else "--"),
+          "Reads": reads_text(x),
           "Min": round(x.get("min_l10") or 0)} for x, p in zip(legs, e["leg_probs"])],
         hide_index=True, width="stretch")
     if key and st.button("Send to Check a slip", key=key):
@@ -222,12 +232,19 @@ else:
     saved_text = f"lines saved {stamp[:2]}:{stamp[2:4]}"
 
 fitted = (len(cal.get("fitted_on", [])), pb.VERSION)
-legs = legs_for(date, stamp, fitted)
-if not legs:
+all_legs = legs_for(date, stamp, fitted)
+if not all_legs:
     st.info("No priced legs saved for this night.")
     st.stop()
-games = sorted({x["game"] for x in legs})
-st.caption(f"{len(legs):,} priced legs in {len(games)} games · {saved_text} · "
+with_read = sum(1 for x in all_legs if x["kind"] == "alt" and x.get("reads_for") and not x.get("reads_against"))
+reads_only = st.checkbox(
+    f"Only build from legs with a read behind them ({with_read} of them tonight)", key="pb_reads_only",
+    help="A read = a head-to-head boost, a top-3 creator with a teammate out, an opponent missing two or more, "
+         "or one of karma's own notes. Legs with a read against them (head-to-head veto, wrong stat for him) "
+         "are left out. Reads order and filter the lists; they have not been shown to beat the price.")
+legs = [x for x in all_legs if x.get("reads_for") and not x.get("reads_against")] if reads_only else all_legs
+games = sorted({x["game"] for x in all_legs})
+st.caption(f"{len(all_legs):,} priced legs in {len(games)} games · {saved_text} · "
            f"margins measured on {fitted[0]} nights")
 if not projected:
     st.warning(pb.NO_SLATE)
@@ -242,19 +259,23 @@ with st.expander("How to read the numbers"):
         "100 bets of $3 you'd expect to be down about $21. Closer to zero is cheaper.\n"
         "- **Lands** and **Leg return**: the same two numbers for one leg.\n"
         "- **Season**, **Last 8**, **v this team**: how often he has cleared this line this season, in his "
-        "last 8 games, and against tonight's opponent (last season and this one). His own record, not a forecast.")
+        "last 8 games, and against tonight's opponent (the last three seasons). His own record, not a forecast.\n"
+        "- **Reads**: our reasons for (+) and against (!) the leg that the price doesn't show you: his output v this "
+        "team compared with his usual rate, a top-3 creator with a teammate out, an opponent missing two or more, "
+        "and karma's own notes. Among legs that cost the same, more reads rank higher. Over the 23 saved nights "
+        "reads like these have not been shown to beat the price, which is why every one is shown rather than trusted.")
 
 check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab = st.tabs(
     ["Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet"])
 
 with check_tab:
-    by_key = {leg_key(x): x for x in legs}
+    by_key = {leg_key(x): x for x in all_legs}
     slip_keys = [k for k in st.session_state.setdefault("pb_slip", []) if k in by_key]
     c1, c2, c3, c4 = st.columns([1.1, 1.6, 1.6, 0.7])
     game = c1.selectbox("Game", games, key="pb_game")
-    players = sorted({x["player"] for x in legs if x["game"] == game})
+    players = sorted({x["player"] for x in all_legs if x["game"] == game})
     player = c2.selectbox("Player", players, key="pb_player")
-    markets = sorted([x for x in legs if x["game"] == game and x["player"] == player],
+    markets = sorted([x for x in all_legs if x["game"] == game and x["player"] == player],
                      key=lambda x: (x["stat"], x["kind"] != "alt", x["th"]))
     pick = c3.selectbox("Market", markets, format_func=market_label, key="pb_market")
     c4.write("")
@@ -284,7 +305,7 @@ with check_tab:
 with ladder_tab:
     st.caption("Singles near 2.00 (and two-game pairs when they beat a single, which is rare). Every single in this "
                "band costs about the same, so they're ordered by the player's own record at the line.")
-    render_ranked(built(date, stamp, fitted, "ladder"), "lad", legs, dict(purpose="single", lo=1.9, hi=2.15))
+    render_ranked(built(date, stamp, fitted, "ladder", reads_only=reads_only), "lad", legs, dict(purpose="single", lo=1.9, hi=2.15))
 
 PLAY_HELP = ("For playing around, not for betting: any stat (combos and threes too), any player averaging 20+ "
              "minutes, and no limit on legs from one team.")
@@ -303,7 +324,8 @@ with long_tab:
     long_loose = d.checkbox("Loosen the rules", key="pb_long_loose", help=PLAY_HELP)
     st.caption("Rungs at 2.0–3.6 spread evenly over the night's games (the price band that gives up least). "
                "With more legs than games, each game takes two or more.")
-    ranked = built(date, stamp, fitted, "longshot", n_legs=n_long, bonus=long_bonus, bet_return=long_return, loose=long_loose)
+    ranked = built(date, stamp, fitted, "longshot", n_legs=n_long, bonus=long_bonus, bet_return=long_return,
+                   loose=long_loose, reads_only=reads_only)
     shown_legs(ranked, n_long)
     render_ranked(ranked, "lon", legs, dict(purpose="multi", lo=2.0, hi=3.6, loose=long_loose),
                   stake="bonus" if long_bonus else "cash", bet_return=long_return)
@@ -316,7 +338,8 @@ with sgm_tab:
     sgm_loose = d.checkbox("Loosen the rules", key="pb_sgm_loose", help=PLAY_HELP)
     st.caption("One leg per player, single stats, at most half the legs from one team (teammates' scoring legs "
                "work against each other). The price shown is an estimate, 0.96 × the product of the legs.")
-    ranked = built(date, stamp, fitted, "sgm", n_legs=n_sgm, game=sgm_game, bet_return=sgm_return, loose=sgm_loose)
+    ranked = built(date, stamp, fitted, "sgm", n_legs=n_sgm, game=sgm_game, bet_return=sgm_return, loose=sgm_loose,
+                   reads_only=reads_only)
     shown_legs(ranked, n_sgm)
     render_ranked(ranked, "sgm", legs, dict(purpose="sgm", lo=1.1 if sgm_loose else 1.25, hi=6.0 if sgm_loose else 3.6,
                                            loose=sgm_loose, same_game=True), bet_return=sgm_return)
@@ -326,8 +349,8 @@ with big_tab:
                               value=500, format_func=lambda v: f"{v:,}")
     st.caption("The cheapest route to a big price: the legs that give up least per unit of odds, one per team. "
                "It is still a lottery ticket.")
-    render_ranked(built(date, stamp, fitted, "big", target=float(target)), "big", legs, dict(purpose="multi", lo=1.8, hi=3.6))
+    render_ranked(built(date, stamp, fitted, "big", target=float(target), reads_only=reads_only), "big", legs, dict(purpose="multi", lo=1.8, hi=3.6))
 
 with bonus_tab:
     st.caption("The slips that turn $1 of bonus bet into the most cash on average.")
-    render_ranked(built(date, stamp, fitted, "bonus"), "bon", legs, dict(purpose="multi", lo=2.0, hi=6.0), stake="bonus")
+    render_ranked(built(date, stamp, fitted, "bonus", reads_only=reads_only), "bon", legs, dict(purpose="multi", lo=2.0, hi=6.0), stake="bonus")
