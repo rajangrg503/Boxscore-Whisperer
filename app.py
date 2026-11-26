@@ -615,6 +615,8 @@ st.set_page_config(
 # dark theme; keep the two in step (accent #22c55e, background #0a0d12).
 st.markdown("""
 <style>
+/* pages/Parlay_builder.py is unlisted (karma's phone only): hide Streamlit's page list. */
+[data-testid="stSidebarNav"] { display: none; }
 :root {
     --bw-bg: #0a0d12;
     --bw-surface: #11151c;

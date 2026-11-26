@@ -1,4 +1,5 @@
-"""Parlay builder -- a page of the Boxscore Journal (your Mac only, http://localhost:8501).
+"""Parlay builder -- a page of the Boxscore Journal (http://localhost:8501), and, through
+pages/Parlay_builder.py, an unlisted page of the public app for karma's phone.
 
     python3 -m streamlit run tools/journal_app.py      # then "Parlay builder" in the sidebar
 
@@ -8,7 +9,10 @@ or a bonus-bet slip. Every slip shows the true chance, the fair price and what $
 average, from margins measured on our own saved nights.
 
 It does not find winning legs (nothing we tested beat the price). It shows what each slip gives up.
-Bookmaker lines stay on this Mac: this page is not part of the public app.
+
+Two sources. In the Journal it reads journal/lines live and can save a fresh snapshot. On the phone it
+reads data/parlay_feed.json.gz, published from the Mac by tools/publish_builder.sh (karma's choice,
+26 Nov 2026: the builder's lines go out with the public app; his bets in journal/picks never do).
 """
 import datetime
 import glob
@@ -19,10 +23,16 @@ import streamlit as st
 
 TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, TOOLS)
-import line_snapshot as ls  # noqa: E402
 import parlay_builder as pb  # noqa: E402
 
-st.set_page_config(page_title="Parlay builder · Boxscore Journal", layout="wide")
+# On the phone (the public app's /Parlay_builder page) there is no Mac and no journal/ folder: the page
+# reads data/parlay_feed.json.gz, which `bash tools/publish_builder.sh` writes and pushes from the Mac.
+FEED_MODE = os.environ.get("BW_BUILDER_FEED") == "1"
+FEED = pb.load_feed() if FEED_MODE else {}
+if not FEED_MODE:
+    import line_snapshot as ls  # noqa: E402  (reads Sportsbet; only possible from the Mac)
+
+st.set_page_config(page_title="Parlay builder", layout="wide")
 st.markdown("""
 <style>
 .block-container { max-width: 980px; padding-top: 2.4rem; padding-bottom: 4rem; }
@@ -44,14 +54,19 @@ def stamp_for(date):
     return os.path.basename(files[-1]) if files else ""
 
 
+def source_cal():
+    return FEED.get("cal", {}) if FEED_MODE else pb.load_cal()
+
+
 @st.cache_data(show_spinner="Reading the saved lines…")
 def legs_for(date, stamp, fitted):
-    return pb._annotate(pb.load_legs(date), pb.load_cal())
+    raw = [dict(x) for x in FEED["nights"][date]["legs"]] if FEED_MODE else pb.load_legs(date)
+    return pb._annotate(raw, source_cal())
 
 
 @st.cache_data(show_spinner="Building…")
 def built(date, stamp, fitted, mode, n_legs=3, game=None, target=500.0, bonus=False, bet_return=False, loose=False):
-    legs, cal, same = legs_for(date, stamp, fitted), pb.load_cal(), pb.load_same()
+    legs, cal, same = legs_for(date, stamp, fitted), source_cal(), pb.load_same()
     stake = "bonus" if bonus else "cash"
     if mode == "ladder":
         return pb.build_ladder(legs, cal, same, top=8)
@@ -102,6 +117,7 @@ def render_slip(legs, e, key=None):
         [{"Leg": pb.leg_label(x), "Game": x["game"], "Price": round(x["price"], 2), "Lands": pct(p),
           "Leg return": f"{100 * (p * x['price'] - 1):+.0f}%",
           "Season": f"{pct(x.get('hr_season'))} of {x.get('n_season') or 0}", "Last 8": pct(x.get("hr_l8")),
+          "v this team": (f"{x.get('h2h_hits')} of {x.get('h2h_n')}" if x.get("h2h_n") else "--"),
           "Min": round(x.get("min_l10") or 0)} for x, p in zip(legs, e["leg_probs"])],
         hide_index=True, width="stretch")
     if key and st.button("Send to Check a slip", key=key):
@@ -122,43 +138,54 @@ st.title("Parlay builder")
 st.caption("True chance, fair price and expected return for any slip, from Sportsbet margins measured on our own "
            "saved nights. It doesn't find winning legs. It shows what each slip gives up.")
 
-nights = sorted(pb.line_nights(), reverse=True)
-left, right = st.columns([2, 1])
-with right:
-    st.write("")
-    if st.button("Save Sportsbet's lines now", width="stretch"):
-        try:
-            saved = ls.snapshot()
-            st.cache_data.clear()
-            st.toast("Saved lines for " + (", ".join(sorted(saved)) or "no upcoming games"))
-            nights = sorted(pb.line_nights(), reverse=True)
-        except ls.Unreachable as error:
-            st.warning(f"Couldn't read Sportsbet's lines: {error}")
-if not nights:
-    st.info("No saved lines yet. Press **Save Sportsbet's lines now**.")
-    st.stop()
-with left:
+if FEED_MODE:
+    nights = sorted(FEED.get("nights", {}))
+    if not nights:
+        st.info("No lines have been published yet. On the Mac: `bash tools/publish_builder.sh`.")
+        st.stop()
     date = st.selectbox("Night", nights, format_func=nice_date)
+    cal, stamp = source_cal(), FEED.get("made_at", "")
+    projected = FEED["nights"][date].get("has_slate", False)
+    saved_text = f"lines published {stamp[11:16]} on {stamp[8:10]}/{stamp[5:7]} (Sydney time)"
+else:
+    nights = sorted(pb.line_nights(), reverse=True)
+    left, right = st.columns([2, 1])
+    with right:
+        st.write("")
+        if st.button("Save Sportsbet's lines now", width="stretch"):
+            try:
+                saved = ls.snapshot()
+                st.cache_data.clear()
+                st.toast("Saved lines for " + (", ".join(sorted(saved)) or "no upcoming games"))
+                nights = sorted(pb.line_nights(), reverse=True)
+            except ls.Unreachable as error:
+                st.warning(f"Couldn't read Sportsbet's lines: {error}")
+    if not nights:
+        st.info("No saved lines yet. Press **Save Sportsbet's lines now**.")
+        st.stop()
+    with left:
+        date = st.selectbox("Night", nights, format_func=nice_date)
+    cal = source_cal()
+    if not cal:
+        st.warning("The margins haven't been measured on this Mac yet.")
+        if st.button("Measure Sportsbet's margins (takes a couple of minutes the first time)"):
+            with st.spinner("Grading every saved night…"):
+                pb.calibrate(verbose=False)
+            st.rerun()
+        st.stop()
+    stamp = stamp_for(date)
+    projected = pb.has_slate(date)
+    saved_text = f"lines saved {stamp[:2]}:{stamp[2:4]}"
 
-cal = pb.load_cal()
-if not cal:
-    st.warning("The margins haven't been measured on this Mac yet.")
-    if st.button("Measure Sportsbet's margins (takes a couple of minutes the first time)"):
-        with st.spinner("Grading every saved night…"):
-            pb.calibrate(verbose=False)
-        st.rerun()
-    st.stop()
 fitted = (len(cal.get("fitted_on", [])), pb.VERSION)
-stamp = stamp_for(date)
 legs = legs_for(date, stamp, fitted)
 if not legs:
     st.info("No priced legs saved for this night.")
     st.stop()
 games = sorted({x["game"] for x in legs})
-st.caption(f"{len(legs):,} priced legs in {len(games)} games · lines saved {stamp[:2]}:{stamp[2:4]} · "
+st.caption(f"{len(legs):,} priced legs in {len(games)} games · {saved_text} · "
            f"margins measured on {fitted[0]} nights")
-
-if not pb.has_slate(date):
+if not projected:
     st.warning(pb.NO_SLATE)
 
 check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab = st.tabs(

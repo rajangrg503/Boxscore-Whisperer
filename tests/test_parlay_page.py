@@ -73,3 +73,52 @@ def test_no_calibration_asks_to_measure_first(page, monkeypatch):
     at = page.run()
     assert not at.exception
     assert any("haven't been measured" in w.value for w in at.warning)
+
+
+# ---- the phone page: the same builder, fed from data/parlay_feed.json.gz
+
+PHONE_PAGE = os.path.join(os.path.dirname(TOOLS), "pages", "Parlay_builder.py")
+
+
+@pytest.fixture
+def phone(monkeypatch):
+    import streamlit as st
+    st.cache_data.clear()
+    monkeypatch.setenv("BW_BUILDER_FEED", "1")           # the wrapper sets it; this restores it afterwards
+    monkeypatch.setattr(pb, "load_same", lambda: fake.SAME)
+    monkeypatch.setattr(pb, "load_legs", lambda *a, **k: pytest.fail("the phone page must not read journal/"))
+    feed = {"made_at": "2026-11-27T07:05+11:00", "cal": dict(fake.CAL, fitted_on=["a", "b"]),
+            "nights": {"2026-11-27": {"has_slate": True, "legs": made_up_legs("2026-11-27")}}}
+    monkeypatch.setattr(pb, "load_feed", lambda *a, **k: feed)
+    return AppTest.from_file(PHONE_PAGE, default_timeout=60)
+
+
+def test_phone_page_builds_from_the_feed_without_the_mac(phone):
+    at = phone.run()
+    assert not at.exception
+    assert at.title[0].value == "Parlay builder"
+    assert len(at.dataframe) >= 5
+    assert not any(b.label == "Save Sportsbet's lines now" for b in at.button)
+    assert any("lines published 07:05 on 27/11" in c.value for c in at.caption)
+    assert not at.warning                                                 # the night was projected
+
+
+def test_phone_page_with_nothing_published_says_how(phone, monkeypatch):
+    monkeypatch.setattr(pb, "load_feed", lambda *a, **k: {})
+    at = phone.run()
+    assert not at.exception
+    assert any("publish_builder.sh" in i.value for i in at.info)
+
+
+def test_feed_round_trips(tmp_path, monkeypatch):
+    legs = pb._annotate(made_up_legs("2026-11-27"), fake.CAL)
+    monkeypatch.setattr(pb, "load_legs", lambda date, with_actuals=False: legs)
+    monkeypatch.setattr(pb, "has_slate", lambda date: True)
+    monkeypatch.setattr(pb, "load_cal", lambda: fake.CAL)
+    path = str(tmp_path / "feed.json.gz")
+    pb.build_feed(dates=["2026-11-27"], path=path)
+    feed = pb.load_feed(path)
+    night = feed["nights"]["2026-11-27"]
+    assert night["has_slate"] and len(night["legs"]) == len(legs)
+    assert "ev" not in night["legs"][0] and night["legs"][0]["price"] == legs[0]["price"]
+    assert feed["cal"]["tables"] == fake.CAL["tables"]

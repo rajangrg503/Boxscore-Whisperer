@@ -30,6 +30,7 @@ karma can read, not a proven edge.
   python3 tools/parlay_builder.py 2026-11-27 bonus
   python3 tools/parlay_builder.py 2026-11-27 check "Davion Mitchell PTS 15+; Luka Doncic AST 8+ @2.40" [--price 9.5]
   python3 tools/parlay_builder.py backtest
+  bash tools/publish_builder.sh                             # save lines, write the phone feed, push
 
 A leg in `check` is "<player> <STAT> <N>+" (alt rung), "<player> <STAT> o<line>" or
 "u<line>"; add "@price" to override the saved price. It shows evidence; karma decides.
@@ -57,7 +58,7 @@ SAME_PATH = os.path.join(ROOT, "data", "parlay_same_player_corr.json")
 SINGLE = ("PTS", "REB", "AST", "FG3M")
 STAT_CLASS = {"PTS": "P", "REB": "R", "AST": "A", "FG3M": "T", "PR": "C", "PA": "C", "RA": "C", "PRA": "C"}
 EDGES = [1.0, 1.04, 1.1, 1.2, 1.35, 1.5, 1.75, 2.1, 2.6, 3.5, 5, 8, 15, 60]
-VERSION = 3             # bump when load_legs changes shape (the Journal page caches legs by it)
+VERSION = 4             # bump when load_legs changes shape (the Journal page caches legs by it)
 BONUS_VALUE = 0.70      # what $1 of bonus bet is worth, from the `bonus` screen (measured, not promised)
 SGM_HAIRCUT = 0.96      # Sportsbet's price for a different-player SGM / product of its legs (365 quotes, 26 Nov)
 _NORMAL = st.NormalDist()
@@ -171,6 +172,9 @@ def load_legs(date, with_actuals=False):
             leg["n_season"] = len(season)
             leg["hr_season"] = (sum(clears(pc.value(x, r["stat"])) for x in season) / len(season)) if season else None
             leg["hr_l8"] = (sum(clears(pc.value(x, r["stat"])) for x in prior[:8]) / len(prior[:8])) if prior else None
+            versus = [x for x in prior if base["opp"] and pc.ALIAS.get(pc.opp_of(x), pc.opp_of(x)) == base["opp"]]
+            leg["h2h_n"] = len(versus)                 # tonight's opponent, last season and this one
+            leg["h2h_hits"] = sum(clears(pc.value(x, r["stat"])) for x in versus)
             leg["cls"] = ("ou_over" if kind == "over" else "ou_under" if kind == "under"
                           else "alt_single" if r["stat"] in SINGLE else "alt_combo")
             if actual is not None:
@@ -320,6 +324,40 @@ def calibrate(dates=None, verbose=True):
         for cls, t in cal["tables"].items():
             print(" ", cls, " ".join(f"{1 / i:.2f}:{100 * (tr / i - 1):+.0f}%" for i, tr, _ in t))
     return cal
+
+
+FEED_PATH = os.path.join(ROOT, "data", "parlay_feed.json.gz")
+_FEED_DROP = ("_pa", "_e", "_phi", "p", "ev", "cost")
+
+
+def build_feed(dates=None, path=FEED_PATH):
+    """Everything the phone page needs for the coming nights, in one small file: the priced legs (with each
+    player's record), whether the night was projected, and the calibration. karma chose on 26 Nov 2026 to
+    publish this with the public app so the builder works away from the Mac."""
+    import gzip
+    from zoneinfo import ZoneInfo
+    today = dt.datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+    nights = {}
+    for d in dates or [d for d in line_nights() if d >= today]:
+        legs = load_legs(d)
+        if legs:
+            nights[d] = {"has_slate": has_slate(d),
+                         "legs": [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in x.items()
+                                   if k not in _FEED_DROP} for x in legs]}
+    feed = {"made_at": dt.datetime.now(ZoneInfo("Australia/Sydney")).isoformat(timespec="minutes"),
+            "version": VERSION, "cal": load_cal(), "nights": nights}
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        json.dump(feed, f, separators=(",", ":"))
+    return feed
+
+
+def load_feed(path=FEED_PATH):
+    import gzip
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError, EOFError):
+        return {}
 
 
 def load_cal():
@@ -703,7 +741,9 @@ def show(title, ranked, cal, note=""):
 def record(leg):
     def pct(v):
         return "--" if v is None else f"{100 * v:.0f}%"
-    return f"his record: season {pct(leg.get('hr_season'))} of {leg.get('n_season') or 0}, last 8 {pct(leg.get('hr_l8'))}, {leg.get('min_l10') or 0:.0f} min"
+    versus = f", v {leg.get('opp')} {leg.get('h2h_hits')}/{leg.get('h2h_n')}" if leg.get("h2h_n") else ""
+    return (f"his record: season {pct(leg.get('hr_season'))} of {leg.get('n_season') or 0}, last 8 {pct(leg.get('hr_l8'))}"
+            f"{versus}, {leg.get('min_l10') or 0:.0f} min")
 
 
 def backtest(min_train=8, per_night=25, seed=0, budget=140, verbose=True):
@@ -786,7 +826,7 @@ def backtest(min_train=8, per_night=25, seed=0, budget=140, verbose=True):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("date", help="US game date, or 'calibrate' / 'backtest'")
+    ap.add_argument("date", help="US game date, or 'calibrate' / 'backtest' / 'publish' (write the phone feed)")
     ap.add_argument("mode", nargs="?", choices=["ladder", "longshot", "sgm", "big", "bonus", "check", "legs"])
     ap.add_argument("text", nargs="?", help="legs for `check`")
     ap.add_argument("--legs", type=int, default=3)
@@ -800,6 +840,11 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.date == "calibrate":
         calibrate()
+        return 0
+    if a.date == "publish":
+        feed = build_feed()
+        print(f"feed written: {os.path.relpath(FEED_PATH, ROOT)} "
+              + (", ".join(f"{d} ({len(n['legs'])} legs)" for d, n in feed["nights"].items()) or "no coming nights with saved lines"))
         return 0
     if a.date == "backtest":
         backtest()
