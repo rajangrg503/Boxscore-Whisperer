@@ -1,5 +1,6 @@
 streamlit==1.64.0
 pandas
+numpy
 requests
 beautifulsoup4
 nba_api
