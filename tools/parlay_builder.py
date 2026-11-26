@@ -566,7 +566,9 @@ def _rank(slips, cal, same, top, stake="cash", bet_return=False, n=None):
     for legs in slips:
         e = evaluate(legs, cal=cal, same=same, stake=stake, bet_return=bet_return, n=n or RANK_DRAWS, one_short=False)
         out.append((e["roi"], legs, e))
-    out.sort(key=lambda t: (-round(t[0], 2), -sum(context(x) for x in t[1]) / len(t[1])))
+    # Expected return first; among near-equal slips the players' own records decide (20 points of
+    # record counts like 1 point of return, so it only ever separates slips the price can't).
+    out.sort(key=lambda t: -(t[0] + 0.05 * sum(max(context(x), -0.5) for x in t[1]) / len(t[1])))
     final = []
     for _, legs, _ in out[:top]:
         e = evaluate(legs, cal=cal, same=same, stake=stake, bet_return=bet_return)
