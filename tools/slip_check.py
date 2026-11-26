@@ -164,7 +164,8 @@ def blended_stats(pid, day, cols):
     mpg_cur, mpg_prev = role.get("mpg_cur"), role.get("mpg_prev")
 
     def parts(frame):
-        if frame is None or frame.empty or not all(c in frame for c in cols):
+        # No box-score columns (a stat like PTS_FIRST3MIN, 26 Nov 2026): nothing to project from.
+        if not cols or frame is None or frame.empty or not all(c in frame for c in cols):
             return None, None, 0
         stats, n = stats_from_gamelog(frame.drop(columns=["_d"], errors="ignore"))
         if len(cols) == 1:

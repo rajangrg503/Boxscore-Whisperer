@@ -60,6 +60,9 @@ STATS = {
     "FG3M": (["FG3M"], "threes"), "STL": (["STL"], "steals"), "BLK": (["BLK"], "blocks"),
     # Team bets: graded from the night's final score, never projected.
     "WIN": ([], "to win"), "SPREAD": ([], "line"), "TOTAL": ([], "total points"),
+    # Not in the box score: the 20 Nov first-3-minutes experiment (slip f3m20nov). Graded by
+    # hand on the leg ("result"/"actual") from play-by-play, or left unreadable.
+    "PTS_FIRST3MIN": ([], "points in the first 3 minutes"),
 }
 TEAM_MARKETS = ("WIN", "SPREAD", "TOTAL")
 
@@ -623,6 +626,12 @@ def grade_leg(leg):
         return grade_team_leg(leg, out)
     if not leg.get("pid") or leg.get("line") is None or not leg.get("us_date"):
         out["result"] = "unreadable"
+        return out
+    if not STATS.get(leg["stat"], ([], ""))[0]:
+        # A stat the box score doesn't carry (or one we don't know): a result written on the leg by hand,
+        # else unreadable -- never a KeyError that takes the whole Picks tab down (26 Nov 2026).
+        out["result"] = leg.get("result") or "unreadable"
+        out["actual"] = leg.get("actual")
         return out
     day = datetime.date.fromisoformat(leg["us_date"])
     cols = STATS[leg["stat"]][0]
