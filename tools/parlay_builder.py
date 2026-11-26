@@ -57,6 +57,7 @@ SAME_PATH = os.path.join(ROOT, "data", "parlay_same_player_corr.json")
 SINGLE = ("PTS", "REB", "AST", "FG3M")
 STAT_CLASS = {"PTS": "P", "REB": "R", "AST": "A", "FG3M": "T", "PR": "C", "PA": "C", "RA": "C", "PRA": "C"}
 EDGES = [1.0, 1.04, 1.1, 1.2, 1.35, 1.5, 1.75, 2.1, 2.6, 3.5, 5, 8, 15, 60]
+VERSION = 2             # bump when load_legs changes shape (the Journal page caches legs by it)
 BONUS_VALUE = 0.70      # what $1 of bonus bet is worth, from the `bonus` screen (measured, not promised)
 SGM_HAIRCUT = 0.96      # Sportsbet's price for a different-player SGM / product of its legs (365 quotes, 26 Nov)
 _NORMAL = st.NormalDist()
@@ -117,6 +118,15 @@ def _slate_players(date):
     return out
 
 
+def has_slate(date):
+    """True when the night has been projected (Journal > Tonight): that is where Out / day-to-day comes from."""
+    return bool((pc.slate_file(date) or {}).get("games"))
+
+
+NO_SLATE = ("This night hasn't been projected yet, so injuries are NOT checked: a player who is out or "
+            "day-to-day can appear. Project the games in the Journal's Tonight tab, or check the injury list yourself.")
+
+
 def leg_label(leg):
     if leg["kind"] == "alt":
         return f"{leg['player']} {leg['stat']} {leg['th']:g}+"
@@ -140,10 +150,15 @@ def load_legs(date, with_actuals=False):
             logs[pid] = ([x for x in rows if pc._date(x) < day], [x for x in rows if pc._date(x) == day])
         prior, today = logs[pid]
         s = slate.get(pid, {})
+        sides_of_game = game.split("@")
+        team = s.get("team") or roster_team or pc.ALIAS.get(pc.team_from_rows(prior), pc.team_from_rows(prior))
+        if team not in sides_of_game:                 # no slate and a stale team (traded): unknown
+            team = None
         base = {"date": date, "game": game, "player": r["player"], "pid": pid, "stat": r["stat"],
-                "team": s.get("team") or roster_team, "opp": s.get("opp"), "crank": s.get("crank") or 99,
-                "dtd": bool(s.get("dtd")), "outs": s.get("outs"),
-                "min_l10": (st.mean(pc.nf(x["MIN"]) for x in prior[:10]) if prior else None)}
+                "team": team, "opp": s.get("opp") or (next((t for t in sides_of_game if t != team), None) if team else None),
+                "crank": s.get("crank") or 99, "dtd": bool(s.get("dtd")), "outs": s.get("outs"),
+                "min_l10": (st.mean(pc.nf(x["MIN"]) for x in prior[:10]) if prior else None),
+                "_pa": (st.mean(pc.value(x, "PA") for x in prior[:20]) if prior else 0.0)}
         actual = pc.value(today[0], r["stat"]) if (with_actuals and today) else None
         sides = ([("alt", r["threshold"], r.get("price"))] if r["kind"] == "alt"
                  else [("over", r["line"], r.get("over")), ("under", r["line"], r.get("under"))])
@@ -163,6 +178,16 @@ def load_legs(date, with_actuals=False):
                 leg["hit"] = (actual >= th if kind == "alt" else actual > th if kind == "over" else actual < th)
                 leg["push"] = kind != "alt" and actual == th
             legs.append(leg)
+    # No projected slate for this night yet: rank each team's creators by recent points + assists instead.
+    by_team = collections.defaultdict(dict)
+    for x in legs:
+        if x["crank"] == 99 and x["team"]:
+            by_team[(x["game"], x["team"])][x["pid"]] = x["_pa"]
+    for players in by_team.values():
+        order = sorted(players, key=lambda pid: -players[pid])
+        for x in legs:
+            if x["crank"] == 99 and x["pid"] in players:
+                x["crank"] = order.index(x["pid"]) + 1
     return legs
 
 
@@ -481,7 +506,7 @@ def build_sgm(legs, cal, same, game, n_legs=4, lo=1.25, hi=3.6, top=5, bet_retur
     pool = sorted(_best_per_player(pool, lambda x: -context(x)), key=lambda x: -context(x))[:10]
     slips = []
     for combo in itertools.combinations(pool, min(n_legs, len(pool))):
-        teams = collections.Counter(x["team"] for x in combo)
+        teams = collections.Counter(x["team"] or x["pid"] for x in combo)      # unknown team: counts alone
         if max(teams.values()) <= math.ceil(len(combo) / 2):
             slips.append(list(combo))
     return _rank(slips[:600], cal, same, top, bet_return=bet_return)
@@ -500,10 +525,10 @@ def build_big(legs, cal, same, target=500.0, top=3):
         for x in order:
             if price >= target:
                 break
-            if x["team"] in teams:
+            if (x["team"] or x["pid"]) in teams:
                 continue
             slip.append(x)
-            teams.add(x["team"])
+            teams.add(x["team"] or x["pid"])
             price *= x["price"]
         if price >= target and slip not in slips:
             slips.append(slip)
@@ -686,6 +711,8 @@ def main(argv=None):
     if not legs:
         print(f"No saved lines for {a.date} (journal/lines/{a.date}/).")
         return 1
+    if not has_slate(a.date):
+        print("NOTE: " + NO_SLATE)
     print(f"{a.date}: {len(legs)} priced legs, {len({x['game'] for x in legs})} games; calibrated on "
           f"{len(cal.get('fitted_on', []))} nights. Expected return = what $1 comes back as on average, minus $1.")
     if a.mode == "ladder":

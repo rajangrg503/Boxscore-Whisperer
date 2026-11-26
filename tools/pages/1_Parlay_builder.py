@@ -147,7 +147,7 @@ if not cal:
             pb.calibrate(verbose=False)
         st.rerun()
     st.stop()
-fitted = len(cal.get("fitted_on", []))
+fitted = (len(cal.get("fitted_on", [])), pb.VERSION)
 stamp = stamp_for(date)
 legs = legs_for(date, stamp, fitted)
 if not legs:
@@ -155,7 +155,10 @@ if not legs:
     st.stop()
 games = sorted({x["game"] for x in legs})
 st.caption(f"{len(legs):,} priced legs in {len(games)} games · lines saved {stamp[:2]}:{stamp[2:4]} · "
-           f"margins measured on {fitted} nights")
+           f"margins measured on {fitted[0]} nights")
+
+if not pb.has_slate(date):
+    st.warning(pb.NO_SLATE)
 
 check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab = st.tabs(
     ["Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet"])

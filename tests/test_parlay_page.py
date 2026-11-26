@@ -39,6 +39,7 @@ def page(monkeypatch, tmp_path):
     monkeypatch.setattr(pb, "load_cal", lambda: dict(fake.CAL, fitted_on=["a", "b"]))
     monkeypatch.setattr(pb, "load_same", lambda: fake.SAME)
     monkeypatch.setattr(pb, "load_legs", made_up_legs)
+    monkeypatch.setattr(pb, "has_slate", lambda date: False)
     return AppTest.from_file(PAGE, default_timeout=60)
 
 
@@ -50,6 +51,7 @@ def test_page_opens_and_builds_every_tab(page):
     assert len(at.dataframe) >= 5                       # built slips are on the page
     assert any("expected return" in m.value for m in at.markdown)
     assert any("bonus bet comes back as" in m.value for m in at.markdown)
+    assert any("injuries are NOT checked" in w.value for w in at.warning)      # no projected slate for the night
 
 
 def test_add_a_leg_and_check_it(page):

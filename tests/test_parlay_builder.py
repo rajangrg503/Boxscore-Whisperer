@@ -115,3 +115,11 @@ def test_parse_legs_matches_saved_prices_and_accepts_overrides():
     slip, problems = pb.parse_legs("Davion Mitchell PTS 15+; Mitchell AST o7.5 @1.80; Nobody PTS 10+", legs)
     assert [x["price"] for x in slip] == [2.0, 1.80] and slip[1]["kind"] == "over"
     assert len(problems) == 1 and "Nobody" in problems[0]
+
+
+def test_unknown_teams_still_build_a_same_game_multi_and_a_big_ticket():
+    legs = [leg(f"P{k}", "PTS", 20, 2.4, team=None, pid=k, hr_season=0.5, n_season=12, hr_l8=0.5) for k in range(6)]
+    pb._annotate(legs, CAL)
+    assert pb.build_sgm(legs, CAL, SAME, "AAA@BBB", 4, top=2)
+    big = pb.build_big(legs, CAL, SAME, target=50, top=1)
+    assert big and big[0][2]["price"] >= 50
