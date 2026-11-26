@@ -286,7 +286,7 @@ STAT_WORD = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "thre
 def read_table(picks):
     st.dataframe(
         [{"Pick": f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]}" + ("  (day-to-day)" if k.get("dtd") else ""),
-          "Read": f"x{k['mult']:.2f}", "Expects": k["expected"], "Read says": pct(k["share"]),
+          "Read says": pct(k["share"]), "Read adds": f"{100 * k.get('lift', 0):+.0f} pts", "Expects": k["expected"],
           "This season": k.get("season", "--"), "v them": k.get("v_opp", "--"),
           "Why": "  ·  ".join(k["why"]) or "his season, no adjustment",
           "Sportsbet": (f"{k['price']:.2f}" if k.get("price") else "--")} for k in picks],
@@ -310,7 +310,9 @@ with read_tab:
             with st.expander("How this game is decided (team v team)", expanded=True):
                 st.text("\n".join(line.strip() for line in r["shape"]))
         st.subheader("Biggest advantages")
-        st.caption("Upside picks: the highest rung he reaches in 25-60% of his games as read, biggest advantage first.")
+        st.caption("Upside picks: the highest rung he reaches in 25-60% of his games as read. Ordered by 'Read adds': "
+                   "how much the read raises his chance at that number over his plain season. Only stats he "
+                   "produces in volume (10+ points, 4+ rebounds, 3+ assists, 1.5+ threes).")
         read_table([k for k in r["picks"] if k["kind"] == "upside"][:12])
         st.subheader("Floors")
         st.caption("Safe picks: the highest rung he clears in 80%+ of his games as read.")

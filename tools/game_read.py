@@ -19,7 +19,8 @@ So nothing here comes from a price. For each rotation player and each of PTS / R
   3. HIS GAMES this season, each rescaled to tonight's minutes and the read, give the spread:
                  SAFE pick   = the highest rung he clears in 80%+ of those games  ("SGA 15+ points")
                  UPSIDE pick = the highest rung he clears in 25%+ of them        ("Grimes 7+ threes")
-     and the players are ordered by how big the advantage is (the read's multiplier). Beside each pick sits
+     ordered by how much the read moves his chance at that number (against his plain season at his usual
+     minutes), and only stats he produces in volume (10+ points, 4+ rebounds, 3+ assists, 1.5+ threes). Beside each pick sits
      what he ACTUALLY did at that rung this season and v this opponent, so a confident read on thin history
      shows (27 Nov: Brunson 5+ threes read at 39% when he had done it 3 times in 18).
 
@@ -46,17 +47,56 @@ RUNGS = {"PTS": [5, 10, 15, 20, 25, 30, 35, 40, 45, 50], "REB": [2, 4, 6, 8, 10,
          "AST": [2, 4, 6, 8, 10, 12, 14], "FG3M": [1, 2, 3, 4, 5, 6, 7, 8]}
 NAMES = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "threes"}
 SAFE, UPSIDE = 0.80, 0.25
+# Only a stat he produces in real volume is a pick: a 15% lift on 1.3 assists is a fifth of an assist
+# (26 Nov 2026: Ryan Dunn 2+ assists topped DAL@PHX). Floors on the read's expectation.
+VOLUME = {"PTS": 10, "REB": 4, "AST": 3, "FG3M": 1.5}
+MIN_LIFT = 0.03                                         # an upside pick needs the read to add 3+ points of chance
 
 
 def _clip(x, lo, hi):
     return max(lo, min(hi, x))
 
 
+_BODIES = None
+
+
+def _bodies():
+    """{pid: (position, inches, pounds)} from every cached roster."""
+    global _BODIES
+    if _BODIES is None:
+        from engine import archetype as arch
+        from engine.cache import read_payload
+        from engine.team_ids import TEAM_ID_BY_ABBR
+        _BODIES = {}
+        for team_id in set(TEAM_ID_BY_ABBR.values()):
+            for r in (read_payload(f"roster_{team_id}") or {}).get("data") or []:
+                _BODIES[int(r["PLAYER_ID"])] = (str(r.get("POSITION") or ""), arch.inches(r.get("HEIGHT")),
+                                                arch.pounds(r.get("WEIGHT")))
+    return _BODIES
+
+
+def player_type(pid):
+    """guard / wing / big for the opponent-allows read. engine.archetype calls anyone under 206 lb a guard,
+    which made 6-8 forward Risacher a guard (26 Nov 2026); here a listed forward is a wing unless he is a big,
+    a listed guard is a guard, and a G-F is a guard only at 6-5, or 6-6 and light."""
+    pos, tall, heavy = _bodies().get(int(pid), ("", 0, 0))
+    if not tall:
+        import opp_allows as oa
+        return oa.kind(pid)
+    if pos in ("C", "C-F", "F-C") or (tall > 81 and heavy >= 225) or (tall >= 81 and heavy >= 232):
+        return "big"
+    if pos.startswith("F"):
+        return "wing"
+    if pos == "G" or tall <= 77 or (tall <= 78 and heavy < 206):
+        return "guard"
+    return "wing"
+
+
 def opponent_allows(season):
     """{stat: {opp: {kind: (ratio, n)}}}: what each team gives up to guards / wings / bigs this season."""
     import opp_allows as oa
     logs = oa.logs(season)
-    return {stat: oa.allows_all(stat, L=logs) for stat in STATS}, oa.kind
+    return {stat: oa.allows_all(stat, L=logs, kind_fn=player_type) for stat in STATS}, player_type
 
 
 def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None, kind=None):
@@ -102,6 +142,14 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
         if len(games) < 5:
             continue
         share = lambda rung: sum(g >= rung for g in games) / len(games)  # noqa: E731
+        # What the read adds: his chance at the rung as read minus his plain season (usual minutes, no
+        # adjustment). Smoothed with a normal curve, because counting rescaled games against a rung jumps when
+        # a 5% nudge carries several 1.9s over 2 (26 Nov 2026: Clayton 2+ threes, x1.05, showed +15 points).
+        plain = [pc.value(x, stat) / pc.nf(x["MIN"]) * usual for x in season if pc.nf(x["MIN"]) >= 15]
+        mu_r, sd_r = st.mean(games), (st.pstdev(games) or 1.0)
+        mu_p, sd_p = st.mean(plain), (st.pstdev(plain) or 1.0)
+        adds = lambda rung: None if rung is None else round(  # noqa: E731
+            pb._norm_cdf((mu_r - rung + 0.5) / sd_r) - pb._norm_cdf((mu_p - rung + 0.5) / sd_p), 3)
         safe = max((r for r in RUNGS[stat] if share(r) >= SAFE), default=None)
         upside = max((r for r in RUNGS[stat] if UPSIDE <= share(r) <= 0.60 and (safe is None or r > safe)), default=None)
         raw = [pc.value(x, stat) for x in season]       # what he actually did, untouched by the read
@@ -114,6 +162,7 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
         out["stats"][stat] = {"expected": round(per_min * minutes * mult, 1), "season": round(per_min * usual, 1),
                               "mult": round(mult, 3), "why": why,
                               "safe_record": record(safe), "upside_record": record(upside),
+                              "safe_lift": adds(safe), "upside_lift": adds(upside),
                               "safe": safe, "safe_share": round(share(safe), 2) if safe else None,
                               "upside": upside, "upside_share": round(share(upside), 2) if upside else None,
                               "best": round(max(games), 0)}
@@ -185,18 +234,22 @@ def read_night(date, legs=None, game=None):
         picks = []
         for p in players:
             for stat, s in p["stats"].items():
-                for kind_, rung, share, rec in (("safe", s["safe"], s["safe_share"], s["safe_record"]),
-                                                ("upside", s["upside"], s["upside_share"], s["upside_record"])):
+                if s["expected"] < VOLUME[stat]:
+                    continue                            # not a stat he produces in volume
+                for kind_, rung, share, rec, lift in (
+                        ("safe", s["safe"], s["safe_share"], s["safe_record"], s.get("safe_lift")),
+                        ("upside", s["upside"], s["upside_share"], s["upside_record"], s.get("upside_lift"))):
                     if rung is None or (kind_ == "safe" and rung == RUNGS[stat][0]):
                         continue                        # a floor at the lowest rung says nothing
-                    if kind_ == "upside" and s["mult"] < 1.05:
-                        continue                        # upside only where the read sees an advantage
+                    if kind_ == "upside" and (lift or 0) < MIN_LIFT:
+                        continue                        # upside only where the read moves his chance
                     picks.append({"kind": kind_, "player": p["player"], "pid": p["pid"], "team": p["team"], "stat": stat,
                                   "rung": rung, "share": share, "mult": s["mult"], "expected": s["expected"],
                                   "why": s["why"], "dtd": p["dtd"], "season": rec["season"], "v_opp": rec["v_opp"],
+                                  "lift": lift or 0.0,
                                   "price": price.get((p["pid"], stat, float(rung)))
                                   or price.get((p["pid"], stat, rung))})
-        picks.sort(key=lambda k: (-k["mult"], -k["share"]))
+        picks.sort(key=lambda k: (-k["lift"], -k["share"]))      # most chance added by the read first
         away, home = g.split("@")
         out[g] = {"shape": game_shape(away, home), "players": sorted(players, key=lambda p: -p["minutes"]), "picks": picks}
     return out
@@ -224,7 +277,7 @@ def main(argv=None):
             print(f"\n  {title}")
             for k in rows:
                 price = f"Sportsbet {k['price']:.2f}" if k["price"] else "no price saved"
-                print(f"    {pick_label(k):34s} read {100 * k['share']:.0f}% | actually {k['season']} this season, {k['v_opp']} v them"
+                print(f"    {pick_label(k):34s} read {100 * k['share']:.0f}% ({100 * k['lift']:+.0f} pts) | actually {k['season']} this season, {k['v_opp']} v them"
                       f" | expects {k['expected']:g} | read x{k['mult']:.2f} | {price}{' | DAY-TO-DAY' if k['dtd'] else ''}")
                 for w in k["why"]:
                     print(f"        - {w}")

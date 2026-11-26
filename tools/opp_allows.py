@@ -86,8 +86,9 @@ def allows(opp, stat, min_min=20.0, season="2026-27", L=None):
     return {k: {"ratio": st.mean(x[0] for x in v), "n": len(v)} for k, v in by.items()}
 
 
-def allows_all(stat, min_min=20.0, season="2026-27", L=None):
-    """One pass over the logs: {opp: {kind: (ratio, n)}} for every team."""
+def allows_all(stat, min_min=20.0, season="2026-27", L=None, kind_fn=None):
+    """One pass over the logs: {opp: {kind: (ratio, n)}} for every team. kind_fn: another way to sort
+    players into guards / wings / bigs (tools/game_read.player_type)."""
     L = L or logs(season)
     cols = COLS[stat]
     by = defaultdict(lambda: defaultdict(list))
@@ -98,7 +99,7 @@ def allows_all(stat, min_min=20.0, season="2026-27", L=None):
         rate = sum(sum(nf(r.get(c)) for c in cols) for r in rows) / mins
         if rate <= 0:
             continue
-        k = kind(pid)
+        k = (kind_fn or kind)(pid)
         for r in rows:
             if nf(r["MIN"]) < min_min:
                 continue

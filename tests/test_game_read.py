@@ -85,3 +85,24 @@ def test_a_game_with_no_sportsbet_lines_is_still_read_from_the_rosters(his_games
     assert night["AAA@BBB"]["picks"] and all(k["price"] is None for k in night["AAA@BBB"]["picks"])
     monkeypatch.setattr(gr.pb, "load_injuries", lambda date: {"teams": {"AAA": {"out": [{"pid": 1, "name": "A One"}], "dtd": []}}})
     assert gr.read_night(DAY.isoformat(), legs=[]) == {}                  # a player listed out is not read
+
+
+def test_player_types_follow_the_listed_position(monkeypatch):
+    bodies = {1: ("F", 80, 200), 2: ("F", 77, 205), 3: ("G", 79, 199), 4: ("G-F", 79, 225), 5: ("C", 83, 250),
+              6: ("F", 82, 205), 7: ("F", 81, 240), 8: ("G-F", 78, 195)}
+    monkeypatch.setattr(gr, "_bodies", lambda: bodies)
+    assert [gr.player_type(p) for p in range(1, 9)] == ["wing", "wing", "guard", "wing", "big", "wing", "big", "guard"]
+
+
+def test_picks_are_ranked_by_what_the_read_adds_and_need_volume(his_games, monkeypatch):
+    monkeypatch.setattr(gr.pb, "night_games", lambda date: ["AAA@BBB"])
+    monkeypatch.setattr(gr.pb, "load_injuries", lambda date: {})
+    monkeypatch.setattr(gr, "_roster", lambda team: [("A One", 1)] if team == "AAA" else [])
+    monkeypatch.setattr(gr, "opponent_allows", lambda season: (None, None))
+    monkeypatch.setattr(gr, "game_shape", lambda away, home: [])
+    picks = gr.read_night(DAY.isoformat(), legs=[])["AAA@BBB"]["picks"]
+    assert picks and all("lift" in k for k in picks)
+    assert [k["lift"] for k in picks] == sorted((k["lift"] for k in picks), reverse=True)
+    assert all(k["lift"] >= gr.MIN_LIFT for k in picks if k["kind"] == "upside")
+    read = gr.player_read(1, "A One", "AAA", "BBB", DAY)
+    assert all(read["stats"][k["stat"]]["expected"] >= gr.VOLUME[k["stat"]] for k in picks)
