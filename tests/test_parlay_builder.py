@@ -198,6 +198,39 @@ def test_reads_for_and_against_a_leg():
     assert pb.reads(leg("A One", crank=1, opp="BBB", h2h_ratio=1.3, h2h_ratio_n=3))[0] == []   # three games: too few
     under = leg("A One", "PTS", 20, kind="under", opp="BBB", h2h_ratio=1.21, h2h_ratio_n=7)
     assert pb.reads(under) == ([], ["v BBB: 1.21x his usual rate over 7 games"])               # a boost argues against the under
+    hot, cold = leg("A One", form=1.3), leg("A One", form=0.8)
+    assert pb.read_items(hot)[0][:2] == ("hot", "against") and pb.read_items(cold)[0][:2] == ("cold", "for")
+    assert pb.read_items(dict(hot, kind="under"))[0][:2] == ("hot", "for")                     # fade the streak
+
+
+def test_injury_list_marks_out_and_day_to_day_and_feeds_the_reads(tmp_path, monkeypatch):
+    monkeypatch.setattr(pb, "INJ_DIR", str(tmp_path))
+    games = [{"away": "AAA", "home": "BBB", "injuries": [
+        {"team": "AAA", "name": "A Star", "nba_name": "A Star", "player_id": 5, "status": "Out", "severity": "out"},
+        {"team": "AAA", "name": "A Guard", "nba_name": "A Guard", "player_id": 6, "status": "Day-To-Day", "severity": "questionable"},
+        {"team": "BBB", "name": "B Big", "nba_name": "B Big", "player_id": 7, "status": "Out", "severity": "out"}]}]
+    saved = pb.save_injuries("2026-11-27", collect=lambda date: games)
+    assert saved["games"] == ["AAA@BBB"] and pb.has_slate("2026-11-27")
+    teams = pb.load_injuries("2026-11-27")["teams"]
+    assert [e["name"] for e in teams["AAA"]["out"]] == ["A Star"] and [e["pid"] for e in teams["AAA"]["dtd"]] == [6]
+    assert not pb.eligible(leg("A Star", is_out=True), "single") and not pb.eligible(leg("A Guard", dtd=True), "single")
+
+
+def test_scoreboard_keeps_each_reads_record(monkeypatch):
+    night = []
+    for k in range(40):
+        night.append(leg(f"H{k}", "PTS", 20, 2.0, pid=k, hit=(k % 4 == 0), read_codes=["hot"]))          # 25% land
+        night.append(leg(f"C{k}", "PTS", 20, 2.0, pid=100 + k, hit=(k % 4 != 3), read_codes=["cold"]))   # 75% land
+        night.append(leg(f"C{k}", "PTS", 30, 3.9, pid=100 + k, hit=False, read_codes=["cold"]))          # a second rung: not counted
+        night.append(leg(f"K{k}", "PTS", 20, 2.0, pid=200 + k, hit=True, read_codes=["karma+"]))         # before karma's cut-off
+    monkeypatch.setattr(pb, "graded_night", lambda d: night)
+    rows = {r["read"]: r for r in pb.scoreboard(cal=CAL, nights=["2026-11-10", "2026-11-11"])}
+    assert rows["All legs"]["n"] == 240 and rows["Running hot"]["n"] == 80
+    assert rows["Running hot"]["actual"] == pytest.approx(0.25) and rows["Running hot"]["roi"] == pytest.approx(-0.5)
+    assert rows["Running cold"]["actual"] == pytest.approx(0.75) and rows["Running cold"]["predicted"] == pytest.approx(0.46, abs=0.01)
+    assert "karma: his stat" not in rows and rows["No read"]["n"] == 80                                  # ungraded, so "no read"
+    assert rows["A read against"]["n"] == 80 and rows["Any read for, none against"]["n"] == 80
+
 
 
 def test_reads_break_ties_between_equal_priced_legs():

@@ -30,7 +30,8 @@ karma can read, not a proven edge.
   python3 tools/parlay_builder.py 2026-11-27 bonus
   python3 tools/parlay_builder.py 2026-11-27 check "Davion Mitchell PTS 15+; Luka Doncic AST 8+ @2.40" [--price 9.5]
   python3 tools/parlay_builder.py backtest
-  bash tools/publish_builder.sh                             # save lines, write the phone feed, push
+  python3 tools/parlay_builder.py scoreboard                # the record of each read, and of the builder's own slips
+  bash tools/publish_builder.sh                             # lines + injuries + log + phone feed, then push
 
 A leg in `check` is "<player> <STAT> <N>+" (alt rung), "<player> <STAT> o<line>" or
 "u<line>"; add "@price" to override the saved price. It shows evidence; karma decides.
@@ -58,7 +59,7 @@ SAME_PATH = os.path.join(ROOT, "data", "parlay_same_player_corr.json")
 SINGLE = ("PTS", "REB", "AST", "FG3M")
 STAT_CLASS = {"PTS": "P", "REB": "R", "AST": "A", "FG3M": "T", "PR": "C", "PA": "C", "RA": "C", "PRA": "C"}
 EDGES = [1.0, 1.04, 1.1, 1.2, 1.35, 1.5, 1.75, 2.1, 2.6, 3.5, 5, 8, 15, 60]
-VERSION = 5             # bump when load_legs changes shape (the Journal page caches legs by it)
+VERSION = 6             # bump when load_legs changes shape (the Journal page caches legs by it)
 BONUS_VALUE = 0.70      # what $1 of bonus bet is worth, from the `bonus` screen (measured, not promised)
 SGM_HAIRCUT = 0.96      # Sportsbet's price for a different-player SGM / product of its legs (365 quotes, 26 Nov)
 _NORMAL = st.NormalDist()
@@ -121,13 +122,45 @@ def _slate_players(date):
     return out
 
 
+INJ_DIR = os.path.join(ROOT, "journal", "_cache", "parlay_injuries")
+
+
+def save_injuries(date, collect=None):
+    """Read ESPN's injury list for the night (from the Mac) and keep who is out and who is day-to-day.
+    Runs whenever lines are saved or published, so the builder never waits for the night to be projected."""
+    if collect is None:
+        import availability as av
+        collect = av.collect
+    games = collect(date.replace("-", ""))
+    teams = {}
+    for g in games:
+        for row in g.get("injuries", []):
+            side = teams.setdefault(row.get("team"), {"out": [], "dtd": []})
+            entry = {"name": row.get("nba_name") or row.get("name"), "pid": row.get("player_id"), "status": row.get("status")}
+            side["out" if row.get("severity") == "out" else "dtd"].append(entry)
+    from zoneinfo import ZoneInfo
+    payload = {"date": date, "made_at": dt.datetime.now(ZoneInfo("Australia/Sydney")).isoformat(timespec="minutes"),
+               "games": [f"{g['away']}@{g['home']}" for g in games], "teams": teams}
+    os.makedirs(INJ_DIR, exist_ok=True)
+    json.dump(payload, open(os.path.join(INJ_DIR, f"{date}.json"), "w"), indent=1)
+    return payload
+
+
+def load_injuries(date):
+    try:
+        return json.load(open(os.path.join(INJ_DIR, f"{date}.json")))
+    except (OSError, ValueError):
+        return {}
+
+
 def has_slate(date):
-    """True when the night has been projected (Journal > Tonight): that is where Out / day-to-day comes from."""
-    return bool((pc.slate_file(date) or {}).get("games"))
+    """True when injuries are known for the night: the injury list was read (save_injuries), or the night
+    was projected in the Journal's Tonight tab."""
+    return bool(load_injuries(date)) or bool((pc.slate_file(date) or {}).get("games"))
 
 
-NO_SLATE = ("This night hasn't been projected yet, so injuries are NOT checked: a player who is out or "
-            "day-to-day can appear. Project the games in the Journal's Tonight tab, or check the injury list yourself.")
+NO_SLATE = ("Injuries have NOT been read for this night yet, so a player who is out or day-to-day can appear. "
+            "Press Save Sportsbet's lines (Journal) or run `bash tools/publish_builder.sh` on the Mac.")
 
 
 def leg_label(leg):
@@ -156,31 +189,50 @@ def _h2h_ratios(prior, opp, stat):
     return ratios
 
 
-def reads(leg):
-    """The reasons for and against a leg that come from OUR reads rather than the price: head-to-head
-    history, who is out, and karma's own notes. Returns (for, against) as short sentences. They order
-    equal-priced legs and can filter the lists; over 23 nights they have not been shown to beat the price."""
-    good, bad = [], []
+HOT, COLD = 1.20, 0.85                  # last-10 average v season average
+
+
+def read_items(leg):
+    """[(code, 'for' | 'against', sentence)]: what OUR reads say about a leg, beyond the price.
+    Codes: h2h+ h2h- usage opp_short karma+ karma- motor hot cold."""
+    items = []
     over = leg["kind"] != "under"
+    flip = {"for": "against", "against": "for"}
+    add = lambda code, side, text: items.append((code, side if over else flip[side], text))  # noqa: E731
     n, ratio = leg.get("h2h_ratio_n") or 0, leg.get("h2h_ratio")
     if ratio is not None and n >= 6 and ratio >= H2H_BOOST:
-        (good if over else bad).append(f"v {leg.get('opp')}: {ratio:.2f}x his usual rate over {n} games")
+        add("h2h+", "for", f"v {leg.get('opp')}: {ratio:.2f}x his usual rate over {n} games")
     if ratio is not None and n >= 4 and ratio <= H2H_VETO:
-        (bad if over else good).append(f"v {leg.get('opp')}: only {ratio:.2f}x his usual rate over {n} games")
+        add("h2h-", "against", f"v {leg.get('opp')}: only {ratio:.2f}x his usual rate over {n} games")
+    form = leg.get("form")
+    if form is not None and form >= HOT:
+        add("hot", "against", f"running hot: last 10 at {form:.2f}x his season average (overs on hot players lost most)")
+    if form is not None and form <= COLD:
+        add("cold", "for", f"running cold: last 10 at {form:.2f}x his season average (the market over-corrects)")
+    if not over:
+        return items                                   # the rest are reasons to expect more from him
     outs, opp_outs = leg.get("out_names") or [], leg.get("opp_out_names") or []
-    if over and outs and leg.get("crank", 99) <= 3:
-        good.append(f"{len(outs)} teammate{'s' if len(outs) != 1 else ''} out ({', '.join(outs[:3])}) and he is a top-3 creator")
-    if over and len(opp_outs) >= 2:
-        good.append(f"{leg.get('opp')} missing {len(opp_outs)} ({', '.join(opp_outs[:3])})")
+    if outs and leg.get("crank", 99) <= 3:
+        items.append(("usage", "for", f"{len(outs)} teammate{'s' if len(outs) != 1 else ''} out "
+                                      f"({', '.join(outs[:3])}) and he is a top-3 creator"))
+    if len(opp_outs) >= 2:
+        items.append(("opp_short", "for", f"{leg.get('opp')} missing {len(opp_outs)} ({', '.join(opp_outs[:3])})"))
     bet_as = leg.get("karma_bet_as")
-    if bet_as and over:
+    if bet_as:
         if leg["stat"] in [b.strip().upper() for b in bet_as.replace(",", "/").split("/")]:
-            good.append(f"karma: bet him as {bet_as}")
+            items.append(("karma+", "for", f"karma: bet him as {bet_as}"))
         else:
-            bad.append(f"karma: bet him as {bet_as}, not {leg['stat']}")
-    if over and "motor" in (leg.get("karma_tags") or []) and outs:
-        good.append("karma: a motor player with a teammate out")
-    return good, bad
+            items.append(("karma-", "against", f"karma: bet him as {bet_as}, not {leg['stat']}"))
+    if "motor" in (leg.get("karma_tags") or []) and outs:
+        items.append(("motor", "for", "karma: a motor player with a teammate out"))
+    return items
+
+
+def reads(leg):
+    """(reasons for, reasons against) as short sentences. They order equal-priced legs and can filter the
+    lists; `scoreboard` keeps their record, and so far they have not been shown to beat the price."""
+    items = read_items(leg)
+    return [t for _, side, t in items if side == "for"], [t for _, side, t in items if side == "against"]
 
 
 def _karma_notes():
@@ -195,6 +247,7 @@ def load_legs(date, with_actuals=False):
     """Every priced leg for a US date: alt rungs, and both sides of each over/under."""
     resolve = _resolver()
     slate = _slate_players(date)
+    injuries = load_injuries(date).get("teams")       # fresher than the projected slate when it exists
     notes = _karma_notes()
     day = dt.date.fromisoformat(date)
     logs, legs, ratio_memo = {}, [], {}
@@ -214,8 +267,15 @@ def load_legs(date, with_actuals=False):
         team = s.get("team") or roster_team or pc.ALIAS.get(pc.team_from_rows(prior), pc.team_from_rows(prior))
         if team not in sides_of_game:                 # no slate and a stale team (traded): unknown
             team = None
+        opp = s.get("opp") or (next((t for t in sides_of_game if t != team), None) if team else None)
+        if injuries is not None:
+            mine, theirs = injuries.get(team, {}), injuries.get(opp, {})
+            listed = lambda rows: any(e.get("pid") == pid or pc.norm(e.get("name") or "") == pc.norm(r["player"]) for e in rows)  # noqa: E731
+            s = dict(s, dtd=listed(mine.get("dtd", [])), is_out=listed(mine.get("out", [])),
+                     out_names=[e["name"] for e in mine.get("out", [])], opp_out_names=[e["name"] for e in theirs.get("out", [])],
+                     outs=len(mine.get("out", [])))
         base = {"date": date, "game": game, "player": r["player"], "pid": pid, "stat": r["stat"],
-                "team": team, "opp": s.get("opp") or (next((t for t in sides_of_game if t != team), None) if team else None),
+                "team": team, "opp": opp, "is_out": bool(s.get("is_out")),
                 "crank": s.get("crank") or 99, "dtd": bool(s.get("dtd")), "outs": s.get("outs"),
                 "min_l10": (st.mean(pc.nf(x["MIN"]) for x in prior[:10]) if prior else None),
                 "_pa": (st.mean(pc.value(x, "PA") for x in prior[:20]) if prior else 0.0),
@@ -227,6 +287,9 @@ def load_legs(date, with_actuals=False):
         ratios = ratio_memo[(pid, r["stat"])]
         base["h2h_ratio_n"] = len(ratios)
         base["h2h_ratio"] = (sum(ratios) / len(ratios)) if ratios else None
+        this_season = [x for x in prior if pc.season_of(pc._date(x)) == pc.season_of(day)]
+        season_mean = st.mean(pc.value(x, r["stat"]) for x in this_season) if len(this_season) >= 8 else 0
+        base["form"] = (st.mean(pc.value(x, r["stat"]) for x in prior[:10]) / season_mean) if season_mean > 0 else None
         actual = pc.value(today[0], r["stat"]) if (with_actuals and today) else None
         sides = ([("alt", r["threshold"], r.get("price"))] if r["kind"] == "alt"
                  else [("over", r["line"], r.get("over")), ("under", r["line"], r.get("under"))])
@@ -261,6 +324,7 @@ def load_legs(date, with_actuals=False):
                 x["crank"] = order.index(x["pid"]) + 1
     for x in legs:
         x["reads_for"], x["reads_against"] = reads(x)
+        x["read_codes"] = [code for code, _, _ in read_items(x)]
     return legs
 
 
@@ -360,7 +424,7 @@ def fit_between(legs_by_night):
 def graded_night(date):
     """A finished night's legs with results; cached locally once the night is two days old."""
     import pickle
-    path = os.path.join(ROOT, "journal", "_cache", "parlay_nights", f"{date}.pkl")
+    path = os.path.join(ROOT, "journal", "_cache", "parlay_nights", f"v{VERSION}_{date}.pkl")
     if os.path.exists(path):
         return pickle.load(open(path, "rb"))
     legs = [x for x in load_legs(date, with_actuals=True) if "hit" in x]
@@ -405,16 +469,16 @@ def build_feed(dates=None, path=FEED_PATH):
     publish this with the public app so the builder works away from the Mac."""
     import gzip
     from zoneinfo import ZoneInfo
-    today = dt.datetime.now(ZoneInfo("America/New_York")).date().isoformat()
     nights = {}
-    for d in dates or [d for d in line_nights() if d >= today]:
+    for d in dates or coming_nights():
         legs = load_legs(d)
         if legs:
             nights[d] = {"has_slate": has_slate(d),
                          "legs": [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in x.items()
                                    if k not in _FEED_DROP} for x in legs]}
     feed = {"made_at": dt.datetime.now(ZoneInfo("Australia/Sydney")).isoformat(timespec="minutes"),
-            "version": VERSION, "cal": load_cal(), "nights": nights}
+            "version": VERSION, "cal": load_cal(), "nights": nights,
+            "scoreboard": {"reads": scoreboard(), "slips": log_results()}}
     with gzip.open(path, "wt", encoding="utf-8") as f:
         json.dump(feed, f, separators=(",", ":"))
     return feed
@@ -588,8 +652,8 @@ def est_price(legs, cal=None, same=None):
 def eligible(leg, purpose="multi"):
     """karma's standing rules for a leg in a built slip (purpose: 'single', 'multi', 'sgm';
     'play' = playing around: any X+ rung on a 20+ minute player who isn't day-to-day)."""
-    if leg["kind"] != "alt" or leg.get("dtd"):
-        return False                                   # built slips use X+ rungs; no day-to-day players
+    if leg["kind"] != "alt" or leg.get("dtd") or leg.get("is_out"):
+        return False                                   # built slips use X+ rungs; nobody out or day-to-day
     if purpose == "play":
         return (leg.get("min_l10") or 0) >= 20
     if leg["stat"] == "FG3M" and purpose != "single":
@@ -937,10 +1001,134 @@ def backtest(min_train=8, per_night=25, seed=0, budget=140, verbose=True):
     return out
 
 
+# ---------------------------------------------------------------- keeping score
+
+READ_NAMES = {"h2h+": "Head-to-head boost", "h2h-": "Head-to-head veto", "usage": "Top-3 creator, teammate out",
+              "opp_short": "Opponent missing 2+", "hot": "Running hot", "cold": "Running cold",
+              "karma+": "karma: his stat", "karma-": "karma: not his stat", "motor": "karma: motor, teammate out"}
+FOR_CODES = {"h2h+", "usage", "opp_short", "cold", "karma+", "motor"}
+KARMA_FROM = "2026-11-27"      # karma's notes were written during November: only grade them going forward
+LOG_DIR = os.path.join(ROOT, "journal", "_cache", "parlay_log")
+
+
+def coming_nights():
+    from zoneinfo import ZoneInfo
+    today = dt.datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+    return [d for d in line_nights() if d >= today]
+
+
+def _summarise(by_night, rnd):
+    """{night: [n, sum of chances, hits, sum of returns]} -> one scoreboard row."""
+    n = sum(v[0] for v in by_night.values())
+    if not n:
+        return None
+    nights, boots = list(by_night), []
+    for _ in range(300):
+        pick = [by_night[k] for k in rnd.choices(nights, k=len(nights))]
+        boots.append(sum(v[3] for v in pick) / max(sum(v[0] for v in pick), 1) - 1)
+    boots.sort()
+    return {"n": n, "nights": len(nights), "predicted": sum(v[1] for v in by_night.values()) / n,
+            "actual": sum(v[2] for v in by_night.values()) / n, "roi": sum(v[3] for v in by_night.values()) / n - 1,
+            "lo": boots[15], "hi": boots[284]}
+
+
+def scoreboard(lo=1.3, hi=4.0, cal=None, nights=None):
+    """How legs carrying each read have actually done, over every graded night: one X+ rung per player and
+    stat (the one nearest 2.00), 20+ minute players, priced lo-hi. This is the record that decides whether
+    a read earns its place in the ranking."""
+    cal = cal if cal is not None else load_cal()
+    rnd = random.Random(0)
+    groups = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0.0, 0, 0.0]))
+    for d in nights or line_nights():
+        best = {}
+        for x in graded_night(d):
+            if (x["kind"] != "alt" or x.get("push") or "hit" not in x or not lo <= x["price"] <= hi
+                    or (x.get("min_l10") or 0) < 20 or x.get("dtd")):
+                continue
+            key = (x["pid"], x["stat"])
+            if key not in best or abs(math.log(x["price"] / 2)) < abs(math.log(best[key]["price"] / 2)):
+                best[key] = x
+        for x in best.values():
+            codes = [c for c in x.get("read_codes") or [] if d >= KARMA_FROM or c not in ("karma+", "karma-", "motor")]
+            names = ["All legs"] + [READ_NAMES[c] for c in codes]
+            good, bad = [c for c in codes if c in FOR_CODES], [c for c in codes if c not in FOR_CODES]
+            names.append("Any read for, none against" if good and not bad else "A read against" if bad else "No read")
+            for name in names:
+                g = groups[name][d]
+                g[0] += 1
+                g[1] += fair_prob(x["price"], x["cls"], cal)
+                g[2] += x["hit"]
+                g[3] += x["hit"] * x["price"]
+    order = ["All legs", "No read", "Any read for, none against", "A read against"] + list(READ_NAMES.values())
+    return [dict(_summarise(groups[name], rnd), read=name) for name in order if groups.get(name)]
+
+
+def log_night(date, cal=None, same=None):
+    """Write down what the builder suggests for a night (before the games), so it can be graded afterwards."""
+    cal, same = cal if cal is not None else load_cal(), same if same is not None else load_same()
+    legs = _annotate(load_legs(date), cal)
+    if not legs:
+        return None
+    built = [("Ladder single", t) for t in build_ladder(legs, cal, same, top=5)]
+    built += [("Longshot 3", t) for t in build_longshot(legs, cal, same, 3, top=3)]
+    for g in sorted({x["game"] for x in legs}):
+        built += [("Same-game multi, 4 legs", t) for t in build_sgm(legs, cal, same, g, 4, top=1)]
+    built += [("Big ticket 500", t) for t in build_big(legs, cal, same, 500, top=1)]
+    built += [("Bonus-bet slip", t) for t in build_bonus(legs, cal, same, top=3)]
+    from zoneinfo import ZoneInfo
+    keep = ("player", "pid", "stat", "kind", "th", "price", "game", "team", "read_codes")
+    entry = {"date": date, "version": VERSION, "injuries_known": has_slate(date),
+             "made_at": dt.datetime.now(ZoneInfo("Australia/Sydney")).isoformat(timespec="minutes"),
+             "slips": [{"type": name, "price": round(e["price"], 2), "chance": round(e["chance"], 5),
+                        "legs": [{k: x.get(k) for k in keep} for x in slip]} for name, (_, slip, e) in built]}
+    os.makedirs(LOG_DIR, exist_ok=True)
+    json.dump(entry, open(os.path.join(LOG_DIR, f"{date}.json"), "w"), indent=1)
+    return entry
+
+
+def log_results():
+    """Grade every logged night that has finished: by slip type, how often the builder said it would land,
+    how often it did, and what $1 came back as. A slip with a player who didn't play is left out (void)."""
+    rnd = random.Random(0)
+    groups = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0.0, 0, 0.0]))
+    for f in sorted(glob.glob(os.path.join(LOG_DIR, "*.json"))):
+        try:
+            entry = json.load(open(f))
+        except (OSError, ValueError):
+            continue
+        actual = {(x["pid"], x["stat"]): x["actual"] for x in graded_night(entry["date"]) if "actual" in x}
+        if not actual:
+            continue
+        for slip in entry["slips"]:
+            if any((x["pid"], x["stat"]) not in actual for x in slip["legs"]):
+                continue
+            won = all((actual[(x["pid"], x["stat"])] >= x["th"]) if x["kind"] == "alt" else
+                      (actual[(x["pid"], x["stat"])] > x["th"]) if x["kind"] == "over" else
+                      (actual[(x["pid"], x["stat"])] < x["th"]) for x in slip["legs"])
+            g = groups[slip["type"]][entry["date"]]
+            g[0] += 1
+            g[1] += slip["chance"]
+            g[2] += won
+            g[3] += won * slip["price"]
+    return [dict(_summarise(by_night, rnd), read=name) for name, by_night in groups.items()]
+
+
+def print_scoreboard():
+    def table(title, rows, unit):
+        print(f"\n== {title}")
+        if not rows:
+            print("  nothing graded yet")
+        for r in rows:
+            print(f"  {r['read']:30s} {unit} {r['n']:5d}  nights {r['nights']:3d}  predicted {100 * r['predicted']:5.1f}%"
+                  f"  actual {100 * r['actual']:5.1f}%  return {100 * r['roi']:+5.0f}% [{100 * r['lo']:+.0f},{100 * r['hi']:+.0f}]")
+    table("Reads: legs priced 1.3-4.0, one rung per player and stat", scoreboard(), "legs ")
+    table("The builder's own suggestions (logged before the games)", log_results(), "slips")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("date", help="US game date, or 'calibrate' / 'backtest' / 'publish' (write the phone feed)")
-    ap.add_argument("mode", nargs="?", choices=["ladder", "longshot", "sgm", "big", "bonus", "check", "legs"])
+    ap.add_argument("date", help="US game date, or: calibrate | backtest | injuries | log | scoreboard | publish")
+    ap.add_argument("mode", nargs="?", help="ladder | longshot | sgm | big | bonus | check | legs")
     ap.add_argument("text", nargs="?", help="legs for `check`")
     ap.add_argument("--legs", type=int, default=3)
     ap.add_argument("--game")
@@ -953,6 +1141,24 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.date == "calibrate":
         calibrate()
+        return 0
+    if a.date == "injuries":
+        import availability as av
+        for d in ([a.mode] if a.mode and len(a.mode) == 10 else coming_nights()):
+            try:
+                got = save_injuries(d)
+                out = sum(len(t["out"]) for t in got["teams"].values())
+                print(f"{d}: injuries read for {len(got['games'])} games ({out} out)")
+            except av.Unreachable as error:
+                print(f"{d}: couldn't reach ESPN for the injury list ({str(error).splitlines()[0]})")
+        return 0
+    if a.date == "log":
+        for d in coming_nights():
+            entry = log_night(d)
+            print(f"{d}: logged {len(entry['slips'])} suggested slips" if entry else f"{d}: no saved lines")
+        return 0
+    if a.date == "scoreboard":
+        print_scoreboard()
         return 0
     if a.date == "publish":
         feed = build_feed()

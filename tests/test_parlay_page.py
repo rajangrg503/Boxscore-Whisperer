@@ -42,6 +42,9 @@ def page(monkeypatch, tmp_path):
     monkeypatch.setattr(pb, "load_same", lambda: fake.SAME)
     monkeypatch.setattr(pb, "load_legs", made_up_legs)
     monkeypatch.setattr(pb, "has_slate", lambda date: False)
+    monkeypatch.setattr(pb, "scoreboard", lambda **k: [dict(read="All legs", n=100, nights=5, predicted=0.46, actual=0.45,
+                                                           roi=-0.1, lo=-0.2, hi=0.0)])
+    monkeypatch.setattr(pb, "log_results", lambda: [])
     return AppTest.from_file(PAGE, default_timeout=60)
 
 
@@ -49,11 +52,12 @@ def test_page_opens_and_builds_every_tab(page):
     at = page.run()
     assert not at.exception
     assert at.title[0].value == "Parlay builder"
-    assert [t.label for t in at.tabs] == ["Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet"]
+    assert [t.label for t in at.tabs] == ["Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet",
+                                          "Scoreboard"]
     assert len(at.dataframe) >= 5                       # built slips are on the page
     assert any("expected return" in m.value for m in at.markdown)
     assert any("bonus bet comes back as" in m.value for m in at.markdown)
-    assert any("injuries are NOT checked" in w.value for w in at.warning)      # no projected slate for the night
+    assert any("NOT been read" in w.value for w in at.warning)                 # injuries unknown for the night
 
 
 def test_add_a_leg_and_check_it(page):
@@ -147,5 +151,5 @@ def test_only_legs_with_a_read_filters_the_built_slips(page):
     assert "Reads" in at.dataframe[0].value.columns
     at.checkbox(key="pb_reads_only").check().run()
     assert not at.exception
-    built_legs = [name for d in at.dataframe for name in d.value["Leg"].tolist()]
+    built_legs = [name for d in at.dataframe if "Leg" in d.value.columns for name in d.value["Leg"].tolist()]
     assert built_legs and all(name.split()[0].endswith("0") for name in built_legs)      # only the k == 0 players have a read

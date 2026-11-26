@@ -209,6 +209,11 @@ else:
         if st.button("Save Sportsbet's lines now", width="stretch"):
             try:
                 saved = ls.snapshot()
+                for night in sorted(saved):                 # who is out / day-to-day, straight from ESPN
+                    try:
+                        pb.save_injuries(night)
+                    except Exception as error:              # noqa: BLE001 -- shown, and the lines are still saved
+                        st.warning(f"Lines saved, but the injury list for {night} couldn't be read: {str(error)[:120]}")
                 st.cache_data.clear()
                 st.toast("Saved lines for " + (", ".join(sorted(saved)) or "no upcoming games"))
                 nights = sorted(pb.line_nights(), reverse=True)
@@ -265,8 +270,8 @@ with st.expander("How to read the numbers"):
         "and karma's own notes. Among legs that cost the same, more reads rank higher. Over the 23 saved nights "
         "reads like these have not been shown to beat the price, which is why every one is shown rather than trusted.")
 
-check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab = st.tabs(
-    ["Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet"])
+check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab, score_tab = st.tabs(
+    ["Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet", "Scoreboard"])
 
 with check_tab:
     by_key = {leg_key(x): x for x in all_legs}
@@ -354,3 +359,30 @@ with big_tab:
 with bonus_tab:
     st.caption("The slips that turn $1 of bonus bet into the most cash on average.")
     render_ranked(built(date, stamp, fitted, "bonus", reads_only=reads_only), "bon", legs, dict(purpose="multi", lo=2.0, hi=6.0), stake="bonus")
+
+
+@st.cache_data(show_spinner="Grading the saved nights…")
+def local_scoreboard(n_nights, version):
+    return {"reads": pb.scoreboard(), "slips": pb.log_results()}
+
+
+def score_table(rows, unit):
+    if not rows:
+        st.info("Nothing graded yet.")
+        return
+    st.dataframe(
+        [{"": r["read"], unit: r["n"], "Nights": r["nights"], "Predicted to land": pct(r["predicted"]),
+          "Landed": pct(r["actual"]), "Return per $1": f"{100 * r['roi']:+.0f}%",
+          "Likely range": f"{100 * r['lo']:+.0f}% to {100 * r['hi']:+.0f}%"} for r in rows],
+        hide_index=True, width="stretch")
+
+
+with score_tab:
+    board = FEED.get("scoreboard", {}) if FEED_MODE else local_scoreboard(len(pb.line_nights()), pb.VERSION)
+    st.caption("How legs carrying each read have actually done on every saved night: one X+ rung per player and "
+               "stat (nearest 2.00), priced 1.3-4.0. 'All legs' is the cost of betting blind. A read earns its "
+               "place when its row is clearly better than that, with a likely range that isn't just noise.")
+    score_table(board.get("reads", []), "Legs")
+    st.caption("The builder's own suggestions, written down before the games by the publish script and graded "
+               "once the night is in.")
+    score_table(board.get("slips", []), "Slips")
