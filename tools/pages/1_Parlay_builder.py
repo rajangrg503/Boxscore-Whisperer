@@ -110,7 +110,7 @@ def render_slip(legs, e, key=None):
         f" &nbsp;·&nbsp; true chance <b>{chance_text(e['chance'])}</b>"
         f" &nbsp;·&nbsp; fair price <b>{e['fair_price']:,.2f}</b> &nbsp;·&nbsp; {value}"
         f" &nbsp;·&nbsp; {len(legs)} leg{'s' if len(legs) != 1 else ''}"
-        f"<div class='pb-muted'>One leg short {100 * e['one_short']:.0f}% of the time."
+        f"<div class='pb-muted'>{'Loses' if len(legs) == 1 else 'One leg short'} {100 * e['one_short']:.0f}% of the time."
         f"{' Same-game price is an estimate: type the real one in Check a slip.' if est else ''}</div></div>",
         unsafe_allow_html=True)
     st.dataframe(
@@ -187,6 +187,18 @@ st.caption(f"{len(legs):,} priced legs in {len(games)} games · {saved_text} · 
            f"margins measured on {fitted[0]} nights")
 if not projected:
     st.warning(pb.NO_SLATE)
+with st.expander("How to read the numbers"):
+    st.markdown(
+        "- **Price**: what Sportsbet pays for the slip.\n"
+        "- **True chance**: how often slips at this price have actually landed on our saved nights. It is the "
+        "price with Sportsbet's cut taken out, so it already reflects tonight's opponent and injuries.\n"
+        "- **Fair price**: what the slip would pay with no cut. The gap between it and the price is the cut.\n"
+        "- **Expected return**: what you'd average per $1 if you placed this kind of bet many times. "
+        "**−7%** means $1 comes back as about 93c on average: you still win or lose each bet, but over "
+        "100 bets of $3 you'd expect to be down about $21. Closer to zero is cheaper.\n"
+        "- **Lands** and **Leg return**: the same two numbers for one leg.\n"
+        "- **Season**, **Last 8**, **v this team**: how often he has cleared this line this season, in his "
+        "last 8 games, and against tonight's opponent (last season and this one). His own record, not a forecast.")
 
 check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab = st.tabs(
     ["Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet"])
