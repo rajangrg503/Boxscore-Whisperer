@@ -71,3 +71,17 @@ def test_each_pick_carries_what_he_actually_did(his_games):
 def test_too_few_games_gives_no_read(monkeypatch):
     monkeypatch.setattr(pc, "rows_for", lambda pid, seasons, before=None: games(3, [10, 12, 14]))
     assert gr.player_read(1, "A One", "AAA", "BBB", DAY) is None
+
+
+def test_a_game_with_no_sportsbet_lines_is_still_read_from_the_rosters(his_games, monkeypatch):
+    monkeypatch.setattr(gr.pb, "night_games", lambda date: ["AAA@BBB"])
+    monkeypatch.setattr(gr.pb, "load_injuries", lambda date: {"teams": {"AAA": {"out": [], "dtd": [{"pid": 1, "name": "A One"}]}}})
+    monkeypatch.setattr(gr, "_roster", lambda team: [("A One", 1)] if team == "AAA" else [])
+    monkeypatch.setattr(gr, "opponent_allows", lambda season: (None, None))
+    monkeypatch.setattr(gr, "game_shape", lambda away, home: [])
+    night = gr.read_night(DAY.isoformat(), legs=[])                       # no lines saved at all
+    assert list(night) == ["AAA@BBB"]
+    assert [p["player"] for p in night["AAA@BBB"]["players"]] == ["A One"] and night["AAA@BBB"]["players"][0]["dtd"]
+    assert night["AAA@BBB"]["picks"] and all(k["price"] is None for k in night["AAA@BBB"]["picks"])
+    monkeypatch.setattr(gr.pb, "load_injuries", lambda date: {"teams": {"AAA": {"out": [{"pid": 1, "name": "A One"}], "dtd": []}}})
+    assert gr.read_night(DAY.isoformat(), legs=[]) == {}                  # a player listed out is not read

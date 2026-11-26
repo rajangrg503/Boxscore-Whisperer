@@ -153,6 +153,23 @@ def load_injuries(date):
         return {}
 
 
+def night_games(date):
+    """Every game of the night, "AWAY@HOME", whether or not Sportsbet has player lines up for it yet:
+    from the saved line snapshots, the injury report and the projected slate."""
+    games = []
+    for f in sorted(glob.glob(os.path.join(ROOT, "journal", "lines", date, "*.json"))):
+        try:
+            events = json.load(open(f)).get("events", [])
+        except (OSError, ValueError):
+            continue
+        games += [e.get("game") for e in events if e.get("us_date") in (None, date)]
+    for g in load_injuries(date).get("games") or []:
+        games.append(g if isinstance(g, str) else g.get("game") or f"{g.get('away')}@{g.get('home')}")
+    for g in (pc.slate_file(date) or {}).get("games", []):
+        games.append(g.get("game") or f"{g.get('away')}@{g.get('home')}")
+    return list(dict.fromkeys(g for g in games if g and "@" in g and "None" not in g))
+
+
 def has_slate(date):
     """True when injuries are known for the night: the injury list was read (save_injuries), or the night
     was projected in the Journal's Tonight tab."""

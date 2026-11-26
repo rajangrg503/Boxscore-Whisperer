@@ -129,8 +129,18 @@ def game_shape(away, home):
         return []
 
 
+def _roster(team):
+    """(name, player id) for a team's cached roster; empty when the cache has none."""
+    try:
+        import slate_projections
+        return slate_projections.roster(team)
+    except Exception:                                   # noqa: BLE001
+        return []
+
+
 def read_night(date, legs=None, game=None):
-    """{game: {"shape": [...], "players": [player_read...], "picks": [...]}} for every game with saved lines."""
+    """{game: {"shape": [...], "players": [player_read...], "picks": [...]}} for every game of the night.
+    Games with saved lines use the players Sportsbet lists; games without use the team rosters."""
     day = dt.date.fromisoformat(date)
     legs = legs if legs is not None else pb.load_legs(date)
     try:
@@ -151,6 +161,25 @@ def read_night(date, legs=None, game=None):
         if read and read["minutes"] >= 18:
             read["dtd"] = bool(x.get("dtd"))
             by_game.setdefault(x["game"], []).append(read)
+    # Games Sportsbet has no player lines for yet are still read, from the rosters: the read never needs a price.
+    injuries = pb.load_injuries(date).get("teams") or {}
+    for g in pb.night_games(date):
+        if g in by_game or (game and g != game):
+            continue
+        away, home = g.split("@")
+        for team, opp in ((away, home), (home, away)):
+            listed = injuries.get(team, {})
+            out_ids = {e.get("pid") for e in listed.get("out", [])}
+            dtd_ids = {e.get("pid") for e in listed.get("dtd", [])}
+            for name, pid in _roster(team):
+                if pid in seen or pid in out_ids:
+                    continue
+                seen.add(pid)
+                s = slate.get(pid, {})
+                read = player_read(pid, name, team, opp, day, minutes=s.get("min"), lift=s.get("lift"), allows=allows, kind=kind)
+                if read and read["minutes"] >= 18:
+                    read["dtd"] = pid in dtd_ids
+                    by_game.setdefault(g, []).append(read)
     out = {}
     for g, players in by_game.items():
         picks = []
