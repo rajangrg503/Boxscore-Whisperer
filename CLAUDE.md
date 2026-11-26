@@ -50,6 +50,9 @@ morning screens, staking rules) live in the claude.ai project "boxscore with cow
 ## Tools worth knowing
 - `tools/advantage_finder.py <US date> --top 3`: biggest edge per game (strength vs opponent leak);
   used for straights and ceiling bets. `--played`, `--backtest START END`.
+- `tools/parlay_builder.py <US date> ladder|longshot|sgm|big|bonus|check "legs"`: true chance, fair price and
+  expected return of a slip from measured Sportsbet margins (`calibrate` refits; `backtest`). It does not find
+  +EV legs: it shows what each slip shape gives up.
 - `tools/slip_check.py` (`check_leg`): model chance for a leg. `tools/opp_allows.py OPP STAT`.
 - `tools/team_defense.py --before DATE --game AWAY HOME`: team-ratings score for the box-score cards.
 - `tools/defender_matchups.py`: player vs tonight's defenders (context only; backtest says don't filter on it).
