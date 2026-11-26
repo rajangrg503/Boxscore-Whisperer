@@ -24,8 +24,8 @@ karma can read, not a proven edge.
 
   python3 tools/parlay_builder.py calibrate            # refit from journal/lines (local file)
   python3 tools/parlay_builder.py 2026-11-27 ladder
-  python3 tools/parlay_builder.py 2026-11-27 longshot --legs 3
-  python3 tools/parlay_builder.py 2026-11-27 sgm --game MIA@NYK --legs 4
+  python3 tools/parlay_builder.py 2026-11-27 longshot --legs 3          # any number of legs
+  python3 tools/parlay_builder.py 2026-11-27 sgm --game MIA@NYK --legs 4 [--play]
   python3 tools/parlay_builder.py 2026-11-27 big --target 500
   python3 tools/parlay_builder.py 2026-11-27 bonus
   python3 tools/parlay_builder.py 2026-11-27 check "Davion Mitchell PTS 15+; Luka Doncic AST 8+ @2.40" [--price 9.5]
@@ -57,7 +57,7 @@ SAME_PATH = os.path.join(ROOT, "data", "parlay_same_player_corr.json")
 SINGLE = ("PTS", "REB", "AST", "FG3M")
 STAT_CLASS = {"PTS": "P", "REB": "R", "AST": "A", "FG3M": "T", "PR": "C", "PA": "C", "RA": "C", "PRA": "C"}
 EDGES = [1.0, 1.04, 1.1, 1.2, 1.35, 1.5, 1.75, 2.1, 2.6, 3.5, 5, 8, 15, 60]
-VERSION = 2             # bump when load_legs changes shape (the Journal page caches legs by it)
+VERSION = 3             # bump when load_legs changes shape (the Journal page caches legs by it)
 BONUS_VALUE = 0.70      # what $1 of bonus bet is worth, from the `bonus` screen (measured, not promised)
 SGM_HAIRCUT = 0.96      # Sportsbet's price for a different-player SGM / product of its legs (365 quotes, 26 Nov)
 _NORMAL = st.NormalDist()
@@ -377,16 +377,72 @@ def simulate(legs, probs, cal=None, same=None, n=200000, seed=0):
     return z > cut
 
 
-def evaluate(legs, price=None, cal=None, same=None, stake="cash", bet_return=False, n=200000, seed=0):
+def _norm_cdf(x):
+    """Normal CDF for arrays (Abramowitz & Stegun 7.1.26, error under 1e-7)."""
+    t = 1.0 / (1.0 + 0.3275911 * np.abs(x) / math.sqrt(2))
+    poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))))
+    erf = 1.0 - poly * np.exp(-x * x / 2)
+    return 0.5 * (1.0 + np.sign(x) * erf)
+
+
+def _norm_inv(p):
+    """Inverse normal CDF for arrays (Acklam's rational approximation, relative error ~1e-9)."""
+    a = (-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02,
+         -3.066479806614716e+01, 2.506628277459239e+00)
+    b = (-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01,
+         -1.328068155288572e+01)
+    c = (-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00,
+         4.374664141464968e+00, 2.938163982698783e+00)
+    d = (7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00)
+    p = np.clip(np.asarray(p, float), 1e-300, 1 - 1e-16)
+    out = np.empty_like(p)
+    lo, hi = p < 0.02425, p > 1 - 0.02425
+    mid = ~(lo | hi)
+    q = p[mid] - 0.5
+    r = q * q
+    out[mid] = ((((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
+                / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1))
+    for mask, sign in ((lo, 1.0), (hi, -1.0)):
+        q = np.sqrt(-2 * np.log(p[mask] if sign > 0 else 1 - p[mask]))
+        out[mask] = sign * ((((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
+                            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1))
+    return out
+
+
+def orthant(cuts, corr, n=4000, seed=0):
+    """Chance every leg lands: P(z_i > cut_i for all i) for correlated normals, by the GHK sequential
+    simulator. Unlike counting simulated nights it stays accurate for 1-in-a-million slips."""
+    k = len(cuts)
+    if k == 0:
+        return 1.0
+    low = np.linalg.cholesky(corr)
+    u = np.random.default_rng(seed).random((n, k))
+    z = np.zeros((n, k))
+    weight = np.ones(n)
+    for i in range(k):
+        bound = (cuts[i] - z[:, :i] @ low[i, :i]) / low[i, i]
+        above = np.clip(1.0 - _norm_cdf(bound), 1e-300, 1.0)
+        weight *= above
+        z[:, i] = _norm_inv(1.0 - above * (1.0 - u[:, i]))        # a draw from the part above the bound
+    return float(weight.mean())
+
+
+def evaluate(legs, price=None, cal=None, same=None, stake="cash", bet_return=False, n=6000, seed=0, one_short=True):
     """True chance, fair price and expected return per $1 for a slip.
     price: the bookmaker's price for the whole slip (default: product of leg prices, x the SGM haircut
     for each game with 2+ legs). stake='bonus': stake not returned. bet_return: stake back as a bonus
     bet when exactly one leg misses."""
     probs = [fair_prob(x["price"], x["cls"], cal) for x in legs]
-    hits = simulate(legs, probs, cal, same, n=n, seed=seed)
-    k = hits.sum(1)
-    p_all = float((k == len(legs)).mean())
-    p_one = float((k == len(legs) - 1).mean())
+    corr = _corr(legs, cal, same)
+    cuts = np.array([-_NORMAL.inv_cdf(min(max(p, 1e-9), 1 - 1e-9)) for p in probs])
+    p_all = orthant(cuts, corr, n=n, seed=seed)
+    p_one = 0.0
+    if (one_short or bet_return) and len(legs) > 1:
+        for i in range(len(legs)):                    # every leg but i lands, minus all of them landing
+            keep = [j for j in range(len(legs)) if j != i]
+            p_one += max(orthant(cuts[keep], corr[np.ix_(keep, keep)], n=n, seed=seed) - p_all, 0.0)
+    elif len(legs) == 1:
+        p_one = 1.0 - p_all
     product = float(np.prod([x["price"] for x in legs]))
     est = price is None
     if est:
@@ -415,7 +471,7 @@ def est_price(legs, cal=None, same=None):
         for a, b in itertools.combinations(g, 2):
             if a["pid"] == b["pid"]:
                 pa, pb = fair_prob(a["price"], a["cls"], cal), fair_prob(b["price"], b["cls"], cal)
-                both = float(simulate([a, b], [pa, pb], cal, same, n=40000, seed=1).all(1).mean())
+                both = orthant(np.array([-_NORMAL.inv_cdf(pa), -_NORMAL.inv_cdf(pb)]), _corr([a, b], cal, same), n=2000, seed=1)
                 price *= (pa * pb) / max(both, 1e-6)
     return price
 
@@ -423,9 +479,12 @@ def est_price(legs, cal=None, same=None):
 # ---------------------------------------------------------------- karma's rules and the builders
 
 def eligible(leg, purpose="multi"):
-    """karma's standing rules for a leg in a built slip (purpose: 'single', 'multi', 'sgm')."""
+    """karma's standing rules for a leg in a built slip (purpose: 'single', 'multi', 'sgm';
+    'play' = playing around: any X+ rung on a 20+ minute player who isn't day-to-day)."""
     if leg["kind"] != "alt" or leg.get("dtd"):
         return False                                   # built slips use X+ rungs; no day-to-day players
+    if purpose == "play":
+        return (leg.get("min_l10") or 0) >= 20
     if leg["stat"] == "FG3M" and purpose != "single":
         return False                                   # threes are straights only
     if "doncic" in pc.norm(leg["player"]) and leg["stat"] == "PTS" and leg["th"] >= 35:
@@ -460,16 +519,21 @@ def context(leg):
     return (min(rates) - leg["p"]) if rates else -1.0
 
 
-RANK_DRAWS = 40000
+RANK_DRAWS = 800
 
 
 def _rank(slips, cal, same, top, stake="cash", bet_return=False, n=None):
+    """Score every candidate quickly, then price the best ones properly."""
     out = []
     for legs in slips:
-        e = evaluate(legs, cal=cal, same=same, stake=stake, bet_return=bet_return, n=n or RANK_DRAWS)
+        e = evaluate(legs, cal=cal, same=same, stake=stake, bet_return=bet_return, n=n or RANK_DRAWS, one_short=False)
         out.append((e["roi"], legs, e))
     out.sort(key=lambda t: (-round(t[0], 2), -sum(context(x) for x in t[1]) / len(t[1])))
-    return out[:top]
+    final = []
+    for _, legs, _ in out[:top]:
+        e = evaluate(legs, cal=cal, same=same, stake=stake, bet_return=bet_return)
+        final.append((e["roi"], legs, e))
+    return final
 
 
 def build_ladder(legs, cal, same, lo=1.9, hi=2.15, top=5):
@@ -482,57 +546,93 @@ def build_ladder(legs, cal, same, lo=1.9, hi=2.15, top=5):
     return _rank([[x] for x in sorted(singles, key=lambda x: -context(x))[:40]] + pairs, cal, same, top)
 
 
-def build_longshot(legs, cal, same, n_legs=3, lo=2.0, hi=3.6, top=5, stake="cash", bet_return=False):
-    """n legs from n different games, each a single-stat rung in the cheapest price band."""
-    pool = [x for x in legs if eligible(x, "multi") and lo <= x["price"] <= hi and x["stat"] in SINGLE]
-    pool = sorted(_best_per_player(pool, lambda x: -context(x)), key=lambda x: -context(x))
+def _pool(legs, purpose, lo, hi, loose):
+    """One leg per player, best own-record first. loose = play mode: any stat, 20+ minutes."""
+    pool = [x for x in legs if eligible(x, "play" if loose else purpose) and lo <= x["price"] <= hi
+            and (loose or x["stat"] in SINGLE)]
+    return sorted(_best_per_player(pool, lambda x: -context(x)), key=lambda x: -context(x))
+
+
+def build_longshot(legs, cal, same, n_legs=3, lo=2.0, hi=3.6, top=5, stake="cash", bet_return=False, loose=False):
+    """n legs spread over the night's games as evenly as possible, each a single-stat rung in the cheapest
+    price band; one leg per player and (unless loose) per team. Any number of legs: with more legs than
+    games, games take two or more each."""
+    pool = _pool(legs, "multi", lo, hi, loose)
     per_game = collections.defaultdict(list)
     for x in pool:
-        if len(per_game[x["game"]]) < 3:
-            per_game[x["game"]].append(x)
-    games = list(per_game)
-    slips = []
-    for gs in itertools.combinations(games, min(n_legs, len(games))):
-        for combo in itertools.product(*[per_game[g] for g in gs]):
-            slips.append(list(combo))
-    random.Random(0).shuffle(slips)
-    return _rank(slips[:400], cal, same, top, stake=stake, bet_return=bet_return)
+        per_game[x["game"]].append(x)
+    games = sorted(per_game)
+    if not games:
+        return []
+    n_legs = min(n_legs, len(pool) if loose else len({x["team"] or x["pid"] for x in pool}))
+    slips, seen = [], set()
+    for seed in range(400):
+        rnd = random.Random(seed)
+        order = games[:]
+        rnd.shuffle(order)
+        lists = {g: (per_game[g][:] if seed == 0 else rnd.sample(per_game[g][:8], len(per_game[g][:8]))) for g in games}
+        slip, teams = [], set()
+        while len(slip) < n_legs and any(lists.values()):
+            for g in order:                             # one leg from each game in turn
+                while lists[g]:
+                    x = lists[g].pop(0)
+                    if loose or (x["team"] or x["pid"]) not in teams:
+                        slip.append(x)
+                        teams.add(x["team"] or x["pid"])
+                        break
+                if len(slip) == n_legs:
+                    break
+        key = frozenset(id(x) for x in slip)
+        if len(slip) == n_legs and key not in seen:
+            seen.add(key)
+            slips.append(slip)
+    return _rank(slips, cal, same, top, stake=stake, bet_return=bet_return)
 
 
-def build_sgm(legs, cal, same, game, n_legs=4, lo=1.25, hi=3.6, top=5, bet_return=False):
-    """Best same-game multi: one leg per player, single stats, and no more than half the legs from one team."""
-    pool = [x for x in legs if x["game"] == game and eligible(x, "sgm") and lo <= x["price"] <= hi
-            and x["stat"] in SINGLE]
-    pool = sorted(_best_per_player(pool, lambda x: -context(x)), key=lambda x: -context(x))[:10]
+def build_sgm(legs, cal, same, game, n_legs=4, lo=1.25, hi=3.6, top=5, bet_return=False, loose=False):
+    """Best same-game multi: one leg per player, single stats, and no more than half the legs from one
+    team. Any number of legs up to the players available; loose (play mode) drops the stat, minutes and
+    team-balance rules."""
+    pool = _pool([x for x in legs if x["game"] == game], "sgm", 1.1 if loose else lo, 6.0 if loose else hi, loose)
+    n_legs = min(n_legs, len(pool))
+    if not n_legs:
+        return []
+    pool = pool[:max(10, n_legs + 3)]
+    if math.comb(len(pool), n_legs) <= 600:
+        combos = itertools.combinations(pool, n_legs)
+    else:
+        rnd = random.Random(0)
+        combos = [rnd.sample(pool, n_legs) for _ in range(600)]
     slips = []
-    for combo in itertools.combinations(pool, min(n_legs, len(pool))):
+    for combo in combos:
         teams = collections.Counter(x["team"] or x["pid"] for x in combo)      # unknown team: counts alone
-        if max(teams.values()) <= math.ceil(len(combo) / 2):
+        if loose or max(teams.values()) <= math.ceil(len(combo) / 2):
             slips.append(list(combo))
     return _rank(slips[:600], cal, same, top, bet_return=bet_return)
 
 
 def build_big(legs, cal, same, target=500.0, top=3):
-    """Cheapest route to a big price: the legs that give up least per unit of odds, different players and
-    teams, at most two a game (one a team)."""
+    """Cheapest route to a big price: the legs that give up least per unit of odds, different players,
+    one per team -- then two, then three per team if the target needs more legs than there are teams."""
     pool = [x for x in legs if eligible(x, "multi") and 1.8 <= x["price"] <= 3.6 and x["stat"] in SINGLE]
     pool = sorted(_best_per_player(pool, lambda x: (round(x["cost"], 2), -context(x))), key=lambda x: (round(x["cost"], 2), -context(x)))
     slips = []
     for seed in range(top * 4):
         rnd = random.Random(seed)
         order = pool[:] if seed == 0 else sorted(pool, key=lambda x: x["cost"] + rnd.uniform(0, 0.03))
-        slip, teams, price = [], set(), 1.0
-        for x in order:
-            if price >= target:
-                break
-            if (x["team"] or x["pid"]) in teams:
-                continue
-            slip.append(x)
-            teams.add(x["team"] or x["pid"])
-            price *= x["price"]
+        slip, teams, price = [], collections.Counter(), 1.0
+        for per_team in (1, 2, 3, 99):
+            for x in order:
+                if price >= target:
+                    break
+                if x in slip or teams[x["team"] or x["pid"]] >= per_team:
+                    continue
+                slip.append(x)
+                teams[x["team"] or x["pid"]] += 1
+                price *= x["price"]
         if price >= target and slip not in slips:
             slips.append(slip)
-    return _rank(slips, cal, same, top, n=400000)
+    return _rank(slips, cal, same, top)
 
 
 def build_bonus(legs, cal, same, top=5):
@@ -612,8 +712,7 @@ def backtest(min_train=8, per_night=25, seed=0, budget=140, verbose=True):
     the 0.96 x product estimate). Saves progress after every night; run again to continue."""
     import pickle
     import time
-    global RANK_DRAWS
-    t0, RANK_DRAWS = time.time(), 6000
+    t0 = time.time()
     state_path = os.path.join(ROOT, "journal", "_cache", "parlay_backtest.pkl")
     try:
         state = pickle.load(open(state_path, "rb"))
@@ -657,7 +756,7 @@ def backtest(min_train=8, per_night=25, seed=0, budget=140, verbose=True):
                 built.setdefault("OLD STYLE: 20 near-locks (<=1.12)", []).append(rnd.sample(near, 20))
         for name, slips in built.items():
             for slip in slips:
-                e = evaluate(slip, cal=cal, same=same, n=20000)
+                e = evaluate(slip, cal=cal, same=same, one_short=False)
                 state["rows"].append((name, d, e["chance"], bool(all(x["hit"] for x in slip)), e["price"]))
         state["done"].append(d)
         pickle.dump(state, open(state_path, "wb"))
@@ -696,6 +795,8 @@ def main(argv=None):
     ap.add_argument("--price", type=float, help="the bookmaker's price for the whole slip (check)")
     ap.add_argument("--bonus", action="store_true", help="stake is a bonus bet (not returned)")
     ap.add_argument("--bet-return", action="store_true", help="stake back as a bonus bet if exactly one leg misses")
+    ap.add_argument("--play", action="store_true",
+                    help="playing around: any stat, 20+ minute players, no team-balance rule (longshot, sgm)")
     a = ap.parse_args(argv)
     if a.date == "calibrate":
         calibrate()
@@ -718,11 +819,12 @@ def main(argv=None):
     if a.mode == "ladder":
         show("Ladder (about 2.00)", build_ladder(legs, cal, same), cal)
     elif a.mode == "longshot":
-        show(f"Longshot {a.legs} (one leg a game)", build_longshot(legs, cal, same, a.legs, bet_return=a.bet_return,
-                                                                   stake="bonus" if a.bonus else "cash"), cal)
+        show(f"Longshot, {a.legs} legs spread over the games", build_longshot(
+            legs, cal, same, a.legs, bet_return=a.bet_return, stake="bonus" if a.bonus else "cash", loose=a.play), cal)
     elif a.mode == "sgm":
         for g in ([a.game] if a.game else sorted({x["game"] for x in legs})):
-            show(f"Same-game multi {g}, {a.legs} legs", build_sgm(legs, cal, same, g, a.legs, bet_return=a.bet_return), cal,
+            show(f"Same-game multi {g}, {a.legs} legs", build_sgm(legs, cal, same, g, a.legs, bet_return=a.bet_return,
+                                                                  loose=a.play), cal,
                  "  Sportsbet price is an estimate (0.96 x the product of the legs): get a live quote, then re-run `check --price`.")
     elif a.mode == "big":
         show(f"Big ticket, target {a.target:g}", build_big(legs, cal, same, a.target), cal)
@@ -734,7 +836,7 @@ def main(argv=None):
             print("  !", p)
         if slip:
             e = evaluate(slip, price=a.price, cal=cal, same=same, stake="bonus" if a.bonus else "cash",
-                         bet_return=a.bet_return, n=400000)
+                         bet_return=a.bet_return, n=20000)
             show("Slip check", [(e["roi"], slip, e)], cal)
             print(f"      if the legs were independent: {100 * e['independent']:.1f}%; exactly one leg short: {100 * e['one_short']:.1f}%")
     else:

@@ -50,15 +50,15 @@ def legs_for(date, stamp, fitted):
 
 
 @st.cache_data(show_spinner="Building…")
-def built(date, stamp, fitted, mode, n_legs=3, game=None, target=500.0, bonus=False, bet_return=False):
+def built(date, stamp, fitted, mode, n_legs=3, game=None, target=500.0, bonus=False, bet_return=False, loose=False):
     legs, cal, same = legs_for(date, stamp, fitted), pb.load_cal(), pb.load_same()
     stake = "bonus" if bonus else "cash"
     if mode == "ladder":
         return pb.build_ladder(legs, cal, same, top=8)
     if mode == "longshot":
-        return pb.build_longshot(legs, cal, same, n_legs, top=6, stake=stake, bet_return=bet_return)
+        return pb.build_longshot(legs, cal, same, n_legs, top=6, stake=stake, bet_return=bet_return, loose=loose)
     if mode == "sgm":
-        return pb.build_sgm(legs, cal, same, game, n_legs, top=6, bet_return=bet_return)
+        return pb.build_sgm(legs, cal, same, game, n_legs, top=6, bet_return=bet_return, loose=loose)
     if mode == "big":
         return pb.build_big(legs, cal, same, target, top=3)
     return pb.build_bonus(legs, cal, same, top=6)
@@ -90,10 +90,11 @@ def render_slip(legs, e, key=None):
         cls = "pb-pos" if e["roi"] > 0 else "pb-neg"
         value = f"expected return <b class='{cls}'>{100 * e['roi']:+.0f}%</b>"
     st.markdown(
-        f"<div class='pb-card'><span class='pb-big'>{e['price']:.2f}</span>"
+        f"<div class='pb-card'><span class='pb-big'>{e['price']:,.2f}</span>"
         f"<span class='pb-muted'>{' (estimated price)' if est else ''}</span>"
         f" &nbsp;·&nbsp; true chance <b>{chance_text(e['chance'])}</b>"
         f" &nbsp;·&nbsp; fair price <b>{e['fair_price']:,.2f}</b> &nbsp;·&nbsp; {value}"
+        f" &nbsp;·&nbsp; {len(legs)} leg{'s' if len(legs) != 1 else ''}"
         f"<div class='pb-muted'>One leg short {100 * e['one_short']:.0f}% of the time."
         f"{' Same-game price is an estimate: type the real one in Check a slip.' if est else ''}</div></div>",
         unsafe_allow_html=True)
@@ -202,25 +203,42 @@ with ladder_tab:
                "band costs about the same, so they're ordered by the player's own record at the line.")
     render_ranked(built(date, stamp, fitted, "ladder"), "lad")
 
+PLAY_HELP = ("For playing around, not for betting: any stat (combos and threes too), any player averaging 20+ "
+             "minutes, and no limit on legs from one team.")
+
+
+def shown_legs(ranked, asked):
+    if ranked and len(ranked[0][1]) < asked:
+        st.caption(f"Only {len(ranked[0][1])} legs pass the rules here. Tick **Loosen the rules** for more.")
+
+
 with long_tab:
-    a, b, c = st.columns(3)
-    n_long = a.slider("Legs (one per game)", 2, min(5, max(2, len(games))), min(3, max(2, len(games))))
+    a, b, c, d = st.columns([1.6, 1, 1, 1.4])
+    n_long = a.slider("Legs", 2, 20, min(3, max(2, len(games))), key="pb_long_n")
     long_bonus = b.checkbox("Bonus bet", key="pb_long_bonus")
     long_return = c.checkbox("Bet Return", key="pb_long_return")
-    st.caption("Single-stat rungs at 2.0–3.6, each from a different game: the price band that gives up least.")
-    render_ranked(built(date, stamp, fitted, "longshot", n_legs=n_long, bonus=long_bonus, bet_return=long_return), "lon")
+    long_loose = d.checkbox("Loosen the rules", key="pb_long_loose", help=PLAY_HELP)
+    st.caption("Rungs at 2.0–3.6 spread evenly over the night's games (the price band that gives up least). "
+               "With more legs than games, each game takes two or more.")
+    ranked = built(date, stamp, fitted, "longshot", n_legs=n_long, bonus=long_bonus, bet_return=long_return, loose=long_loose)
+    shown_legs(ranked, n_long)
+    render_ranked(ranked, "lon")
 
 with sgm_tab:
-    a, b, c = st.columns(3)
+    a, b, c, d = st.columns([1.2, 1.4, 1, 1.4])
     sgm_game = a.selectbox("Game", games, key="pb_sgm_game")
-    n_sgm = b.slider("Legs", 2, 6, 4)
+    n_sgm = b.slider("Legs", 2, 20, 4, key="pb_sgm_n")
     sgm_return = c.checkbox("Bet Return", key="pb_sgm_return")
+    sgm_loose = d.checkbox("Loosen the rules", key="pb_sgm_loose", help=PLAY_HELP)
     st.caption("One leg per player, single stats, at most half the legs from one team (teammates' scoring legs "
                "work against each other). The price shown is an estimate, 0.96 × the product of the legs.")
-    render_ranked(built(date, stamp, fitted, "sgm", n_legs=n_sgm, game=sgm_game, bet_return=sgm_return), "sgm")
+    ranked = built(date, stamp, fitted, "sgm", n_legs=n_sgm, game=sgm_game, bet_return=sgm_return, loose=sgm_loose)
+    shown_legs(ranked, n_sgm)
+    render_ranked(ranked, "sgm")
 
 with big_tab:
-    target = st.select_slider("Target price", [50, 100, 250, 500, 1000, 2500, 5000], value=500)
+    target = st.select_slider("Target price", [50, 100, 250, 500, 1000, 2500, 5000, 10000, 50000, 100000, 1000000],
+                              value=500, format_func=lambda v: f"{v:,}")
     st.caption("The cheapest route to a big price: the legs that give up least per unit of odds, one per team. "
                "It is still a lottery ticket.")
     render_ranked(built(date, stamp, fitted, "big", target=float(target)), "big")

@@ -39,7 +39,7 @@ def test_fit_tables_recovers_a_known_cut():
 
 def test_independent_legs_multiply():
     a, b = leg("A One", game="AAA@BBB"), leg("B Two", game="CCC@DDD", team="CCC")
-    e = pb.evaluate([a, b], cal=CAL, same=SAME, n=200000)
+    e = pb.evaluate([a, b], cal=CAL, same=SAME, n=20000)
     assert e["chance"] == pytest.approx(0.46 * 0.46, abs=0.004)
     assert e["price"] == pytest.approx(4.0) and e["price_is_estimate"]
     assert e["roi"] == pytest.approx(0.46 * 0.46 * 4 - 1, abs=0.02)
@@ -47,7 +47,7 @@ def test_independent_legs_multiply():
 
 def test_same_player_legs_land_together_more_and_are_priced_down():
     a, b = leg("A One", "PTS", 20, pid=1), leg("A One", "REB", 8, pid=1)
-    e = pb.evaluate([a, b], cal=CAL, same=SAME, n=200000)
+    e = pb.evaluate([a, b], cal=CAL, same=SAME, n=20000)
     assert e["chance"] > e["independent"] + 0.02
     assert e["price"] < e["product"] * 0.96          # the estimate cuts a same-player pair
     nested = pb.evaluate([leg("A One", "PTS", 20, 2.0, pid=1), leg("A One", "PTS", 25, 4.0, pid=1)], cal=CAL, same=SAME)
@@ -55,10 +55,10 @@ def test_same_player_legs_land_together_more_and_are_priced_down():
 
 
 def test_teammates_scoring_legs_land_together_less_and_opposing_stars_more():
-    mates = pb.evaluate([leg("A One", pid=1), leg("A Two", pid=2)], cal=CAL, same=SAME, n=200000)
+    mates = pb.evaluate([leg("A One", pid=1), leg("A Two", pid=2)], cal=CAL, same=SAME, n=20000)
     assert mates["chance"] < mates["independent"] - 0.01
     stars = pb.evaluate([leg("A One", "PRA", 30, pid=1, crank=1), leg("B One", "PRA", 30, pid=3, team="BBB", crank=1)],
-                        cal=CAL, same=SAME, n=200000)
+                        cal=CAL, same=SAME, n=20000)
     assert stars["chance"] > stars["independent"] + 0.01
 
 
@@ -70,10 +70,10 @@ def test_an_under_flips_the_sign():
 def test_bonus_stake_and_bet_return():
     slip = [leg("A One", game="G1@H1", price=2.0), leg("B Two", game="G2@H2", team="G2", price=2.0),
             leg("C Three", game="G3@H3", team="G3", price=2.0)]
-    cash = pb.evaluate(slip, cal=CAL, same=SAME, n=200000)
-    bonus = pb.evaluate(slip, cal=CAL, same=SAME, stake="bonus", n=200000)
+    cash = pb.evaluate(slip, cal=CAL, same=SAME, n=20000)
+    bonus = pb.evaluate(slip, cal=CAL, same=SAME, stake="bonus", n=20000)
     assert bonus["return_per_dollar"] == pytest.approx(cash["chance"] * 7, abs=0.01)        # stake not returned
-    back = pb.evaluate(slip, cal=CAL, same=SAME, bet_return=True, n=200000)
+    back = pb.evaluate(slip, cal=CAL, same=SAME, bet_return=True, n=20000)
     assert back["return_per_dollar"] == pytest.approx(cash["return_per_dollar"] + cash["one_short"] * pb.BONUS_VALUE, abs=0.01)
     assert cash["one_short"] == pytest.approx(3 * 0.46 * 0.46 * 0.54, abs=0.01)
 
@@ -123,3 +123,38 @@ def test_unknown_teams_still_build_a_same_game_multi_and_a_big_ticket():
     assert pb.build_sgm(legs, CAL, SAME, "AAA@BBB", 4, top=2)
     big = pb.build_big(legs, CAL, SAME, target=50, top=1)
     assert big and big[0][2]["price"] >= 50
+
+
+def test_orthant_agrees_with_counting_simulated_nights_and_handles_tiny_chances():
+    slip = [leg("A One", "PTS", 20, 2.0, pid=1), leg("A One", "REB", 8, 2.0, pid=1), leg("A Two", "PTS", 15, 1.6, pid=2),
+            leg("B One", "PRA", 30, 2.4, pid=3, team="BBB", crank=1)]
+    probs = [pb.fair_prob(x["price"], x["cls"], CAL) for x in slip]
+    counted = pb.simulate(slip, probs, CAL, SAME, n=400000).all(1).mean()
+    assert pb.evaluate(slip, cal=CAL, same=SAME, n=20000)["chance"] == pytest.approx(counted, rel=0.03)
+    many = [leg(f"P{k}", "PTS", 20, 2.0, game=f"G{k}@H{k}", team=f"G{k}", pid=k) for k in range(30)]
+    e = pb.evaluate(many, cal=CAL, same=SAME)
+    assert e["chance"] == pytest.approx(0.46 ** 30, rel=1e-6)          # 30 independent legs: far too rare to count
+    assert e["one_short"] == pytest.approx(30 * 0.46 ** 29 * 0.54, rel=1e-6)
+
+
+def test_any_number_of_legs_and_play_mode():
+    legs = []
+    for g, (t1, t2) in enumerate([("AAA", "BBB"), ("CCC", "DDD")]):
+        for t in (t1, t2):
+            for k in range(6):
+                pid = 100 * g + 10 * (t == t2) + k
+                legs.append(leg(f"P{g}{t}{k}", "PTS", 20, 2.4, game=f"{t1}@{t2}", team=t, pid=pid,
+                                hr_season=0.5, n_season=12, hr_l8=0.5, min_l10=30.0 if k < 3 else 22.0))
+                legs.append(leg(f"P{g}{t}{k}", "PRA", 30, 1.5, game=f"{t1}@{t2}", team=t, pid=pid,
+                                hr_season=0.6, n_season=12, hr_l8=0.6, min_l10=30.0 if k < 3 else 22.0))
+    pb._annotate(legs, CAL)
+    strict = pb.build_sgm(legs, CAL, SAME, "AAA@BBB", 10, top=1)
+    assert len(strict[0][1]) == 6                                       # only six starters pass the rules
+    play = pb.build_sgm(legs, CAL, SAME, "AAA@BBB", 10, top=1, loose=True)
+    assert len(play[0][1]) == 10 and len({x["pid"] for x in play[0][1]}) == 10
+    long4 = pb.build_longshot(legs, CAL, SAME, 4, top=1)                # two games, four legs: two a game, four teams
+    assert len(long4[0][1]) == 4 and len({x["team"] for x in long4[0][1]}) == 4
+    long9 = pb.build_longshot(legs, CAL, SAME, 9, top=1, loose=True)
+    assert len(long9[0][1]) == 9 and len({x["pid"] for x in long9[0][1]}) == 9
+    huge = pb.build_big(legs, CAL, SAME, target=5000, top=1)            # needs more legs than there are teams
+    assert huge and huge[0][2]["price"] >= 5000
