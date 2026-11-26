@@ -59,7 +59,7 @@ def test_add_a_leg_and_check_it(page):
     next(b for b in at.button if b.label == "Add leg").click().run()
     assert not at.exception
     assert len(at.session_state.pb_slip) == 1
-    assert any("One leg short" in m.value for m in at.markdown)
+    assert any("true chance" in m.value and "pb-card" in m.value for m in at.markdown)
 
 
 def test_send_a_built_slip_to_the_checker(page):

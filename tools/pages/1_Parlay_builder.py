@@ -96,6 +96,13 @@ def chance_text(p):
     return f"{100 * p:.1f}%" if p >= 0.02 else f"1 in {1 / max(p, 1e-9):,.0f}"
 
 
+def short_line(legs, e):
+    """Under the headline: how often a multi misses by exactly one leg (nothing extra for a single)."""
+    if len(legs) == 1:
+        return ""
+    return f"Misses by exactly one leg {100 * e['one_short']:.0f}% of the time."
+
+
 def render_slip(legs, e, key=None):
     """One slip: the headline numbers, then a row per leg."""
     est = e["price_is_estimate"] and len({x["game"] for x in legs}) < len(legs)
@@ -110,7 +117,7 @@ def render_slip(legs, e, key=None):
         f" &nbsp;·&nbsp; true chance <b>{chance_text(e['chance'])}</b>"
         f" &nbsp;·&nbsp; fair price <b>{e['fair_price']:,.2f}</b> &nbsp;·&nbsp; {value}"
         f" &nbsp;·&nbsp; {len(legs)} leg{'s' if len(legs) != 1 else ''}"
-        f"<div class='pb-muted'>{'Loses' if len(legs) == 1 else 'One leg short'} {100 * e['one_short']:.0f}% of the time."
+        f"<div class='pb-muted'>{short_line(legs, e)}"
         f"{' Same-game price is an estimate: type the real one in Check a slip.' if est else ''}</div></div>",
         unsafe_allow_html=True)
     st.dataframe(
