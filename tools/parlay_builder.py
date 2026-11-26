@@ -476,6 +476,11 @@ def build_feed(dates=None, path=FEED_PATH):
             nights[d] = {"has_slate": has_slate(d),
                          "legs": [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in x.items()
                                    if k not in _FEED_DROP} for x in legs]}
+            try:
+                import game_read as gr
+                nights[d]["read"] = {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in gr.read_night(d, legs).items()}
+            except Exception:                          # noqa: BLE001 -- the builder still publishes without the read
+                nights[d]["read"] = {}
     feed = {"made_at": dt.datetime.now(ZoneInfo("Australia/Sydney")).isoformat(timespec="minutes"),
             "version": VERSION, "cal": load_cal(), "nights": nights,
             "scoreboard": {"reads": scoreboard(), "slips": log_results()}}
@@ -1081,6 +1086,18 @@ def log_night(date, cal=None, same=None):
              "made_at": dt.datetime.now(ZoneInfo("Australia/Sydney")).isoformat(timespec="minutes"),
              "slips": [{"type": name, "price": round(e["price"], 2), "chance": round(e["chance"], 5),
                         "legs": [{k: x.get(k) for k in keep} for x in slip]} for name, (_, slip, e) in built]}
+    try:                                               # the game read's own picks, at whatever Sportsbet offers
+        import game_read as gr
+        for g, r in gr.read_night(date, legs).items():
+            for k in r["picks"]:
+                if k["price"] and not k["dtd"] and (k["kind"] == "upside" or k["price"] >= 1.15):
+                    entry["slips"].append({
+                        "type": "Game read: upside pick" if k["kind"] == "upside" else "Game read: safe pick",
+                        "price": k["price"], "chance": k["share"], "read_mult": k["mult"],
+                        "legs": [{"player": k["player"], "pid": k["pid"], "stat": k["stat"], "kind": "alt",
+                                  "th": k["rung"], "price": k["price"], "game": g, "team": k["team"]}]})
+    except Exception as error:                         # noqa: BLE001 -- the log must not fail on the read
+        entry["read_error"] = str(error)[:200]
     os.makedirs(LOG_DIR, exist_ok=True)
     json.dump(entry, open(os.path.join(LOG_DIR, f"{date}.json"), "w"), indent=1)
     return entry

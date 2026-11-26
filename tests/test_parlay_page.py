@@ -45,6 +45,12 @@ def page(monkeypatch, tmp_path):
     monkeypatch.setattr(pb, "scoreboard", lambda **k: [dict(read="All legs", n=100, nights=5, predicted=0.46, actual=0.45,
                                                            roi=-0.1, lo=-0.2, hi=0.0)])
     monkeypatch.setattr(pb, "log_results", lambda: [])
+    import game_read as gr
+    monkeypatch.setattr(gr, "read_night", lambda date, legs=None, game=None: {"AAA@BBB": {"shape": ["AAA run"], "players": [], "picks": [
+        dict(kind="upside", player="P0AAA0", pid=0, team="AAA", stat="PTS", rung=20, share=0.3, mult=1.2, expected=17.5,
+             why=["v BBB he has run at 1.30x his usual rate over 6 games"], dtd=False, price=2.0),
+        dict(kind="safe", player="P0AAA1", pid=1, team="AAA", stat="REB", rung=6, share=0.85, mult=1.0, expected=7.9,
+             why=[], dtd=False, price=None)]}})
     return AppTest.from_file(PAGE, default_timeout=60)
 
 
@@ -52,8 +58,8 @@ def test_page_opens_and_builds_every_tab(page):
     at = page.run()
     assert not at.exception
     assert at.title[0].value == "Parlay builder"
-    assert [t.label for t in at.tabs] == ["Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet",
-                                          "Scoreboard"]
+    assert [t.label for t in at.tabs] == ["Game read", "Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket",
+                                          "Bonus bet", "Scoreboard"]
     assert len(at.dataframe) >= 5                       # built slips are on the page
     assert any("expected return" in m.value for m in at.markdown)
     assert any("bonus bet comes back as" in m.value for m in at.markdown)
@@ -94,7 +100,10 @@ def phone(monkeypatch):
     monkeypatch.setattr(pb, "load_same", lambda: fake.SAME)
     monkeypatch.setattr(pb, "load_legs", lambda *a, **k: pytest.fail("the phone page must not read journal/"))
     feed = {"made_at": "2026-11-27T07:05+11:00", "cal": dict(fake.CAL, fitted_on=["a", "b"]),
-            "nights": {"2026-11-27": {"has_slate": True, "legs": made_up_legs("2026-11-27")}}}
+            "scoreboard": {"reads": [], "slips": []},
+            "nights": {"2026-11-27": {"has_slate": True, "legs": made_up_legs("2026-11-27"), "read": {"AAA@BBB": {
+                "shape": [], "picks": [dict(kind="upside", player="P0AAA0", pid=0, team="AAA", stat="PTS", rung=20, share=0.3,
+                                            mult=1.2, expected=17.5, why=["matchup"], dtd=False, price=2.0)]}}}}}
     monkeypatch.setattr(pb, "load_feed", lambda *a, **k: feed)
     return AppTest.from_file(PHONE_PAGE, default_timeout=60)
 
@@ -132,24 +141,33 @@ def test_feed_round_trips(tmp_path, monkeypatch):
 
 def test_swap_a_leg_reprices_the_slip_and_can_be_undone(page):
     at = page.run()
-    before = at.dataframe[0].value["Leg"].tolist()
+    slips = lambda: [d for d in at.dataframe if "Leg" in d.value.columns]  # noqa: E731
+    before = slips()[0].value["Leg"].tolist()
     box = next(s for s in at.selectbox if s.key == "pb_swapleg_lad0")
     box.select(0).run()
     to = next(s for s in at.selectbox if s.key == "pb_swapto_lad0_0")
     assert len(to.options) > 1
     to.select_index(1).run()
     assert not at.exception
-    after = at.dataframe[0].value["Leg"].tolist()
+    after = slips()[0].value["Leg"].tolist()
     assert after != before
     assert any("changed from the built slip" in e.label for e in at.expander)
     next(b for b in at.button if b.key == "pb_undo_lad0").click().run()
-    assert at.dataframe[0].value["Leg"].tolist() == before
+    assert slips()[0].value["Leg"].tolist() == before
 
 
 def test_only_legs_with_a_read_filters_the_built_slips(page):
     at = page.run()
-    assert "Reads" in at.dataframe[0].value.columns
+    assert any("Reads" in d.value.columns for d in at.dataframe)
     at.checkbox(key="pb_reads_only").check().run()
     assert not at.exception
     built_legs = [name for d in at.dataframe if "Leg" in d.value.columns for name in d.value["Leg"].tolist()]
     assert built_legs and all(name.split()[0].endswith("0") for name in built_legs)      # only the k == 0 players have a read
+
+
+def test_game_read_tab_shows_our_picks_with_the_price_last(page):
+    at = page.run()
+    table = next(d.value for d in at.dataframe if "Pick" in d.value.columns)
+    assert table["Pick"].tolist() == ["P0AAA0 20+ points"] and table["Read"].tolist() == ["x1.20"]
+    assert list(table.columns)[-1] == "Sportsbet" and table["Sportsbet"].tolist() == ["2.00"]
+    assert any("no price involved" in c.value for c in at.caption)

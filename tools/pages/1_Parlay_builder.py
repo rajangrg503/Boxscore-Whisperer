@@ -270,8 +270,57 @@ with st.expander("How to read the numbers"):
         "and karma's own notes. Among legs that cost the same, more reads rank higher. Over the 23 saved nights "
         "reads like these have not been shown to beat the price, which is why every one is shown rather than trusted.")
 
-check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab, score_tab = st.tabs(
-    ["Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet", "Scoreboard"])
+read_tab, check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab, score_tab = st.tabs(
+    ["Game read", "Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet", "Scoreboard"])
+
+
+@st.cache_data(show_spinner="Reading the games…")
+def game_reads(date, stamp, fitted):
+    import game_read as gr
+    return {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in gr.read_night(date, legs_for(date, stamp, fitted)).items()}
+
+
+STAT_WORD = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "threes"}
+
+
+def read_table(picks):
+    st.dataframe(
+        [{"Pick": f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]}" + ("  (day-to-day)" if k.get("dtd") else ""),
+          "Read": f"x{k['mult']:.2f}", "Expects": k["expected"], "Clears it": pct(k["share"]),
+          "Why": "  ·  ".join(k["why"]) or "his season, no adjustment",
+          "Sportsbet": (f"{k['price']:.2f}" if k.get("price") else "--")} for k in picks],
+        hide_index=True, width="stretch")
+
+
+with read_tab:
+    reads_by_game = (FEED["nights"][date].get("read", {}) if FEED_MODE else game_reads(date, stamp, fitted))
+    st.caption("What WE expect from the matchup and each player's own history, with no price involved: his rate "
+               "this season at tonight's minutes, moved by how he has played v this opponent, what this opponent "
+               "allows his type of player, and who is out. 'Clears it' is the share of his games this season, "
+               "re-run through that read, that reach the rung. The Sportsbet price is only looked up afterwards.")
+    if not reads_by_game:
+        st.info("No read for this night yet" + (": publish again from the Mac." if FEED_MODE else "."))
+    else:
+        read_game = st.selectbox("Game", sorted(reads_by_game), key="pb_read_game")
+        r = reads_by_game[read_game]
+        if r["shape"]:
+            with st.expander("How this game is decided (team v team)", expanded=True):
+                st.text("\n".join(line.strip() for line in r["shape"]))
+        st.subheader("Biggest advantages")
+        st.caption("Upside picks: the highest rung he reaches in 25-60% of his games as read, biggest advantage first.")
+        read_table([k for k in r["picks"] if k["kind"] == "upside"][:12])
+        st.subheader("Floors")
+        st.caption("Safe picks: the highest rung he clears in 80%+ of his games as read.")
+        read_table([k for k in r["picks"] if k["kind"] == "safe"][:14])
+        priced = [k for k in r["picks"] if k.get("price")]
+        chosen = st.multiselect("Send picks to Check a slip", priced, key=f"pb_read_send_{read_game}",
+                                format_func=lambda k: f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]} @{k['price']:.2f}")
+        if chosen and st.button("Send", key="pb_read_send_btn"):
+            wanted = {(k["pid"], k["stat"], float(k["rung"])) for k in chosen}
+            st.session_state.pb_slip = [leg_key(x) for x in all_legs
+                                        if x["kind"] == "alt" and (x["pid"], x["stat"], float(x["th"])) in wanted]
+            st.toast("Loaded into Check a slip")
+
 
 with check_tab:
     by_key = {leg_key(x): x for x in all_legs}

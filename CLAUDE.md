@@ -53,6 +53,10 @@ morning screens, staking rules) live in the claude.ai project "boxscore with cow
 - `tools/parlay_builder.py <US date> ladder|longshot|sgm|big|bonus|check "legs"`: true chance, fair price and
   expected return of a slip from measured Sportsbet margins (`calibrate` refits; `backtest`). It does not find
   +EV legs: it shows what each slip shape gives up.
+- `tools/game_read.py <US date> [--game A@B]`: OUR read of each game with no price involved (his rate at tonight's
+  minutes x history v this opponent x what the opponent allows his type x who is out) -> safe and upside picks.
+  It is the first tab of the Parlay builder page (Journal sidebar, and unlisted on the public app at
+  `/Parlay_builder`, fed by `bash tools/publish_builder.sh`). `parlay_builder.py scoreboard` keeps its record.
 - `tools/slip_check.py` (`check_leg`): model chance for a leg. `tools/opp_allows.py OPP STAT`.
 - `tools/team_defense.py --before DATE --game AWAY HOME`: team-ratings score for the box-score cards.
 - `tools/defender_matchups.py`: player vs tonight's defenders (context only; backtest says don't filter on it).
