@@ -209,6 +209,36 @@ def placed_today(date, picks_dir=None):
     return dict(per_game), multis
 
 
+def placed_players(date, picks_dir=None):
+    """Player ids already bet on for a US date (any slip), from journal/picks. Empty on the phone."""
+    picks_dir = picks_dir or os.path.join(ROOT, "journal", "picks")
+    out = set()
+    for f in glob.glob(os.path.join(picks_dir, "*.json")):
+        try:
+            slip = json.load(open(f))
+        except (OSError, ValueError):
+            continue
+        out |= {x.get("pid") for x in slip.get("legs") or [] if x.get("us_date") == date and x.get("pid")}
+    return out
+
+
+def likely_to_land(legs, placed=None, bet_pids=(), lo=1.25, hi=2.2, min_read=0.60, top=12):
+    """The night's legs most likely to land at a fair price (karma, 27 Nov 2026: "why not something that will
+    hit"): our read 60%+, the read AND his season record both at or above what the price implies, a 24+ minute
+    player who isn't out or day-to-day, one leg per player, games under the slip limit and players not already
+    bet, highest read first. Price 1.25-2.2: shorter rungs carry the biggest cut, longer ones aren't 'likely'."""
+    full = {g for g, n in (placed[0] if placed else {}).items() if n >= SLIPS_PER_GAME}
+    pool = [x for x in legs if x["kind"] in ("alt", "over") and x.get("read") is not None
+            and x["read"] >= min_read and (x.get("read_edge") or -1) >= 0 and lo <= x["price"] <= hi
+            and (x.get("hr_season") or 0) >= 1 / x["price"] and (x.get("n_season") or 0) >= 8
+            and (x.get("min_l10") or 0) >= 24 and not x.get("dtd") and not x.get("is_out")
+            and x["game"] not in full and x["pid"] not in bet_pids]
+    best = {}
+    for x in sorted(pool, key=lambda x: -x["read_edge"]):
+        best.setdefault(x["pid"], x)
+    return sorted(best.values(), key=lambda x: -x["read"])[:top]
+
+
 def rule_warnings(legs, placed=None, kind="cash"):
     """karma's standing rules, checked on any slip: what Claude would say before it goes on. `placed` is
     placed_today(); None skips the per-game and multis-per-day checks (not possible on the phone)."""

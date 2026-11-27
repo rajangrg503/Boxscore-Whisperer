@@ -265,6 +265,7 @@ else:
 fitted = (len(cal.get("fitted_on", [])), pb.VERSION)
 all_legs = legs_for(date, stamp, fitted)
 PLACED = None if FEED_MODE else pb.placed_today(date)
+BET_PIDS = set() if FEED_MODE else pb.placed_players(date)
 if not all_legs:
     st.info("No priced legs saved for this night.")
     st.stop()
@@ -321,7 +322,8 @@ STAT_WORD = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "thre
 
 def read_table(picks):
     st.dataframe(
-        [{"Pick": f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]}" + ("  (day-to-day)" if k.get("dtd") else ""),
+        [{"Pick": f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]}" + ("  (day-to-day)" if k.get("dtd") else "")
+                  + ("  (already bet on him)" if k.get("pid") in BET_PIDS else ""),
           "Read says": pct(k["share"]), "Read adds": f"{100 * k.get('lift', 0):+.0f}% chance", "Expects": k["expected"],
           "This season": k.get("season", "--"), "v them": k.get("v_opp", "--"),
           "Why": "  ·  ".join(k["why"]) or "his season, no adjustment",
@@ -341,7 +343,26 @@ with read_tab:
     if not reads_by_game:
         st.info("No read for this night yet" + (": publish again from the Mac." if FEED_MODE else "."))
     else:
+        st.subheader("Most likely to land at a fair price")
+        st.caption("All games: our read 60%+, with the read AND his season record both at or above what the price "
+                   "implies; 24+ minute players, nobody out or day-to-day, one leg per player, prices 1.25-2.2. "
+                   + ("Games already at your slip limit and players you've already bet tonight are left out. "
+                      if not FEED_MODE else "On the phone your placed bets can't be seen, so check the slip limits. ")
+                   + "Big-favourite and opponent rules aren't checked here.")
+        likely = pb.likely_to_land(all_legs, PLACED, BET_PIDS)
+        if likely:
+            st.dataframe(
+                [{"Leg": pb.leg_label(x), "Game": x["game"], "Price": round(x["price"], 2),
+                  "Price implies": pct(1 / x["price"]), "Read": pct(x["read"]),
+                  "This season": f"{pct(x.get('hr_season'))} of {x.get('n_season') or 0}", "Last 8": pct(x.get("hr_l8")),
+                  "v them": (f"{x.get('h2h_hits')} of {x.get('h2h_n')}" if x.get("h2h_n") else "--")} for x in likely],
+                hide_index=True, width="stretch")
+        else:
+            st.info("Nothing tonight is both likely to land and fairly priced.")
         read_game = st.selectbox("Game", sorted(reads_by_game), key="pb_read_game")
+        if PLACED and PLACED[0].get(read_game, 0) >= pb.SLIPS_PER_GAME:
+            st.warning(f"{read_game} already has {PLACED[0][read_game]} slips placed (limit {pb.SLIPS_PER_GAME}): "
+                       "nothing more on this game tonight.")
         r = reads_by_game[read_game]
         if r["shape"]:
             with st.expander("How this game is decided (team v team)", expanded=True):

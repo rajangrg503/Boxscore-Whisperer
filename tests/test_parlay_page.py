@@ -195,3 +195,9 @@ def test_builder_only_uses_legs_our_read_rates_at_the_price(page):
     at.checkbox(key="pb_read_ok").uncheck().run()
     built = [name for d in at.dataframe if "Leg" in d.value.columns for name in d.value["Leg"].tolist()]
     assert any(name.split()[0].endswith("2") for name in built)
+
+
+def test_game_read_opens_with_the_most_likely_list(page):
+    at = page.run()
+    assert any(s.value == "Most likely to land at a fair price" for s in at.subheader)
+    assert any("Nothing tonight is both likely to land" in i.value for i in at.info)   # made-up reads are all 55%

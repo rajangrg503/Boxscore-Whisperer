@@ -277,3 +277,23 @@ def test_placed_today_counts_slips_per_game_and_multis_but_not_ladders(tmp_path)
     per_game, multis = pb.placed_today("2026-11-27", picks_dir=str(tmp_path))
     assert per_game == {"MIA@NYK": 3, "ATL@BOS": 3, "LAL@SAS": 1, "DAL@PHX": 1} and multis == 1
     assert pb.placed_today("2026-11-27", picks_dir=str(tmp_path / "nope")) is None
+
+
+def test_likely_to_land_lists_fair_prices_most_likely_first_and_skips_full_games_and_players_already_bet():
+    def L(name, pid, game, price, read, hr, **kw):
+        return _leg(name, "REB", 6, game=game, **dict(dict(pid=pid, price=price, read=read, read_edge=round(read - 1 / price, 3),
+                    hr_season=hr, n_season=15, min_l10=30), **kw))
+    legs = [L("Good", 1, "A@B", 1.70, 0.70, 0.66), L("Better", 2, "C@D", 1.50, 0.75, 0.70),
+            L("Short", 3, "C@D", 1.30, 0.70, 0.80),                         # read below the 77% the price implies
+            L("Record low", 4, "C@D", 1.80, 0.65, 0.40),                    # season record below the price
+            L("Full game", 5, "E@F", 1.70, 0.70, 0.66), L("Already on", 6, "A@B", 1.70, 0.70, 0.66),
+            L("Long", 7, "A@B", 3.00, 0.45, 0.40), L("Hurt", 8, "A@B", 1.70, 0.70, 0.66, dtd=True)]
+    got = [x["player"] for x in pb.likely_to_land(legs, placed=({"E@F": 2}, 0), bet_pids={6})]
+    assert got == ["Better", "Good"]
+
+
+def test_placed_players_are_everyone_with_a_leg_that_night(tmp_path):
+    import json
+    (tmp_path / "a.json").write_text(json.dumps({"legs": [{"pid": 1, "us_date": "2026-11-27"}, {"pid": 2, "us_date": "2026-11-26"}]}))
+    (tmp_path / "b.json").write_text(json.dumps({"legs": [{"pid": 3, "us_date": "2026-11-27"}]}))
+    assert pb.placed_players("2026-11-27", picks_dir=str(tmp_path)) == {1, 3}
