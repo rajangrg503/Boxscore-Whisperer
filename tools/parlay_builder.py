@@ -180,7 +180,7 @@ NO_SLATE = ("Injuries have NOT been read for this night yet, so a player who is 
             "Press Save Sportsbet's lines (Journal) or run `bash tools/publish_builder.sh` on the Mac.")
 
 
-SLIPS_PER_GAME, MULTIS_PER_DAY = 2, 3      # karma's limits; ladder and bonus-bet slips don't count as multis
+SLIPS_PER_GAME, MULTIS_PER_DAY = 2, 3      # karma's limits; ladder, bonus-bet and builder-test slips aren't multis
 
 
 def placed_today(date, picks_dir=None):
@@ -201,7 +201,10 @@ def placed_today(date, picks_dir=None):
         for g in {x.get("game") for x in legs if x.get("game")}:
             per_game[g] += 1
         tag = f"{slip.get('id', '')} {slip.get('method', '')}".lower()
-        if len(slip.get("legs") or []) > 1 and "ladder" not in tag and "bonus" not in tag and not slip.get("bonus"):
+        # Ladder, bonus-bet and parlay-builder test slips don't count as multis (karma, 27 Nov 2026, of the $2
+        # builder slip k27novbuilder4multi: "that was a test using terminal pick").
+        if (len(slip.get("legs") or []) > 1 and not slip.get("bonus")
+                and not any(w in tag for w in ("ladder", "bonus", "parlay_builder"))):
             multis += 1
     return dict(per_game), multis
 

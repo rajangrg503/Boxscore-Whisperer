@@ -270,9 +270,10 @@ def test_placed_today_counts_slips_per_game_and_multis_but_not_ladders(tmp_path)
     leg = lambda g, d="2026-11-27": {"game": g, "us_date": d}  # noqa: E731
     save("k1ladder", [leg("MIA@NYK")], method="ladder")
     save("k2", [leg("MIA@NYK")])
-    save("k3", [leg("MIA@NYK"), leg("ATL@BOS")], method="experiment_parlay_builder")
+    save("k3", [leg("MIA@NYK"), leg("ATL@BOS")], method="experiment_parlay_builder")      # a builder test
+    save("k6", [leg("DAL@PHX"), leg("ATL@BOS")], method="karma_multi")
     save("k4", [leg("LAL@SAS"), leg("ATL@BOS")], method="ladder")
     save("k5", [leg("MIA@NYK", "2026-11-26")])
     per_game, multis = pb.placed_today("2026-11-27", picks_dir=str(tmp_path))
-    assert per_game == {"MIA@NYK": 3, "ATL@BOS": 2, "LAL@SAS": 1} and multis == 1
+    assert per_game == {"MIA@NYK": 3, "ATL@BOS": 3, "LAL@SAS": 1, "DAL@PHX": 1} and multis == 1
     assert pb.placed_today("2026-11-27", picks_dir=str(tmp_path / "nope")) is None
