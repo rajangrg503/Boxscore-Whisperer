@@ -171,8 +171,8 @@ def test_only_legs_with_a_read_filters_the_built_slips(page):
 def test_game_read_tab_shows_our_picks_with_the_price_last(page):
     at = page.run()
     table = next(d.value for d in at.dataframe if "Pick" in d.value.columns)
-    assert table["Pick"].tolist() == ["P0AAA0 20+ points"] and table["Read adds"].tolist() == ["+12 pts"]
-    assert table["Read v price"].tolist() == ["+5 pts"]                                  # the too-short pick is hidden
+    assert table["Pick"].tolist() == ["P0AAA0 20+ points"] and table["Read adds"].tolist() == ["+12% chance"]
+    assert table["Read v price"].tolist() == ["+5% chance"]                                  # the too-short pick is hidden
     assert list(table.columns)[-1] == "Sportsbet" and table["Sportsbet"].tolist() == ["2.00"]
     assert table["This season"].tolist() == ["5 of 12"] and table["v them"].tolist() == ["3 of 6"]
     assert any("no price involved" in c.value for c in at.caption)
@@ -183,14 +183,14 @@ def test_picks_the_price_is_too_short_for_can_be_shown(page):
     at.checkbox(key="pb_read_hide_short").uncheck().run()
     table = next(d.value for d in at.dataframe if "Pick" in d.value.columns)
     assert table["Pick"].tolist() == ["P0AAA0 20+ points", "P0AAA2 6+ assists"]
-    assert table["Read v price"].tolist() == ["+5 pts", "-20 pts"]
+    assert table["Read v price"].tolist() == ["+5% chance", "-20% chance"]
 
 
 def test_builder_only_uses_legs_our_read_rates_at_the_price(page):
     at = page.run()
     built = [name for d in at.dataframe if "Leg" in d.value.columns for name in d.value["Leg"].tolist()]
     assert built and not any(name.split()[0].endswith("2") for name in built)        # the k == 2 players read too short
-    assert all(v.endswith("pts") for d in at.dataframe if "Read v price" in d.value.columns and "Leg" in d.value.columns
+    assert all(v.endswith("chance") for d in at.dataframe if "Read v price" in d.value.columns and "Leg" in d.value.columns
                for v in d.value["Read v price"].tolist())
     at.checkbox(key="pb_read_ok").uncheck().run()
     built = [name for d in at.dataframe if "Leg" in d.value.columns for name in d.value["Leg"].tolist()]

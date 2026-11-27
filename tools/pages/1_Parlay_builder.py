@@ -131,7 +131,8 @@ PLACED = None          # set once the night is chosen: bets already placed (Jour
 def edge_text(x):
     if x.get("read_edge") is None:
         return "--"
-    return f"{100 * x['read_edge']:+.0f} pts" + ("  too short" if x["read_edge"] < 0 else "")
+    # percentage points of CHANCE, not basketball points (karma read "+12 pts" on assists as 12 points)
+    return f"{100 * x['read_edge']:+.0f}% chance" + (", too short" if x["read_edge"] < 0 else "")
 
 
 def render_slip(legs, e, key=None):
@@ -321,10 +322,10 @@ STAT_WORD = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "thre
 def read_table(picks):
     st.dataframe(
         [{"Pick": f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]}" + ("  (day-to-day)" if k.get("dtd") else ""),
-          "Read says": pct(k["share"]), "Read adds": f"{100 * k.get('lift', 0):+.0f} pts", "Expects": k["expected"],
+          "Read says": pct(k["share"]), "Read adds": f"{100 * k.get('lift', 0):+.0f}% chance", "Expects": k["expected"],
           "This season": k.get("season", "--"), "v them": k.get("v_opp", "--"),
           "Why": "  ·  ".join(k["why"]) or "his season, no adjustment",
-          "Read v price": (f"{100 * k['edge']:+.0f} pts" if k.get("edge") is not None else "--"),
+          "Read v price": (f"{100 * k['edge']:+.0f}% chance" if k.get("edge") is not None else "--"),
           "Sportsbet": (f"{k['price']:.2f}" if k.get("price") else "--")} for k in picks],
         hide_index=True, width="stretch")
 
@@ -348,7 +349,7 @@ with read_tab:
         hide_short = st.checkbox(
             "Hide picks the price is too short for", value=True, key="pb_read_hide_short",
             help="'Read v price' is the read's chance (corrected by how far it was off in the 1-25 Nov backtest: "
-                 "upside 2 points high, floors 8 high) minus the chance Sportsbet's price implies. Below zero, "
+                 "upside 2% high, floors 8% high) minus the chance Sportsbet's price implies. Below zero, "
                  "our own read says the price is too short, so it isn't a pick. Picks with no price yet stay.")
         if hide_short:
             r = dict(r, picks=[k for k in r["picks"] if k.get("edge") is None or k["edge"] >= 0])

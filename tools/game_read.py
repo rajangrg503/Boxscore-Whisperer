@@ -314,9 +314,9 @@ def main(argv=None):
             rows = [k for k in r["picks"] if k["kind"] == kind_][:8]
             print(f"\n  {title}")
             for k in rows:
-                price = (f"Sportsbet {k['price']:.2f} (read v price {100 * k['edge']:+.0f} pts)" if k["price"]
+                price = (f"Sportsbet {k['price']:.2f} (read v price {100 * k['edge']:+.0f}%)" if k["price"]
                          else "no price saved")
-                print(f"    {pick_label(k):34s} read {100 * k['share']:.0f}% ({100 * k['lift']:+.0f} pts) | actually {k['season']} this season, {k['v_opp']} v them"
+                print(f"    {pick_label(k):34s} read {100 * k['share']:.0f}% (read adds {100 * k['lift']:+.0f}%) | actually {k['season']} this season, {k['v_opp']} v them"
                       f" | expects {k['expected']:g} | read x{k['mult']:.2f} | {price}{' | DAY-TO-DAY' if k['dtd'] else ''}")
                 for w in k["why"]:
                     print(f"        - {w}")
