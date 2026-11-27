@@ -61,7 +61,7 @@ def test_page_opens_and_builds_every_tab(page):
     at = page.run()
     assert not at.exception
     assert at.title[0].value == "Parlay builder"
-    assert [t.label for t in at.tabs] == ["Game read", "Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket",
+    assert [t.label for t in at.tabs] == ["Game read", "Threes v them", "Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket",
                                           "Bonus bet", "Scoreboard"]
     assert len(at.dataframe) >= 5                       # built slips are on the page
     assert any("expected return" in m.value for m in at.markdown)

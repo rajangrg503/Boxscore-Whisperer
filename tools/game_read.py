@@ -31,6 +31,7 @@ scoreboard), and nothing here knows who guards whom or how the game script goes.
 the builder's log before the games so this read gets its own record.
 """
 import argparse
+import collections
 import datetime as dt
 import math
 import os
@@ -167,6 +168,11 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
         record = lambda rung: None if rung is None else {  # noqa: E731
             "season": f"{sum(v >= rung for v in raw)} of {len(raw)}",
             "v_opp": (f"{sum(v >= rung for v in versus)} of {len(versus)}{then}" if versus else "--")}
+        if stat == "FG3M":                              # every game v this opponent, for the threes list
+            v_log = [{"date": pc._date(x).isoformat(), "team": pc.ALIAS.get(pc.team_from_rows([x]), pc.team_from_rows([x])),
+                      "min": round(pc.nf(x["MIN"])), "made": int(pc.nf(x.get("FG3M"))), "att": int(pc.nf(x.get("FG3A")))}
+                     for x in prior if pc.ALIAS.get(pc.opp_of(x), pc.opp_of(x)) == opp]
+            att = round(st.mean(pc.nf(x.get("FG3A")) for x in season), 1)
         out["stats"][stat] = {"expected": round(per_min * minutes * mult, 1), "season": round(per_min * usual, 1),
                               "mult": round(mult, 3), "why": why,
                               "safe_record": record(safe), "upside_record": record(upside),
@@ -174,9 +180,12 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
                               "safe": safe, "safe_share": round(share(safe), 2) if safe else None,
                               "upside": upside, "upside_share": round(share(upside), 2) if upside else None,
                               "best": round(max(games), 0),
+                              "season_raw": round(st.mean(raw), 2) if raw else 0.0,
                               # share of his games, as read, reaching every whole number: the read's chance for
                               # any rung or line Sportsbet offers (string keys so it survives the JSON feed)
                               "chance": {str(r): round(share(r), 3) for r in range(1, int(max(games)) + 2)}}
+        if stat == "FG3M":
+            out["stats"][stat].update(v_log=v_log, season_att=att)
     return out if out["stats"] else None
 
 
@@ -291,6 +300,38 @@ def annotate_legs(legs, night):
         x["read"] = round(min(max(read, 0.01), 0.99), 3)
         x["read_edge"] = round(x["read"] - 1 / x["price"], 3)
     return legs
+
+
+def threes_table(night, legs):
+    """karma, 27 Nov 2026: "i want a list of 3s made vs them by players and the read". One row per player
+    with 2+ games v tonight's opponent (last three seasons) who averages 1+ three as read: his makes in
+    those games (and how many were for another team), his season average, what the read expects, and the
+    Sportsbet threes leg our read rates best against its price. Most above his season average v them first."""
+    priced = collections.defaultdict(list)
+    for x in legs:
+        if (x["stat"] == "FG3M" and x["kind"] in ("alt", "over") and x.get("read_edge") is not None
+                and 1.3 <= x["price"] <= 4.0):           # a leg worth looking at, not a 20-to-1 rung
+            priced[x["pid"]].append(x)
+    rows = []
+    for g, r in night.items():
+        for p in r["players"]:
+            s = p["stats"].get("FG3M") or {}
+            log = s.get("v_log") or []
+            if len(log) < 2 or s.get("expected", 0) < 1.0:
+                continue
+            best = max(priced.get(p["pid"], []), key=lambda x: x["read_edge"], default=None)
+            v_avg = st.mean(v["made"] for v in log)
+            rows.append({
+                "player": p["player"], "pid": p["pid"], "team": p["team"], "opp": p["opp"], "game": g,
+                "v_games": len(log), "v_makes": [v["made"] for v in log[:8]], "v_avg": round(v_avg, 2),
+                "v_att": round(st.mean(v["att"] for v in log), 1), "v_min": round(st.mean(v["min"] for v in log)),
+                "v_other_team": sum(v["team"] != p["team"] for v in log),
+                "season_avg": s.get("season_raw", 0.0), "season_att": s.get("season_att"), "expects": s["expected"],
+                "minutes": p["minutes"], "dtd": p.get("dtd", False),
+                "leg": best and {k: best.get(k) for k in ("kind", "th", "price", "read", "read_edge", "hr_season",
+                                                          "n_season", "hr_l8", "h2h_hits", "h2h_n")}})
+    rows.sort(key=lambda x: -(x["v_avg"] - x["season_avg"]))
+    return rows
 
 
 def pick_label(k):

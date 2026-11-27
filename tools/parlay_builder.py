@@ -575,15 +575,16 @@ def build_feed(dates=None, path=FEED_PATH):
     for d in dates or coming_nights():
         legs = load_legs(d)
         if legs:
-            read = {}
+            read, threes = {}, []
             try:
                 import game_read as gr
                 night = gr.read_night(d, legs)
                 gr.annotate_legs(legs, night)          # every leg carries the read's chance and read v price
                 read = {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in night.items()}
+                threes = gr.threes_table(night, legs)
             except Exception:                          # noqa: BLE001 -- the builder still publishes without the read
                 pass
-            nights[d] = {"has_slate": has_slate(d), "read": read,
+            nights[d] = {"has_slate": has_slate(d), "read": read, "threes": threes,
                          "legs": [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in x.items()
                                    if k not in _FEED_DROP} for x in legs]}
     feed = {"made_at": dt.datetime.now(ZoneInfo("Australia/Sydney")).isoformat(timespec="minutes"),

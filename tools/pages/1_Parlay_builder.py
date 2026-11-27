@@ -63,15 +63,16 @@ def night_data(date, stamp, fitted):
     """(legs, read): every priced leg, each carrying our read's chance and read v price, and the Game read.
     The phone gets both ready-made in the feed."""
     if FEED_MODE:
-        return [dict(x) for x in FEED["nights"][date]["legs"]], FEED["nights"][date].get("read", {})
+        n = FEED["nights"][date]
+        return [dict(x) for x in n["legs"]], n.get("read", {}), n.get("threes", [])
     import game_read as gr
     raw = pb.load_legs(date)
     night = gr.read_night(date, raw)
     gr.annotate_legs(raw, night)
-    return raw, {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in night.items()}
+    return raw, {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in night.items()}, gr.threes_table(night, raw)
 
 
-def legs_for(date, stamp, fitted):
+def legs_for(date, stamp, fitted):  # noqa: D103
     return pb._annotate([dict(x) for x in night_data(date, stamp, fitted)[0]], source_cal())
 
 
@@ -308,8 +309,9 @@ with st.expander("How to read the numbers"):
         "and karma's own notes. Among legs that cost the same, more reads rank higher. Over the 23 saved nights "
         "reads like these have not been shown to beat the price, which is why every one is shown rather than trusted.")
 
-read_tab, check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab, score_tab = st.tabs(
-    ["Game read", "Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet", "Scoreboard"])
+read_tab, threes_tab, check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab, score_tab = st.tabs(
+    ["Game read", "Threes v them", "Check a slip", "Ladder", "Longshot", "Same-game multi", "Big ticket", "Bonus bet",
+     "Scoreboard"])
 
 
 @st.cache_data(show_spinner="Reading the games…")
@@ -391,6 +393,40 @@ with read_tab:
                                         if x["kind"] == "alt" and (x["pid"], x["stat"], float(x["th"])) in wanted]
             st.toast("Loaded into Check a slip")
 
+
+with threes_tab:
+    threes = night_data(date, stamp, fitted)[2]
+    st.caption("Every player with 2+ games against tonight's opponent (last three seasons) who averages a three "
+               "or more as read: his threes made in those games (newest first), his average v them and this "
+               "season, and what the read expects tonight. 'Best leg' is the Sportsbet threes leg our read rates "
+               "best against its price. Watch 'for another team': history from a different team is a different role. "
+               "Threes are straights only.")
+    t_games = ["All games"] + sorted({r["game"] for r in threes})
+    t_game = st.selectbox("Game", t_games, key="pb_threes_game")
+    shown = [r for r in threes if t_game == "All games" or r["game"] == t_game]
+    if not shown:
+        st.info("No player has enough history against tonight's opponent.")
+    else:
+        def leg_text(leg):
+            if not leg:
+                return "--"
+            what = f"{leg['th']:g}+" if leg["kind"] == "alt" else f"over {leg['th']:g}"
+            return f"{what} @{leg['price']:.2f}"
+        st.dataframe(
+            [{"Player": r["player"] + ("  (day-to-day)" if r.get("dtd") else "")
+                        + ("  (already bet on him)" if r["pid"] in BET_PIDS else ""),
+              "Game": r["game"],
+              "v them (newest first)": " · ".join(str(m) for m in r["v_makes"]),
+              "v them avg": f"{r['v_avg']:.1f} in {r['v_games']}",
+              "for another team": r["v_other_team"] or "",
+              "This season": f"{r['season_avg']:.1f} ({r['season_att']} att)",
+              "Read expects": r["expects"],
+              "Best leg": leg_text(r["leg"]),
+              "Read": pct(r["leg"]["read"]) if r["leg"] else "--",
+              "Season at it": pct(r["leg"]["hr_season"]) if r["leg"] else "--",
+              "v them at it": (f"{r['leg']['h2h_hits']} of {r['leg']['h2h_n']}" if r["leg"] and r["leg"].get("h2h_n") else "--"),
+              "Read v price": (f"{100 * r['leg']['read_edge']:+.0f}% chance" if r["leg"] else "--")} for r in shown],
+            hide_index=True, width="stretch")
 
 with check_tab:
     by_key = {leg_key(x): x for x in all_legs}

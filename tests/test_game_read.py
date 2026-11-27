@@ -120,3 +120,21 @@ def test_every_leg_gets_the_reads_chance_and_read_v_price():
     assert legs[3]["read"] == 0.82                                                # floor-like: 8 points off
     assert legs[4]["read"] == 0.01                                                # past his best game
     assert legs[5]["read"] is None and legs[5]["read_edge"] is None               # not read
+
+
+def test_threes_list_shows_makes_v_them_and_the_best_priced_leg():
+    log = [{"date": "2026-11-01", "team": "AAA", "min": 32, "made": 5, "att": 9},
+           {"date": "2025-03-01", "team": "ZZZ", "min": 30, "made": 3, "att": 7}]
+    night = {"AAA@BBB": {"players": [
+        {"pid": 1, "player": "A One", "team": "AAA", "opp": "BBB", "minutes": 32,
+         "stats": {"FG3M": {"expected": 2.5, "season_raw": 2.2, "season_att": 6.1, "v_log": log}}},
+        {"pid": 2, "player": "B Two", "team": "AAA", "opp": "BBB", "minutes": 30,
+         "stats": {"FG3M": {"expected": 0.6, "season_raw": 0.5, "season_att": 2.0, "v_log": log}}}]}}   # too few threes
+    legs = [dict(pid=1, stat="FG3M", kind="alt", th=3, price=2.1, read_edge=0.04, read=0.52, hr_season=0.5),
+            dict(pid=1, stat="FG3M", kind="alt", th=6, price=15.0, read_edge=0.08, read=0.15, hr_season=0.1),  # too long
+            dict(pid=1, stat="FG3M", kind="alt", th=2, price=1.4, read_edge=-0.02, read=0.69, hr_season=0.8)]
+    rows = gr.threes_table(night, legs)
+    assert [r["player"] for r in rows] == ["A One"]
+    r = rows[0]
+    assert r["v_makes"] == [5, 3] and r["v_avg"] == 4 and r["v_other_team"] == 1 and r["season_avg"] == 2.2
+    assert r["leg"]["th"] == 3 and r["leg"]["price"] == 2.1
