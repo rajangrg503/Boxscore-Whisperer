@@ -58,18 +58,31 @@ def source_cal():
     return FEED.get("cal", {}) if FEED_MODE else pb.load_cal()
 
 
-@st.cache_data(show_spinner="Reading the saved lines…")
+@st.cache_data(show_spinner="Reading the saved lines and the game…")
+def night_data(date, stamp, fitted):
+    """(legs, read): every priced leg, each carrying our read's chance and read v price, and the Game read.
+    The phone gets both ready-made in the feed."""
+    if FEED_MODE:
+        return [dict(x) for x in FEED["nights"][date]["legs"]], FEED["nights"][date].get("read", {})
+    import game_read as gr
+    raw = pb.load_legs(date)
+    night = gr.read_night(date, raw)
+    gr.annotate_legs(raw, night)
+    return raw, {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in night.items()}
+
+
 def legs_for(date, stamp, fitted):
-    raw = [dict(x) for x in FEED["nights"][date]["legs"]] if FEED_MODE else pb.load_legs(date)
-    return pb._annotate(raw, source_cal())
+    return pb._annotate([dict(x) for x in night_data(date, stamp, fitted)[0]], source_cal())
 
 
 @st.cache_data(show_spinner="Building…")
 def built(date, stamp, fitted, mode, n_legs=3, game=None, target=500.0, bonus=False, bet_return=False, loose=False,
-          reads_only=False):
+          reads_only=False, read_ok=True):
     legs, cal, same = legs_for(date, stamp, fitted), source_cal(), pb.load_same()
     if reads_only:
         legs = [x for x in legs if x.get("reads_for") and not x.get("reads_against")]
+    if read_ok and not loose:
+        legs = [x for x in legs if (x.get("read_edge") or -1) >= 0]   # our read must rate the leg at the price or better
     stake = "bonus" if bonus else "cash"
     if mode == "ladder":
         return pb.build_ladder(legs, cal, same, top=8)
@@ -112,8 +125,20 @@ def short_line(legs, e):
     return f"Misses by exactly one leg {100 * e['one_short']:.0f}% of the time."
 
 
+PLACED = None          # set once the night is chosen: bets already placed (Journal only)
+
+
+def edge_text(x):
+    if x.get("read_edge") is None:
+        return "--"
+    return f"{100 * x['read_edge']:+.0f} pts" + ("  too short" if x["read_edge"] < 0 else "")
+
+
 def render_slip(legs, e, key=None):
-    """One slip: the headline numbers, then a row per leg."""
+    """One slip: karma's rules first (anything that breaks one is said out loud), the headline numbers,
+    then a row per leg."""
+    for w in pb.rule_warnings(legs, PLACED, e["stake"]):
+        st.warning(w)
     est = e["price_is_estimate"] and len({x["game"] for x in legs}) < len(legs)
     if e["stake"] == "bonus":
         value = f"$1 of bonus bet comes back as <b>{100 * e['return_per_dollar']:.0f}c</b>"
@@ -134,7 +159,7 @@ def render_slip(legs, e, key=None):
           "Leg return": f"{100 * (p * x['price'] - 1):+.0f}%",
           "Season": f"{pct(x.get('hr_season'))} of {x.get('n_season') or 0}", "Last 8": pct(x.get("hr_l8")),
           "v this team": (f"{x.get('h2h_hits')} of {x.get('h2h_n')}" if x.get("h2h_n") else "--"),
-          "Reads": reads_text(x),
+          "Read v price": edge_text(x), "Reads": reads_text(x),
           "Min": round(x.get("min_l10") or 0)} for x, p in zip(legs, e["leg_probs"])],
         hide_index=True, width="stretch")
     if key and st.button("Send to Check a slip", key=key):
@@ -238,6 +263,7 @@ else:
 
 fitted = (len(cal.get("fitted_on", [])), pb.VERSION)
 all_legs = legs_for(date, stamp, fitted)
+PLACED = None if FEED_MODE else pb.placed_today(date)
 if not all_legs:
     st.info("No priced legs saved for this night.")
     st.stop()
@@ -248,6 +274,16 @@ reads_only = st.checkbox(
          "or one of karma's own notes. Legs with a read against them (head-to-head veto, wrong stat for him) "
          "are left out. Reads order and filter the lists; they have not been shown to beat the price.")
 legs = [x for x in all_legs if x.get("reads_for") and not x.get("reads_against")] if reads_only else all_legs
+with_edge = sum(1 for x in all_legs if x["kind"] == "alt" and (x.get("read_edge") or -1) >= 0)
+read_ok = st.checkbox(
+    f"Only use legs our read rates at or above Sportsbet's price ({with_edge} of them tonight)", value=True,
+    key="pb_read_ok",
+    help="Each leg's 'Read v price' is the Game read's chance for it (his season at tonight's minutes, moved by "
+         "the matchup, then corrected by how far the read was off in the 1-25 Nov backtest) minus the chance "
+         "Sportsbet's price implies. With this on, the built slips and the swaps only use legs at zero or above, "
+         "so the builder never suggests a leg our own read says is overpriced. 'Loosen the rules' ignores it.")
+if read_ok:
+    legs = [x for x in legs if (x.get("read_edge") or -1) >= 0]
 games = sorted({x["game"] for x in all_legs})
 st.caption(f"{len(all_legs):,} priced legs in {len(games)} games · {saved_text} · "
            f"margins measured on {fitted[0]} nights")
@@ -276,8 +312,7 @@ read_tab, check_tab, ladder_tab, long_tab, sgm_tab, big_tab, bonus_tab, score_ta
 
 @st.cache_data(show_spinner="Reading the games…")
 def game_reads(date, stamp, fitted):
-    import game_read as gr
-    return {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in gr.read_night(date, legs_for(date, stamp, fitted)).items()}
+    return night_data(date, stamp, fitted)[1]
 
 
 STAT_WORD = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "threes"}
@@ -289,12 +324,13 @@ def read_table(picks):
           "Read says": pct(k["share"]), "Read adds": f"{100 * k.get('lift', 0):+.0f} pts", "Expects": k["expected"],
           "This season": k.get("season", "--"), "v them": k.get("v_opp", "--"),
           "Why": "  ·  ".join(k["why"]) or "his season, no adjustment",
+          "Read v price": (f"{100 * k['edge']:+.0f} pts" if k.get("edge") is not None else "--"),
           "Sportsbet": (f"{k['price']:.2f}" if k.get("price") else "--")} for k in picks],
         hide_index=True, width="stretch")
 
 
 with read_tab:
-    reads_by_game = (FEED["nights"][date].get("read", {}) if FEED_MODE else game_reads(date, stamp, fitted))
+    reads_by_game = game_reads(date, stamp, fitted)
     st.caption("What WE expect from the matchup and each player's own history, with no price involved: his rate "
                "this season at tonight's minutes, moved by how he has played v this opponent, what this opponent "
                "allows his type of player, and who is out. 'Read says' is the share of his games this season, "
@@ -309,6 +345,13 @@ with read_tab:
         if r["shape"]:
             with st.expander("How this game is decided (team v team)", expanded=True):
                 st.text("\n".join(line.strip() for line in r["shape"]))
+        hide_short = st.checkbox(
+            "Hide picks the price is too short for", value=True, key="pb_read_hide_short",
+            help="'Read v price' is the read's chance (corrected by how far it was off in the 1-25 Nov backtest: "
+                 "upside 2 points high, floors 8 high) minus the chance Sportsbet's price implies. Below zero, "
+                 "our own read says the price is too short, so it isn't a pick. Picks with no price yet stay.")
+        if hide_short:
+            r = dict(r, picks=[k for k in r["picks"] if k.get("edge") is None or k["edge"] >= 0])
         st.subheader("Biggest advantages")
         st.caption("Upside picks: the highest rung he reaches in 25-60% of his games as read. Ordered by 'Read adds': "
                    "how much the read raises his chance at that number over his plain season. Only stats he "
@@ -355,6 +398,9 @@ with check_tab:
             st.rerun()
         e = pb.evaluate(slip, price=price or None, cal=cal, same=pb.load_same(),
                         stake="bonus" if bonus else "cash", bet_return=bet_return)
+        if FEED_MODE:
+            st.caption("On the phone the slips you've already placed can't be seen, so the per-game and "
+                       "multis-per-day limits aren't checked here.")
         render_slip(slip, e)
         drop = st.selectbox("Remove a leg", [None] + slip, format_func=lambda x: "—" if x is None else pb.leg_label(x))
         if drop is not None:
@@ -364,7 +410,7 @@ with check_tab:
 with ladder_tab:
     st.caption("Singles near 2.00 (and two-game pairs when they beat a single, which is rare). Every single in this "
                "band costs about the same, so they're ordered by the player's own record at the line.")
-    render_ranked(built(date, stamp, fitted, "ladder", reads_only=reads_only), "lad", legs, dict(purpose="single", lo=1.9, hi=2.15))
+    render_ranked(built(date, stamp, fitted, "ladder", reads_only=reads_only, read_ok=read_ok), "lad", legs, dict(purpose="single", lo=1.9, hi=2.15))
 
 PLAY_HELP = ("For playing around, not for betting: any stat (combos and threes too), any player averaging 20+ "
              "minutes, and no limit on legs from one team.")
@@ -384,7 +430,7 @@ with long_tab:
     st.caption("Rungs at 2.0–3.6 spread evenly over the night's games (the price band that gives up least). "
                "With more legs than games, each game takes two or more.")
     ranked = built(date, stamp, fitted, "longshot", n_legs=n_long, bonus=long_bonus, bet_return=long_return,
-                   loose=long_loose, reads_only=reads_only)
+                   loose=long_loose, reads_only=reads_only, read_ok=read_ok)
     shown_legs(ranked, n_long)
     render_ranked(ranked, "lon", legs, dict(purpose="multi", lo=2.0, hi=3.6, loose=long_loose),
                   stake="bonus" if long_bonus else "cash", bet_return=long_return)
@@ -398,7 +444,7 @@ with sgm_tab:
     st.caption("One leg per player, single stats, at most half the legs from one team (teammates' scoring legs "
                "work against each other). The price shown is an estimate, 0.96 × the product of the legs.")
     ranked = built(date, stamp, fitted, "sgm", n_legs=n_sgm, game=sgm_game, bet_return=sgm_return, loose=sgm_loose,
-                   reads_only=reads_only)
+                   reads_only=reads_only, read_ok=read_ok)
     shown_legs(ranked, n_sgm)
     render_ranked(ranked, "sgm", legs, dict(purpose="sgm", lo=1.1 if sgm_loose else 1.25, hi=6.0 if sgm_loose else 3.6,
                                            loose=sgm_loose, same_game=True), bet_return=sgm_return)
@@ -408,11 +454,11 @@ with big_tab:
                               value=500, format_func=lambda v: f"{v:,}")
     st.caption("The cheapest route to a big price: the legs that give up least per unit of odds, one per team. "
                "It is still a lottery ticket.")
-    render_ranked(built(date, stamp, fitted, "big", target=float(target), reads_only=reads_only), "big", legs, dict(purpose="multi", lo=1.8, hi=3.6))
+    render_ranked(built(date, stamp, fitted, "big", target=float(target), reads_only=reads_only, read_ok=read_ok), "big", legs, dict(purpose="multi", lo=1.8, hi=3.6))
 
 with bonus_tab:
     st.caption("The slips that turn $1 of bonus bet into the most cash on average.")
-    render_ranked(built(date, stamp, fitted, "bonus", reads_only=reads_only), "bon", legs, dict(purpose="multi", lo=2.0, hi=6.0), stake="bonus")
+    render_ranked(built(date, stamp, fitted, "bonus", reads_only=reads_only, read_ok=read_ok), "bon", legs, dict(purpose="multi", lo=2.0, hi=6.0), stake="bonus")
 
 
 @st.cache_data(show_spinner="Grading the saved nights…")

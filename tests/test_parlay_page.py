@@ -28,7 +28,7 @@ def made_up_legs(date, with_actuals=False):
                     legs.append(fake.leg(f"P{g}{t}{k}", stat, th, price, game=f"{t1}@{t2}", team=t, pid=pid,
                                          hr_season=0.5, n_season=12, hr_l8=0.5, date=date,
                                          reads_for=(["v the other lot: 1.20x his usual rate over 6 games"] if k == 0 else []),
-                                         reads_against=[]))
+                                         reads_against=[], read=0.55, read_edge=(-0.1 if k == 2 else 0.05)))
     return legs
 
 
@@ -46,9 +46,12 @@ def page(monkeypatch, tmp_path):
                                                            roi=-0.1, lo=-0.2, hi=0.0)])
     monkeypatch.setattr(pb, "log_results", lambda: [])
     import game_read as gr
+    monkeypatch.setattr(gr, "annotate_legs", lambda legs, night: legs)      # made_up_legs carry their own read
     monkeypatch.setattr(gr, "read_night", lambda date, legs=None, game=None: {"AAA@BBB": {"shape": ["AAA run"], "players": [], "picks": [
         dict(kind="upside", player="P0AAA0", pid=0, team="AAA", stat="PTS", rung=20, share=0.3, mult=1.2, expected=17.5,
-             why=["v BBB he has run at 1.30x his usual rate over 6 games"], dtd=False, price=2.0, season="5 of 12", v_opp="3 of 6", lift=0.12),
+             why=["v BBB he has run at 1.30x his usual rate over 6 games"], dtd=False, price=2.0, season="5 of 12", v_opp="3 of 6", lift=0.12, edge=0.05),
+        dict(kind="upside", player="P0AAA2", pid=2, team="AAA", stat="AST", rung=6, share=0.5, mult=1.1, expected=5.5,
+             why=[], dtd=False, price=1.46, season="9 of 18", v_opp="4 of 4", lift=0.06, edge=-0.2),
         dict(kind="safe", player="P0AAA1", pid=1, team="AAA", stat="REB", rung=6, share=0.85, mult=1.0, expected=7.9,
              why=[], dtd=False, price=None)]}})
     return AppTest.from_file(PAGE, default_timeout=60)
@@ -169,6 +172,26 @@ def test_game_read_tab_shows_our_picks_with_the_price_last(page):
     at = page.run()
     table = next(d.value for d in at.dataframe if "Pick" in d.value.columns)
     assert table["Pick"].tolist() == ["P0AAA0 20+ points"] and table["Read adds"].tolist() == ["+12 pts"]
+    assert table["Read v price"].tolist() == ["+5 pts"]                                  # the too-short pick is hidden
     assert list(table.columns)[-1] == "Sportsbet" and table["Sportsbet"].tolist() == ["2.00"]
     assert table["This season"].tolist() == ["5 of 12"] and table["v them"].tolist() == ["3 of 6"]
     assert any("no price involved" in c.value for c in at.caption)
+
+
+def test_picks_the_price_is_too_short_for_can_be_shown(page):
+    at = page.run()
+    at.checkbox(key="pb_read_hide_short").uncheck().run()
+    table = next(d.value for d in at.dataframe if "Pick" in d.value.columns)
+    assert table["Pick"].tolist() == ["P0AAA0 20+ points", "P0AAA2 6+ assists"]
+    assert table["Read v price"].tolist() == ["+5 pts", "-20 pts"]
+
+
+def test_builder_only_uses_legs_our_read_rates_at_the_price(page):
+    at = page.run()
+    built = [name for d in at.dataframe if "Leg" in d.value.columns for name in d.value["Leg"].tolist()]
+    assert built and not any(name.split()[0].endswith("2") for name in built)        # the k == 2 players read too short
+    assert all(v.endswith("pts") for d in at.dataframe if "Read v price" in d.value.columns and "Leg" in d.value.columns
+               for v in d.value["Read v price"].tolist())
+    at.checkbox(key="pb_read_ok").uncheck().run()
+    built = [name for d in at.dataframe if "Leg" in d.value.columns for name in d.value["Leg"].tolist()]
+    assert any(name.split()[0].endswith("2") for name in built)

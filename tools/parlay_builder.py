@@ -180,6 +180,58 @@ NO_SLATE = ("Injuries have NOT been read for this night yet, so a player who is 
             "Press Save Sportsbet's lines (Journal) or run `bash tools/publish_builder.sh` on the Mac.")
 
 
+SLIPS_PER_GAME, MULTIS_PER_DAY = 2, 3      # karma's limits; ladder and bonus-bet slips don't count as multis
+
+
+def placed_today(date, picks_dir=None):
+    """({game: slips already placed}, multis already placed) for a US date, from journal/picks. None when
+    the journal isn't here (the phone)."""
+    picks_dir = picks_dir or os.path.join(ROOT, "journal", "picks")
+    if not os.path.isdir(picks_dir):
+        return None
+    per_game, multis = collections.Counter(), 0
+    for f in glob.glob(os.path.join(picks_dir, "*.json")):
+        try:
+            slip = json.load(open(f))
+        except (OSError, ValueError):
+            continue
+        legs = [x for x in slip.get("legs") or [] if x.get("us_date") == date]
+        if not legs:
+            continue
+        for g in {x.get("game") for x in legs if x.get("game")}:
+            per_game[g] += 1
+        tag = f"{slip.get('id', '')} {slip.get('method', '')}".lower()
+        if len(slip.get("legs") or []) > 1 and "ladder" not in tag and "bonus" not in tag and not slip.get("bonus"):
+            multis += 1
+    return dict(per_game), multis
+
+
+def rule_warnings(legs, placed=None, kind="cash"):
+    """karma's standing rules, checked on any slip: what Claude would say before it goes on. `placed` is
+    placed_today(); None skips the per-game and multis-per-day checks (not possible on the phone)."""
+    out = []
+    multi = len(legs) > 1
+    if multi and any(x["stat"] == "FG3M" for x in legs):
+        out.append("Threes are straights only, never in a multi: " +
+                   ", ".join(leg_label(x) for x in legs if x["stat"] == "FG3M") + ".")
+    for x in legs:
+        if x.get("is_out"):
+            out.append(f"{x['player']} is listed OUT.")
+        elif x.get("dtd"):
+            out.append(f"{x['player']} is day-to-day: wait for news.")
+        if "doncic" in pc.norm(x["player"]) and x["stat"] == "PTS" and x["kind"] == "alt" and x["th"] >= 35:
+            out.append("Luka: no 35+ points.")
+    if placed is not None:
+        per_game, multis = placed
+        for g in sorted({x["game"] for x in legs}):
+            if per_game.get(g, 0) + 1 > SLIPS_PER_GAME:
+                out.append(f"{g} already has {per_game[g]} slip{'s' if per_game[g] != 1 else ''} placed "
+                           f"(limit {SLIPS_PER_GAME} per game).")
+        if multi and kind == "cash" and multis >= MULTIS_PER_DAY:
+            out.append(f"{multis} multis already placed today (limit {MULTIS_PER_DAY}).")
+    return out
+
+
 def leg_label(leg):
     if leg["kind"] == "alt":
         return f"{leg['player']} {leg['stat']} {leg['th']:g}+"
@@ -490,14 +542,17 @@ def build_feed(dates=None, path=FEED_PATH):
     for d in dates or coming_nights():
         legs = load_legs(d)
         if legs:
-            nights[d] = {"has_slate": has_slate(d),
-                         "legs": [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in x.items()
-                                   if k not in _FEED_DROP} for x in legs]}
+            read = {}
             try:
                 import game_read as gr
-                nights[d]["read"] = {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in gr.read_night(d, legs).items()}
+                night = gr.read_night(d, legs)
+                gr.annotate_legs(legs, night)          # every leg carries the read's chance and read v price
+                read = {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in night.items()}
             except Exception:                          # noqa: BLE001 -- the builder still publishes without the read
-                nights[d]["read"] = {}
+                pass
+            nights[d] = {"has_slate": has_slate(d), "read": read,
+                         "legs": [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in x.items()
+                                   if k not in _FEED_DROP} for x in legs]}
     feed = {"made_at": dt.datetime.now(ZoneInfo("Australia/Sydney")).isoformat(timespec="minutes"),
             "version": VERSION, "cal": load_cal(), "nights": nights,
             "scoreboard": {"reads": scoreboard(), "slips": log_results()}}

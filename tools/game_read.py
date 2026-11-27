@@ -45,12 +45,20 @@ import prop_context as pc  # noqa: E402
 STATS = ("PTS", "REB", "AST", "FG3M")
 RUNGS = {"PTS": [5, 10, 15, 20, 25, 30, 35, 40, 45, 50], "REB": [2, 4, 6, 8, 10, 12, 14, 16, 18],
          "AST": [2, 4, 6, 8, 10, 12, 14], "FG3M": [1, 2, 3, 4, 5, 6, 7, 8]}
-NAMES = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "threes"}
+NAMES = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "threes", "PR": "points + rebounds",
+         "PA": "points + assists", "RA": "rebounds + assists", "PRA": "points + rebounds + assists"}
+# Combos are read too, so every leg the builder can use has a read chance; picks stay single stats.
+COMBOS = ("PR", "PA", "RA", "PRA")
+RUNGS.update({"PR": list(range(10, 65, 5)), "PA": list(range(10, 65, 5)), "RA": list(range(4, 32, 2)),
+              "PRA": list(range(10, 75, 5))})
 SAFE, UPSIDE = 0.80, 0.25
 # Only a stat he produces in real volume is a pick: a 15% lift on 1.3 assists is a fifth of an assist
 # (26 Nov 2026: Ryan Dunn 2+ assists topped DAL@PHX). Floors on the read's expectation.
 VOLUME = {"PTS": 10, "REB": 4, "AST": 3, "FG3M": 1.5}
 MIN_LIFT = 0.03                                         # an upside pick needs the read to add 3+ points of chance
+# How far the read was off in the walk-forward check, 1-25 Nov 2026 (claude/game-read-backtest-2026-11-26.md):
+# upside picks hit 2 points under "Read says", floors 8 under. Used when the read is set against the price.
+CALIBRATION = {"upside": -0.02, "safe": -0.08}
 
 
 def _clip(x, lo, hi):
@@ -96,7 +104,7 @@ def opponent_allows(season):
     """{stat: {opp: {kind: (ratio, n)}}}: what each team gives up to guards / wings / bigs this season."""
     import opp_allows as oa
     logs = oa.logs(season)
-    return {stat: oa.allows_all(stat, L=logs, kind_fn=player_type) for stat in STATS}, player_type
+    return {stat: oa.allows_all(stat, L=logs, kind_fn=player_type) for stat in STATS + COMBOS}, player_type
 
 
 def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None, kind=None):
@@ -110,7 +118,7 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
     minutes = minutes or usual
     out = {"pid": pid, "player": name, "team": team, "opp": opp, "minutes": round(minutes, 1),
            "usual_minutes": round(usual, 1), "games": len(season), "stats": {}}
-    for stat in STATS:
+    for stat in STATS + COMBOS:
         total_min = sum(pc.nf(x["MIN"]) for x in season)
         per_min = sum(pc.value(x, stat) for x in season) / total_min if total_min else 0
         if per_min <= 0:
@@ -165,7 +173,10 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
                               "safe_lift": adds(safe), "upside_lift": adds(upside),
                               "safe": safe, "safe_share": round(share(safe), 2) if safe else None,
                               "upside": upside, "upside_share": round(share(upside), 2) if upside else None,
-                              "best": round(max(games), 0)}
+                              "best": round(max(games), 0),
+                              # share of his games, as read, reaching every whole number: the read's chance for
+                              # any rung or line Sportsbet offers (string keys so it survives the JSON feed)
+                              "chance": {str(r): round(share(r), 3) for r in range(1, int(max(games)) + 2)}}
     return out if out["stats"] else None
 
 
@@ -234,7 +245,7 @@ def read_night(date, legs=None, game=None):
         picks = []
         for p in players:
             for stat, s in p["stats"].items():
-                if s["expected"] < VOLUME[stat]:
+                if stat not in STATS or s["expected"] < VOLUME[stat]:
                     continue                            # not a stat he produces in volume
                 for kind_, rung, share, rec, lift in (
                         ("safe", s["safe"], s["safe_share"], s["safe_record"], s.get("safe_lift")),
@@ -249,10 +260,37 @@ def read_night(date, legs=None, game=None):
                                   "lift": lift or 0.0,
                                   "price": price.get((p["pid"], stat, float(rung)))
                                   or price.get((p["pid"], stat, rung))})
+        for k in picks:                                 # the read against the price, after the backtest's correction
+            k["edge"] = (round(k["share"] + CALIBRATION[k["kind"]] - 1 / k["price"], 3) if k.get("price") else None)
         picks.sort(key=lambda k: (-k["lift"], -k["share"]))      # most chance added by the read first
         away, home = g.split("@")
         out[g] = {"shape": game_shape(away, home), "players": sorted(players, key=lambda p: -p["minutes"]), "picks": picks}
     return out
+
+
+def calibrated(share):
+    """The read's chance corrected by the backtest: floor-like chances (75%+) ran 8 points high, the rest 2."""
+    return share + (CALIBRATION["safe"] if share >= 0.75 else CALIBRATION["upside"])
+
+
+def annotate_legs(legs, night):
+    """Put the read on every leg: x["read"] = our chance (after the backtest correction) and x["read_edge"] =
+    that minus the chance Sportsbet's price implies. None where the player wasn't read (under 18 minutes,
+    too few games). The builder tabs can then use only legs our read rates at or above the price."""
+    table = {(p["pid"], stat): s.get("chance") or {} for r in night.values() for p in r["players"]
+             for stat, s in p["stats"].items()}
+    for x in legs:
+        x["read"] = x["read_edge"] = None
+        chance = table.get((x["pid"], x["stat"]))
+        if not chance:
+            continue
+        rung = int(round(x["th"])) if x["kind"] == "alt" else int(math.floor(x["th"])) + 1
+        top = max(int(k) for k in chance)
+        over = 1.0 if rung < 1 else 0.0 if rung > top else chance.get(str(rung), 0.0)
+        read = (1 - over) if x["kind"] == "under" else calibrated(over)
+        x["read"] = round(min(max(read, 0.01), 0.99), 3)
+        x["read_edge"] = round(x["read"] - 1 / x["price"], 3)
+    return legs
 
 
 def pick_label(k):
@@ -276,7 +314,8 @@ def main(argv=None):
             rows = [k for k in r["picks"] if k["kind"] == kind_][:8]
             print(f"\n  {title}")
             for k in rows:
-                price = f"Sportsbet {k['price']:.2f}" if k["price"] else "no price saved"
+                price = (f"Sportsbet {k['price']:.2f} (read v price {100 * k['edge']:+.0f} pts)" if k["price"]
+                         else "no price saved")
                 print(f"    {pick_label(k):34s} read {100 * k['share']:.0f}% ({100 * k['lift']:+.0f} pts) | actually {k['season']} this season, {k['v_opp']} v them"
                       f" | expects {k['expected']:g} | read x{k['mult']:.2f} | {price}{' | DAY-TO-DAY' if k['dtd'] else ''}")
                 for w in k["why"]:

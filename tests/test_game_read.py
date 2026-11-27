@@ -106,3 +106,17 @@ def test_picks_are_ranked_by_what_the_read_adds_and_need_volume(his_games, monke
     assert all(k["lift"] >= gr.MIN_LIFT for k in picks if k["kind"] == "upside")
     read = gr.player_read(1, "A One", "AAA", "BBB", DAY)
     assert all(read["stats"][k["stat"]]["expected"] >= gr.VOLUME[k["stat"]] for k in picks)
+
+
+def test_every_leg_gets_the_reads_chance_and_read_v_price():
+    night = {"AAA@BBB": {"players": [{"pid": 1, "stats": {"AST": {"chance": {"1": 1.0, "2": 0.9, "3": 0.7, "4": 0.5, "5": 0.3, "6": 0.1, "7": 0.0}}}}]}}
+    legs = [dict(pid=1, stat="AST", kind="alt", th=4, price=2.0), dict(pid=1, stat="AST", kind="over", th=5.5, price=4.0),
+            dict(pid=1, stat="AST", kind="under", th=3.5, price=2.5), dict(pid=1, stat="AST", kind="alt", th=2, price=1.05),
+            dict(pid=1, stat="AST", kind="alt", th=9, price=20.0), dict(pid=2, stat="AST", kind="alt", th=4, price=2.0)]
+    gr.annotate_legs(legs, night)
+    assert legs[0]["read"] == 0.48 and legs[0]["read_edge"] == -0.02              # 50% read, 2 points off, v 50%
+    assert legs[1]["read"] == 0.08 and legs[1]["read_edge"] == round(0.08 - 0.25, 3)  # o5.5 = 6+
+    assert legs[2]["read"] == 0.5                                                 # u3.5 = under 4: 1 - 0.5
+    assert legs[3]["read"] == 0.82                                                # floor-like: 8 points off
+    assert legs[4]["read"] == 0.01                                                # past his best game
+    assert legs[5]["read"] is None and legs[5]["read_edge"] is None               # not read

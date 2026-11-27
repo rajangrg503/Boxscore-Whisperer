@@ -242,3 +242,37 @@ def test_reads_break_ties_between_equal_priced_legs():
     legs = pb._annotate([plain, backed, doubted], CAL)
     order = [slip[0]["player"] for _, slip, _ in pb.build_ladder(legs, CAL, SAME, top=3)]
     assert order == ["B Two", "A One", "C Three"]
+
+
+def _leg(player, stat, th, game="AAA@BBB", **kw):
+    return dict(dict(player=player, pid=hash(player) % 1000, stat=stat, th=th, kind="alt", game=game, price=2.0,
+                     dtd=False, is_out=False), **kw)
+
+
+def test_rule_warnings_say_what_claude_would_say_before_a_slip_goes_on():
+    slip = [_leg("A One", "FG3M", 3), _leg("B Two", "AST", 6, game="CCC@DDD"), _leg("Luka Doncic", "PTS", 35, game="EEE@FFF"),
+            _leg("D Four", "REB", 8, game="GGG@HHH", dtd=True)]
+    placed = ({"CCC@DDD": 3, "GGG@HHH": 1}, 3)
+    w = " | ".join(pb.rule_warnings(slip, placed))
+    assert "Threes are straights only" in w and "A One FG3M 3+" in w
+    assert "CCC@DDD already has 3 slips" in w and "GGG@HHH" not in w.split("day-to-day")[1]
+    assert "Luka: no 35+" in w and "D Four is day-to-day" in w
+    assert "3 multis already placed" in w
+    assert pb.rule_warnings([_leg("A One", "FG3M", 3)], ({}, 3)) == []          # a threes straight is fine
+    assert not any("multis" in x for x in pb.rule_warnings(slip, placed, kind="bonus"))
+    assert not any("slips placed" in x for x in pb.rule_warnings(slip, None))   # the phone can't see placed bets
+
+
+def test_placed_today_counts_slips_per_game_and_multis_but_not_ladders(tmp_path):
+    import json
+    def save(name, legs, **kw):
+        (tmp_path / f"{name}.json").write_text(json.dumps(dict(id=name, legs=legs, **kw)))
+    leg = lambda g, d="2026-11-27": {"game": g, "us_date": d}  # noqa: E731
+    save("k1ladder", [leg("MIA@NYK")], method="ladder")
+    save("k2", [leg("MIA@NYK")])
+    save("k3", [leg("MIA@NYK"), leg("ATL@BOS")], method="experiment_parlay_builder")
+    save("k4", [leg("LAL@SAS"), leg("ATL@BOS")], method="ladder")
+    save("k5", [leg("MIA@NYK", "2026-11-26")])
+    per_game, multis = pb.placed_today("2026-11-27", picks_dir=str(tmp_path))
+    assert per_game == {"MIA@NYK": 3, "ATL@BOS": 2, "LAL@SAS": 1} and multis == 1
+    assert pb.placed_today("2026-11-27", picks_dir=str(tmp_path / "nope")) is None
