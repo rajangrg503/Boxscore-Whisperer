@@ -163,3 +163,18 @@ def test_minutes_never_read_below_his_usual(monkeypatch):
     assert low["minutes"] == 32.0 and low["stats"]["PTS"]["expected"] == 20.0
     high = gr.player_read(1, "A", "AAA", "BBB", day, minutes=36)
     assert high["minutes"] == 36 and high["stats"]["PTS"]["expected"] == 22.5
+
+
+def test_roles_come_from_what_he_does_not_his_listing(monkeypatch):
+    bodies = {1: ("G", 78, 206), 2: ("G", 72, 180), 3: ("F", 80, 220), 4: ("C", 84, 250), 5: ("G", 74, 190)}
+    monkeypatch.setattr(gr, "_bodies", lambda: bodies)
+    line = lambda **k: [dict({"MIN": 30, "PTS": 15, "REB": 4, "AST": 3, "FG3A": 4}, **k) for _ in range(8)]  # noqa: E731
+    logs = {1: line(REB=8.5), 2: line(AST=7), 3: line(AST=7), 4: line(REB=12), 5: line(PTS=25), 6: line()}
+    gr._ROLES.clear()
+    assert gr.player_role(1, logs, "t") == "rebounding wing"      # listed G at 6-6 who rebounds like a wing (Coward)
+    assert gr.player_role(2, logs, "t") == "lead guard"
+    assert gr.player_role(3, logs, "t") == "point forward"        # a 6-8 playmaker (Giddey, Jalen Johnson)
+    assert gr.player_role(4, logs, "t") == "big"
+    assert gr.player_role(5, logs, "t") == "scoring guard"
+    assert gr.player_role(6, logs, "t") is None                   # no body on file
+    assert gr.ROLE_GROUP["rebounding wing"] == "wing" and gr.ROLE_GROUP["scoring guard"] == "guard"

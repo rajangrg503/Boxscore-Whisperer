@@ -125,11 +125,58 @@ def player_type(pid):
     return "wing"
 
 
+# Roles from what a player does, not how he is listed (karma, 28 Nov: "separate and pinpoint their position";
+# he checked the roles and said "that looks perfect"). Per 36 minutes this season, plus height. The opponent read
+# groups them into guard / wing / big. Backtest 1-25 Nov, players whose group changed (6.4k player-rungs): Brier
+# 0.1930 -> 0.1912, better for every stat (threes 0.2063 -> 0.1978, assists 0.1904 -> 0.1880).
+ROLE_GROUP = {"lead guard": "guard", "scoring guard": "guard", "guard": "guard", "point forward": "wing",
+              "rebounding wing": "wing", "shooting wing": "wing", "wing": "wing", "big": "big"}
+_ROLES = {}
+
+
+def player_role(pid, logs=None, season=None):
+    """lead guard / scoring guard / guard / point forward / rebounding wing / shooting wing / wing / big, or None
+    with under 6 games of 10+ minutes this season."""
+    key = (int(pid), season)
+    if key in _ROLES:
+        return _ROLES[key]
+    role = None
+    if logs is None:
+        import opp_allows as oa
+        logs = oa.logs(season or pc.season_of(dt.date.today()))
+    rows = [r for r in logs.get(pid, logs.get(int(pid), logs.get(str(pid), []))) if pc.nf(r["MIN"]) >= 10]
+    if len(rows) >= 6:
+        m = sum(pc.nf(r["MIN"]) for r in rows)
+        per = lambda k: 36 * sum(pc.nf(r.get(k)) for r in rows) / m  # noqa: E731
+        reb, ast, tpa, pts = per("REB"), per("AST"), per("FG3A"), per("PTS")
+        pos, tall, _ = _bodies().get(int(pid), ("", 0, 0))
+        if pos in ("C", "C-F", "F-C") or tall >= 83 or (reb >= 10.5 and tpa < 3 and ast < 5):
+            role = "big"
+        elif ast >= 6.5:
+            role = "point forward" if tall >= 79 else "lead guard"
+        elif tall and tall <= 78 and pos.startswith("G") and pts >= 22:
+            role = "scoring guard"
+        elif reb >= 7.0 and tall >= 77:
+            role = "rebounding wing"
+        elif tall and tall <= 77 and pos.startswith("G"):
+            role = "guard"
+        elif tpa >= 6:
+            role = "shooting wing"
+        elif tall:
+            role = "wing"
+    _ROLES[key] = role
+    return role
+
+
 def opponent_allows(season):
-    """{stat: {opp: {kind: (ratio, n)}}}: what each team gives up to guards / wings / bigs this season."""
+    """{stat: {opp: {kind: (ratio, n)}}}: what each team gives up to guards / wings / bigs this season, by role."""
     import opp_allows as oa
     logs = oa.logs(season)
-    return {stat: oa.allows_all(stat, L=logs, kind_fn=player_type) for stat in STATS + COMBOS}, player_type
+
+    def kind(pid):
+        role = player_role(pid, logs, season)
+        return ROLE_GROUP[role] if role else player_type(pid)
+    return {stat: oa.allows_all(stat, L=logs, kind_fn=kind) for stat in STATS + COMBOS}, kind
 
 
 def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None, kind=None):
