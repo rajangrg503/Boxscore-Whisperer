@@ -339,6 +339,25 @@ STAT_WORD = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "thre
              "PR": "points + rebounds", "RA": "rebounds + assists", "PRA": "points + rebounds + assists"}
 
 
+def sgm_block(sg):
+    """Our read's own same-game multi for one game (karma, 28 Nov). Shown on Game read and Same-game multi."""
+    st.caption("The game's biggest advantage (⚓) plus other players' 80%+ v-them legs the price isn't too short "
+               "for. Backtest 1-27 Nov: 14.0% landed v 13.8% the prices imply; the ⚓ leg alone as a straight made "
+               "+5%. Sportsbet's SGM price is lower than the product shown, so this is paper until it proves more.")
+    if not sg:
+        st.info("No pick here yet: no backed Biggest advantage with a price in this game.")
+        return
+    st.dataframe(
+        [{"Leg": ("⚓ " if i == 0 else "") + f"{x['player']} {int(round(x['th']))}+ {STAT_WORD[x['stat']]}",
+          "Read says": pct(x["read"]), "Sportsbet": f"{x['price']:.2f}", "Backed?": backed_text(x.get("read_edge"))}
+         for i, x in enumerate(sg["legs"])], hide_index=True, width="stretch")
+    if sg.get("complete", True):
+        st.caption(f"Product of prices {sg['price']:.1f} · read says all land {100 * sg['read']:.0f}%")
+    else:
+        st.info("Not enough v-them legs priced for a full SGM in this game yet. The ⚓ leg is the straight; "
+                "the table fills in as Sportsbet adds lines.")
+
+
 def read_table(picks):
     st.dataframe(
         [{"Backed?": backed_text(k.get("edge")),
@@ -434,19 +453,7 @@ with read_tab:
         else:
             st.info("Nobody has 5+ games v this opponent at 80%+ yet.")
         st.subheader("Game SGM (paper test)")
-        st.caption("karma, 28 Nov: the game's biggest advantage plus legs that fit the same game. Anchor = the top "
-                   "backed Biggest advantages pick; then up to 3 other players' 80%+ v-them legs the price isn't too "
-                   "short for. Backtest 1-27 Nov: 14.0% landed v 13.8% the prices imply (anchor alone as a straight "
-                   "+5%). Sportsbet's SGM price is lower than the product shown, so this is paper until it proves more.")
-        sg = r.get("sgm")
-        if sg:
-            st.dataframe(
-                [{"Leg": ("⚓ " if i == 0 else "") + f"{x['player']} {int(round(x['th']))}+ {STAT_WORD[x['stat']]}",
-                  "Read says": pct(x["read"]), "Sportsbet": f"{x['price']:.2f}", "Backed?": backed_text(x.get("read_edge"))}
-                 for i, x in enumerate(sg["legs"])], hide_index=True, width="stretch")
-            st.caption(f"Product of prices {sg['price']:.1f} · read says all land {100 * sg['read']:.0f}%")
-        else:
-            st.info("No SGM for this game: no backed anchor, or fewer than 2 v-them legs priced.")
+        sgm_block(r.get("sgm"))
         priced = [k for k in r["picks"] if k.get("price")]
         chosen = st.multiselect("Send picks to Check a slip", priced, key=f"pb_read_send_{read_game}",
                                 format_func=lambda k: f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]} @{k['price']:.2f}")
@@ -571,6 +578,9 @@ with sgm_tab:
     n_sgm = b.slider("Legs", 2, 20, 4, key="pb_sgm_n")
     sgm_return = c.checkbox("Bet Return", key="pb_sgm_return")
     sgm_loose = d.checkbox("Loosen the rules", key="pb_sgm_loose", help=PLAY_HELP)
+    st.subheader("Our read's SGM for this game (paper test)")
+    sgm_block((game_reads(date, stamp, fitted).get(sgm_game) or {}).get("sgm"))
+    st.subheader("Cheapest SGM by Sportsbet's margins")
     st.caption("One leg per player, single stats, at most half the legs from one team (teammates' scoring legs "
                "work against each other). The price shown is an estimate, 0.96 × the product of the legs.")
     ranked = built(date, stamp, fitted, "sgm", n_legs=n_sgm, game=sgm_game, bet_return=sgm_return, loose=sgm_loose,

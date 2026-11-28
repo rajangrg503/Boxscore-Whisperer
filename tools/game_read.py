@@ -438,9 +438,10 @@ SGM_STATS = ("PTS", "REB", "AST", "PR", "PA", "RA", "PRA")   # threes are straig
 
 
 def game_sgm(night, legs):
-    """{game: {"anchor": leg, "legs": [anchor + up to SGM_FILLERS v-them legs], "price", "read"}} for games
-    with a backed anchor and 2+ priced v-them legs from other players (read not under the price by
-    COIN_FLIP+). One leg per player, overs and X+ rungs, no threes, no day-to-day or out players."""
+    """{game: {"complete", "legs": [anchor + up to SGM_FILLERS v-them legs], "price", "read"}} for every game
+    with a backed anchor. Fillers are other players' priced v-them legs (read not under the price by
+    COIN_FLIP+). "complete" is False with fewer than 2 fillers: then the anchor stands as a straight.
+    One leg per player, overs and X+ rungs, no threes, no day-to-day or out players."""
     out = {}
     keep = ("player", "pid", "team", "stat", "kind", "th", "price", "read", "read_edge", "backed", "actual", "hit")
     for g, r in night.items():
@@ -464,9 +465,8 @@ def game_sgm(night, legs):
                 break
             if all(c["pid"] != x["pid"] for c in chosen):
                 chosen.append(x)
-        if len(chosen) < 3:
-            continue
-        out[g] = {"legs": [{k: x.get(k) for k in keep} for x in chosen],
+        out[g] = {"complete": len(chosen) >= 3,          # under 3 legs: the anchor is a straight, not an SGM
+                  "legs": [{k: x.get(k) for k in keep} for x in chosen],
                   "price": round(math.prod(x["price"] for x in chosen), 2),
                   "read": round(math.prod(x["read"] for x in chosen), 3)}
     return out
