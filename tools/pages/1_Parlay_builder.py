@@ -69,8 +69,9 @@ def night_data(date, stamp, fitted):
     raw = pb.load_legs(date)
     night = gr.read_night(date, raw)
     gr.annotate_legs(raw, night)
-    return raw, {g: {"shape": r["shape"], "picks": r["picks"], "steady": r.get("steady", []), "vthem": r.get("vthem", [])}
-                 for g, r in night.items()}, gr.threes_table(night, raw)
+    sgm = gr.game_sgm(night, raw)
+    return raw, {g: {"shape": r["shape"], "picks": r["picks"], "steady": r.get("steady", []), "vthem": r.get("vthem", []),
+                     "sgm": sgm.get(g)} for g, r in night.items()}, gr.threes_table(night, raw)
 
 
 def legs_for(date, stamp, fitted):  # noqa: D103
@@ -432,6 +433,20 @@ with read_tab:
                 hide_index=True, width="stretch")
         else:
             st.info("Nobody has 5+ games v this opponent at 80%+ yet.")
+        st.subheader("Game SGM (paper test)")
+        st.caption("karma, 28 Nov: the game's biggest advantage plus legs that fit the same game. Anchor = the top "
+                   "backed Biggest advantages pick; then up to 3 other players' 80%+ v-them legs the price isn't too "
+                   "short for. Backtest 1-27 Nov: 14.0% landed v 13.8% the prices imply (anchor alone as a straight "
+                   "+5%). Sportsbet's SGM price is lower than the product shown, so this is paper until it proves more.")
+        sg = r.get("sgm")
+        if sg:
+            st.dataframe(
+                [{"Leg": ("⚓ " if i == 0 else "") + f"{x['player']} {int(round(x['th']))}+ {STAT_WORD[x['stat']]}",
+                  "Read says": pct(x["read"]), "Sportsbet": f"{x['price']:.2f}", "Backed?": backed_text(x.get("read_edge"))}
+                 for i, x in enumerate(sg["legs"])], hide_index=True, width="stretch")
+            st.caption(f"Product of prices {sg['price']:.1f} · read says all land {100 * sg['read']:.0f}%")
+        else:
+            st.info("No SGM for this game: no backed anchor, or fewer than 2 v-them legs priced.")
         priced = [k for k in r["picks"] if k.get("price")]
         chosen = st.multiselect("Send picks to Check a slip", priced, key=f"pb_read_send_{read_game}",
                                 format_func=lambda k: f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]} @{k['price']:.2f}")

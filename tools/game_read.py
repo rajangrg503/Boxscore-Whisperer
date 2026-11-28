@@ -425,6 +425,53 @@ def vthem_list(players, price):
     return rows
 
 
+# karma, 28 Nov 2026: "this is what i've been asking" -- one same-game multi per game from our own read.
+# Backtest 1-27 Nov (158 games, saved lines, point in time; claude/sgm-backtest-2026-11-28.md):
+#   anchor alone (the game's top backed 'Biggest advantages' pick) as a straight: 36.1% v 34.3% implied, +5% ROI
+#   anchor + the most likely backed legs: 6.7% v 10.9% implied (fillers the read loves land 56% v 59% implied)
+#   anchor + the market's shortest legs: 14.0% v 17.2% implied, -21%
+#   anchor + 80%+ v-them legs (not too short): 14.0% v 13.8% implied, -8% at the product of the prices
+# So the SGM is anchor + v-them legs, a PAPER TEST until it shows more: Sportsbet prices an SGM below the
+# product of the singles, so -8% there is worse on the real slip.
+SGM_FILLERS = 3
+SGM_STATS = ("PTS", "REB", "AST", "PR", "PA", "RA", "PRA")   # threes are straights only (karma's rule)
+
+
+def game_sgm(night, legs):
+    """{game: {"anchor": leg, "legs": [anchor + up to SGM_FILLERS v-them legs], "price", "read"}} for games
+    with a backed anchor and 2+ priced v-them legs from other players (read not under the price by
+    COIN_FLIP+). One leg per player, overs and X+ rungs, no threes, no day-to-day or out players."""
+    out = {}
+    keep = ("player", "pid", "team", "stat", "kind", "th", "price", "read", "read_edge", "backed", "actual", "hit")
+    for g, r in night.items():
+        pool = [x for x in legs if x.get("game") == g and x["kind"] in ("alt", "over") and x["stat"] in SGM_STATS
+                and x.get("read") is not None and not x.get("dtd") and not x.get("is_out")]
+        anchor = None
+        for k in [k for k in r["picks"] if k["kind"] == "upside" and k.get("backed") == "backed"]:
+            anchor = next((x for x in pool if x["pid"] == k["pid"] and x["stat"] == k["stat"] and x["kind"] == "alt"
+                           and int(round(x["th"])) == k["rung"] and 1.15 <= x["price"] <= 4.0), None)
+            if anchor:
+                break
+        if not anchor:
+            continue
+        vt = {(k["pid"], k["stat"], k["rung"]) for k in r.get("vthem", [])}
+        fill = sorted((x for x in pool if x["kind"] == "alt" and (x["pid"], x["stat"], int(round(x["th"]))) in vt
+                       and (x.get("read_edge") or -1) > -COIN_FLIP and x["price"] >= 1.15),
+                      key=lambda x: -x["read"])
+        chosen = [anchor]
+        for x in fill:
+            if len(chosen) > SGM_FILLERS:
+                break
+            if all(c["pid"] != x["pid"] for c in chosen):
+                chosen.append(x)
+        if len(chosen) < 3:
+            continue
+        out[g] = {"legs": [{k: x.get(k) for k in keep} for x in chosen],
+                  "price": round(math.prod(x["price"] for x in chosen), 2),
+                  "read": round(math.prod(x["read"] for x in chosen), 3)}
+    return out
+
+
 def calibrated(share):
     """The read's chance mapped to what such reads actually landed at (CAL_POINTS, straight lines between)."""
     share = _clip(share, 0.0, 1.0)
