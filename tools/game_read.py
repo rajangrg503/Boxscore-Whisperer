@@ -77,6 +77,12 @@ MIN_LIFT = 0.03                                         # an upside pick needs t
 # landed) because the projection sometimes cuts a starter by 4-5 minutes (27 Nov: Zion 29 v 33, Murphy 27 v 33);
 # at max(projection, usual) the same zone read 41.7% and landed 42.0%.
 MINUTES_FLOOR_USUAL = True
+# The opponent adjustment (his games v them, what they allow his role). H2H_K: v-them games count n/(n+K) of
+# the way. OPP_CAP: the most it can move his rate (threes, the rest). H2H_ALONE: with H2H_ALONE+ games v them,
+# his own record stands on its own instead of being averaged with what they allow.
+H2H_K = 8
+OPP_CAP = (0.12, 0.18)
+H2H_ALONE = None
 # What a "Read says" chance actually landed at in that backtest (read at the higher minutes): pairs of
 # (read, landed). The ends were overconfident (reads under 10% landed 13%, reads over 90% landed 85%), the
 # middle was right. calibrated() maps through these points; it replaces the flat -2 / -8 points of 26 Nov,
@@ -201,17 +207,17 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
         opp_moves = []
         ratios = pb._h2h_ratios(prior, opp, stat)
         if len(ratios) >= 4:                            # few games count for little: 4 games move him a third of the way
-            move = (st.mean(ratios) - 1) * len(ratios) / (len(ratios) + 8)
+            move = (st.mean(ratios) - 1) * len(ratios) / (len(ratios) + H2H_K)
             if abs(move) >= 0.02:
                 why.append(f"v {opp} he has run at {st.mean(ratios):.2f}x his usual rate over {len(ratios)} games")
                 opp_moves.append(move)
-        if allows and kind:
+        if allows and kind and not (H2H_ALONE and len(ratios) >= H2H_ALONE):
             ratio, n = allows.get(stat, {}).get(opp, {}).get(kind(pid), (1.0, 0))
             if n >= 15 and abs(ratio - 1) >= 0.04:
                 why.append(f"{opp} allow {kind(pid)}s {ratio:.2f}x their usual {NAMES[stat]}")
                 opp_moves.append((ratio - 1) * 0.5)
         if opp_moves:
-            cap = 0.12 if stat == "FG3M" else 0.18      # threes swing the most from night to night
+            cap = OPP_CAP[0] if stat == "FG3M" else OPP_CAP[1]   # threes swing the most from night to night
             mult *= 1 + _clip(st.mean(opp_moves), -cap, cap)
         if lift and stat in lift and abs(lift[stat] - 1) >= 0.02:
             why.append(f"teammates out lift his {NAMES[stat]} {lift[stat]:.2f}x (projected slate)")
