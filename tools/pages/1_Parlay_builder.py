@@ -260,8 +260,12 @@ else:
     if not nights:
         st.info("No saved lines yet. Press **Save Sportsbet's lines now**.")
         st.stop()
+    # Open on the next night with games (US date), not the furthest one saved: Sportsbet lists NBA Cup knockout
+    # games a week out with no player lines, and those nights sorted to the top (28 Nov 2026).
+    upcoming = [d for d in pb.coming_nights() if d in nights]
     with left:
-        date = st.selectbox("Night", nights, format_func=nice_date)
+        date = st.selectbox("Night", nights, format_func=nice_date,
+                            index=nights.index(upcoming[0]) if upcoming else 0)
     cal = source_cal()
     if not cal:
         st.warning("The margins haven't been measured on this Mac yet.")
