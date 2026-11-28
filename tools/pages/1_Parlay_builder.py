@@ -69,7 +69,8 @@ def night_data(date, stamp, fitted):
     raw = pb.load_legs(date)
     night = gr.read_night(date, raw)
     gr.annotate_legs(raw, night)
-    return raw, {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in night.items()}, gr.threes_table(night, raw)
+    return raw, {g: {"shape": r["shape"], "picks": r["picks"], "steady": r.get("steady", [])}
+                 for g, r in night.items()}, gr.threes_table(night, raw)
 
 
 def legs_for(date, stamp, fitted):  # noqa: D103
@@ -397,6 +398,21 @@ with read_tab:
         st.subheader("Floors")
         st.caption("Safe picks: the highest rung he clears in 80%+ of his games as read.")
         read_table([k for k in r["picks"] if k["kind"] == "safe"][:14])
+        st.subheader("Steady")
+        st.caption("karma, 27 Nov: 'coward has been so consistent. why isnt he showing up'. Each player's best "
+                   "rung he cleared in 7+ of his last 10, priced, whatever the matchup says. ★ = on karma's own "
+                   "steady list. ❌ ones are left out unless they're karma's.")
+        steady = r.get("steady") or []
+        if steady:
+            st.dataframe(
+                [{"Backed?": backed_text(k["edge"]),
+                  "Pick": ("★ " if k["karma"] else "") + f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]}"
+                          + ("  (day-to-day)" if k.get("dtd") else ""),
+                  "Last 10": k["last10"], "Read says": pct(k["share"]), "Sportsbet": f"{k['price']:.2f}",
+                  "Read v price": f"{100 * k['edge']:+.0f}% chance"} for k in steady[:12]],
+                hide_index=True, width="stretch")
+        else:
+            st.info("No steady priced rungs for this game yet.")
         priced = [k for k in r["picks"] if k.get("price")]
         chosen = st.multiselect("Send picks to Check a slip", priced, key=f"pb_read_send_{read_game}",
                                 format_func=lambda k: f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]} @{k['price']:.2f}")
@@ -409,7 +425,10 @@ with read_tab:
 
 with threes_tab:
     threes = night_data(date, stamp, fitted)[2]
-    st.caption("Every player with 2+ games against tonight's opponent (last three seasons) who averages a three "
+    st.caption("'Most likely' is the most threes he made in 70%+ of his games against tonight's opponent, with how "
+               "often he got there v them and in his last 10, its Sportsbet price and whether our read backs it. "
+               "Most likely first. Below that: every player with 2+ games against tonight's opponent (last three "
+               "seasons) who averages a three "
                "or more as read: his threes made in those games (newest first), his average v them and this "
                "season, and what the read expects tonight. 'Best leg' is the Sportsbet threes leg our read rates "
                "best against its price. Watch 'for another team': history from a different team is a different role. "
@@ -428,6 +447,12 @@ with threes_tab:
         st.dataframe(
             [{"Player": r["player"] + ("  (day-to-day)" if r.get("dtd") else "")
                         + ("  (already bet on him)" if r["pid"] in BET_PIDS else ""),
+              "Most likely": (f"{r['likely']}+ threes" if r.get("likely") else "--"),
+              "v them at it": r.get("likely_v", "--"),
+              "Last 10 at it": r.get("likely_last10", "--"),
+              "Price": (f"{r['likely_price']:.2f}" if r.get("likely_price") else "--"),
+              "Backed?": backed_text(None) if not r.get("likely_backed") else
+                         {"backed": "✅ backed", "coin flip": "⚖️ coin flip", "not backed": "❌ not backed"}[r["likely_backed"]],
               "Game": r["game"],
               "v them (newest first)": " · ".join(str(m) for m in r["v_makes"]),
               "v them avg": f"{r['v_avg']:.1f} in {r['v_games']}",

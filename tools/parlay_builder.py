@@ -580,7 +580,8 @@ def build_feed(dates=None, path=FEED_PATH):
                 import game_read as gr
                 night = gr.read_night(d, legs)
                 gr.annotate_legs(legs, night)          # every leg carries the read's chance and read v price
-                read = {g: {"shape": r["shape"], "picks": r["picks"]} for g, r in night.items()}
+                read = {g: {"shape": r["shape"], "picks": r["picks"], "steady": r.get("steady", [])}
+                        for g, r in night.items()}
                 threes = gr.threes_table(night, legs)
             except Exception:                          # noqa: BLE001 -- the builder still publishes without the read
                 pass

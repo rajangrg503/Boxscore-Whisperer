@@ -61,6 +61,11 @@ VOLUME = {"PTS": 10, "REB": 4, "AST": 3, "FG3M": 1.5, "PA": 15}
 # 9 ast missed 15+ points but landed 20+ PA; Nembhard scored instead of passing).
 PASS_FIRST = {"Davion Mitchell", "Andrew Nembhard", "Josh Giddey", "Deni Avdija", "Franz Wagner"}
 PASS_FIRST_STATS = ("PA", "REB", "FG3M")
+# Steady: a rung he cleared in 7+ of his last 10, priced, whatever the matchup says. Biggest advantages only shows
+# where the matchup moves a player, so a player who just does his job every night never showed (karma, 27 Nov:
+# "coward has been so consistent. why isnt he showing up"). STEADY is karma's own list of reliable players.
+STEADY = {"Cedric Coward"}
+STEADY_SHARE, STEADY_STATS = 0.70, ("PTS", "REB", "AST", "FG3M", "PR", "PA", "RA", "PRA")
 # Who feeds against Denver (angles 27 and 29, karma): their help defence gives up the most drive assists in the
 # league and Jokic in drop gives the opposing big room; their wins are close (27 Nov: UTA's George 24+,
 # Peterson 20+, Nurkic 10 ast in a 2-point game at the 4th).
@@ -200,6 +205,7 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
                               "upside": upside, "upside_share": round(share(upside), 2) if upside else None,
                               "best": round(max(games), 0),
                               "season_raw": round(st.mean(raw), 2) if raw else 0.0,
+                              "last10": [round(v, 1) for v in raw[:10]],      # newest first, untouched by the read
                               # share of his games, as read, reaching every whole number: the read's chance for
                               # any rung or line Sportsbet offers (string keys so it survives the JSON feed)
                               "chance": {str(r): round(share(r), 3) for r in range(1, int(max(games)) + 2)}}
@@ -293,11 +299,38 @@ def read_night(date, legs=None, game=None):
             k["edge"] = (round(calibrated(k["share"]) - 1 / k["price"], 3) if k.get("price") else None)
             k["backed"] = backed(k["edge"])
         picks.sort(key=lambda k: (-k["lift"], -k["share"]))      # most chance added by the read first
+        steady = []
+        for p in players:
+            best = None
+            for stat in STEADY_STATS:
+                s = p["stats"].get(stat)
+                if not s or len(s.get("last10") or []) < 8 or s["expected"] < VOLUME.get(stat, 0):
+                    continue
+                last = s["last10"]
+                for rung in sorted(RUNGS[stat], reverse=True):
+                    hit = sum(v >= rung for v in last) / len(last)
+                    if hit < STEADY_SHARE:
+                        continue
+                    pr = price.get((p["pid"], stat, float(rung))) or price.get((p["pid"], stat, rung))
+                    if not pr:
+                        continue
+                    share = s["chance"].get(str(rung), 0.0)
+                    edge = round(calibrated(share) - 1 / pr, 3)
+                    leg = {"player": p["player"], "pid": p["pid"], "team": p["team"], "stat": stat, "rung": rung,
+                           "last10": f"{sum(v >= rung for v in last)} of {len(last)}", "share": share, "price": pr,
+                           "edge": edge, "backed": backed(edge), "karma": p["player"] in STEADY, "dtd": p["dtd"]}
+                    if best is None or edge > best["edge"]:
+                        best = leg
+                    break                                   # his highest steady rung for this stat
+            if best and (best["karma"] or best["edge"] > -COIN_FLIP):
+                steady.append(best)
+        steady.sort(key=lambda k: (not k["karma"], -k["edge"]))
         away, home = g.split("@")
         shape = game_shape(away, home)
         if "DEN" in (away, home):
             shape = list(shape) + [DEN_NOTE]
-        out[g] = {"shape": shape, "players": sorted(players, key=lambda p: -p["minutes"]), "picks": picks}
+        out[g] = {"shape": shape, "players": sorted(players, key=lambda p: -p["minutes"]), "picks": picks,
+                  "steady": steady}
     return out
 
 
@@ -360,6 +393,12 @@ def threes_table(night, legs):
                 continue
             best = max(priced.get(p["pid"], []), key=lambda x: x["read_edge"], default=None)
             v_avg = st.mean(v["made"] for v in log)
+            # karma, 28 Nov: "what is most likely". His highest number of threes made in 70%+ of his games v them.
+            made = [v["made"] for v in log]
+            likely = max((r for r in range(1, max(made) + 1) if sum(m >= r for m in made) / len(made) >= 0.70), default=0)
+            last = s.get("last10") or []
+            at = next((x for x in legs if x["pid"] == p["pid"] and x["stat"] == "FG3M" and x["kind"] == "alt"
+                       and int(round(x["th"])) == likely), None) if likely else None
             rows.append({
                 "player": p["player"], "pid": p["pid"], "team": p["team"], "opp": p["opp"], "game": g,
                 "v_games": len(log), "v_makes": [v["made"] for v in log[:8]], "v_avg": round(v_avg, 2),
@@ -367,9 +406,15 @@ def threes_table(night, legs):
                 "v_other_team": sum(v["team"] != p["team"] for v in log),
                 "season_avg": s.get("season_raw", 0.0), "season_att": s.get("season_att"), "expects": s["expected"],
                 "minutes": p["minutes"], "dtd": p.get("dtd", False),
+                "likely": likely, "likely_v": f"{sum(m >= likely for m in made)} of {len(made)}" if likely else "--",
+                "likely_share": round(sum(m >= likely for m in made) / len(made), 2) if likely else 0.0,
+                "likely_last10": f"{sum(v >= likely for v in last)} of {len(last)}" if likely and last else "--",
+                "likely_price": at["price"] if at else None,
+                "likely_backed": backed(at.get("read_edge")) if at else None,
                 "leg": best and {k: best.get(k) for k in ("kind", "th", "price", "read", "read_edge", "hr_season",
                                                           "n_season", "hr_l8", "h2h_hits", "h2h_n")}})
-    rows.sort(key=lambda x: -(x["v_avg"] - x["season_avg"]))
+    # most likely first: the most threes he makes nearly every time v them, then how often, then how many games
+    rows.sort(key=lambda x: (-x["likely"], -x["likely_share"], -x["v_games"]))
     return rows
 
 
