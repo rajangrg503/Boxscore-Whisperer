@@ -129,11 +129,21 @@ def short_line(legs, e):
 PLACED = None          # set once the night is chosen: bets already placed (Journal only)
 
 
+COIN_FLIP = 0.03          # within 3 points of the price either way: too close to call (game_read.COIN_FLIP)
+
+
+def backed_text(edge):
+    """karma (27 Nov): 'i dont know how read which one is backed'. Say it plainly."""
+    if edge is None:
+        return "--"
+    return "✅ backed" if edge >= COIN_FLIP else "⚖️ coin flip" if edge > -COIN_FLIP else "❌ not backed"
+
+
 def edge_text(x):
     if x.get("read_edge") is None:
         return "--"
     # percentage points of CHANCE, not basketball points (karma read "+12 pts" on assists as 12 points)
-    return f"{100 * x['read_edge']:+.0f}% chance" + (", too short" if x["read_edge"] < 0 else "")
+    return f"{100 * x['read_edge']:+.0f}% chance" + (", too short" if x["read_edge"] <= -COIN_FLIP else "")
 
 
 def render_slip(legs, e, key=None):
@@ -319,12 +329,14 @@ def game_reads(date, stamp, fitted):
     return night_data(date, stamp, fitted)[1]
 
 
-STAT_WORD = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "threes"}
+STAT_WORD = {"PTS": "points", "REB": "rebounds", "AST": "assists", "FG3M": "threes", "PA": "points + assists",
+             "PR": "points + rebounds", "RA": "rebounds + assists", "PRA": "points + rebounds + assists"}
 
 
 def read_table(picks):
     st.dataframe(
-        [{"Pick": f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]}" + ("  (day-to-day)" if k.get("dtd") else "")
+        [{"Backed?": backed_text(k.get("edge")),
+          "Pick": f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]}" + ("  (day-to-day)" if k.get("dtd") else "")
                   + ("  (already bet on him)" if k.get("pid") in BET_PIDS else ""),
           "Read says": pct(k["share"]), "Read adds": f"{100 * k.get('lift', 0):+.0f}% chance", "Expects": k["expected"],
           "This season": k.get("season", "--"), "v them": k.get("v_opp", "--"),
@@ -371,11 +383,12 @@ with read_tab:
                 st.text("\n".join(line.strip() for line in r["shape"]))
         hide_short = st.checkbox(
             "Hide picks the price is too short for", value=True, key="pb_read_hide_short",
-            help="'Read v price' is the read's chance (corrected by how far it was off in the 1-25 Nov backtest: "
-                 "upside 2% high, floors 8% high) minus the chance Sportsbet's price implies. Below zero, "
-                 "our own read says the price is too short, so it isn't a pick. Picks with no price yet stay.")
+            help="'Read v price' is the read's chance (mapped to what such reads actually landed at in the 1-25 Nov "
+                 "backtest) minus the chance Sportsbet's price implies. ✅ backed: 3+ points above the price. "
+                 "⚖️ coin flip: within 3 points either way, shown so you can decide. ❌ not backed: 3+ points "
+                 "below, hidden when this is ticked. Picks with no price yet stay.")
         if hide_short:
-            r = dict(r, picks=[k for k in r["picks"] if k.get("edge") is None or k["edge"] >= 0])
+            r = dict(r, picks=[k for k in r["picks"] if k.get("edge") is None or k["edge"] > -COIN_FLIP])
         st.subheader("Biggest advantages")
         st.caption("Upside picks: the highest rung he reaches in 25-60% of his games as read. Ordered by 'Read adds': "
                    "how much the read raises his chance at that number over his plain season. Only stats he "

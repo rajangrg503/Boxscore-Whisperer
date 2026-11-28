@@ -55,11 +55,30 @@ RUNGS.update({"PR": list(range(10, 65, 5)), "PA": list(range(10, 65, 5)), "RA": 
 SAFE, UPSIDE = 0.80, 0.25
 # Only a stat he produces in real volume is a pick: a 15% lift on 1.3 assists is a fifth of an assist
 # (26 Nov 2026: Ryan Dunn 2+ assists topped DAL@PHX). Floors on the read's expectation.
-VOLUME = {"PTS": 10, "REB": 4, "AST": 3, "FG3M": 1.5}
+VOLUME = {"PTS": 10, "REB": 4, "AST": 3, "FG3M": 1.5, "PA": 15}
+# Pass-first drivers (karma; NBA Drives: they pass on half or more of their drives): some nights they score,
+# some they set up, so their pick is points + assists, never points or assists alone (27 Nov: Davion 12 pts /
+# 9 ast missed 15+ points but landed 20+ PA; Nembhard scored instead of passing).
+PASS_FIRST = {"Davion Mitchell", "Andrew Nembhard", "Josh Giddey", "Deni Avdija", "Franz Wagner"}
+PASS_FIRST_STATS = ("PA", "REB", "FG3M")
+# Who feeds against Denver (angles 27 and 29, karma): their help defence gives up the most drive assists in the
+# league and Jokic in drop gives the opposing big room; their wins are close (27 Nov: UTA's George 24+,
+# Peterson 20+, Nurkic 10 ast in a 2-point game at the 4th).
+DEN_NOTE = ("v DEN: the other side's three-level drivers (points, points + assists), its big (assists or points + "
+            "rebounds) and catch-and-shoot threes off the help; DEN games stay close, so stars play the 4th")
 MIN_LIFT = 0.03                                         # an upside pick needs the read to add 3+ points of chance
-# How far the read was off in the walk-forward check, 1-25 Nov 2026 (claude/game-read-backtest-2026-11-26.md):
-# upside picks hit 2 points under "Read says", floors 8 under. Used when the read is set against the price.
-CALIBRATION = {"upside": -0.02, "safe": -0.08}
+# Tonight's minutes: the slate projection, but never below his usual. Backtest 1-25 Nov 2026 (~106k player-rung
+# checks, ~/bt/mins/bt.py): reads at the projection ran 5 points LOW in the 25-60% zone (41.7% read, 46.4%
+# landed) because the projection sometimes cuts a starter by 4-5 minutes (27 Nov: Zion 29 v 33, Murphy 27 v 33);
+# at max(projection, usual) the same zone read 41.7% and landed 42.0%.
+MINUTES_FLOOR_USUAL = True
+# What a "Read says" chance actually landed at in that backtest (read at the higher minutes): pairs of
+# (read, landed). The ends were overconfident (reads under 10% landed 13%, reads over 90% landed 85%), the
+# middle was right. calibrated() maps through these points; it replaces the flat -2 / -8 points of 26 Nov,
+# which were measured at usual minutes and double-penalised the projection-minutes read.
+CAL_POINTS = ((0.0, 0.10), (0.024, 0.13), (0.163, 0.22), (0.404, 0.41), (0.664, 0.635), (0.821, 0.757),
+              (0.966, 0.85), (1.0, 0.87))
+COIN_FLIP = 0.03                                        # within +/-3 points of the price: too close to call
 
 
 def _clip(x, lo, hi):
@@ -116,7 +135,7 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
     if len(season) < 5:
         return None
     usual = st.mean(pc.nf(x["MIN"]) for x in season[:10])
-    minutes = minutes or usual
+    minutes = (max(minutes, usual) if MINUTES_FLOOR_USUAL else minutes) if minutes else usual
     out = {"pid": pid, "player": name, "team": team, "opp": opp, "minutes": round(minutes, 1),
            "usual_minutes": round(usual, 1), "games": len(season), "stats": {}}
     for stat in STATS + COMBOS:
@@ -253,9 +272,10 @@ def read_night(date, legs=None, game=None):
     for g, players in by_game.items():
         picks = []
         for p in players:
+            wanted = PASS_FIRST_STATS if p["player"] in PASS_FIRST else STATS
             for stat, s in p["stats"].items():
-                if stat not in STATS or s["expected"] < VOLUME[stat]:
-                    continue                            # not a stat he produces in volume
+                if stat not in wanted or s["expected"] < VOLUME[stat]:
+                    continue                            # not a stat he produces in volume (PA for pass-first drivers)
                 for kind_, rung, share, rec, lift in (
                         ("safe", s["safe"], s["safe_share"], s["safe_record"], s.get("safe_lift")),
                         ("upside", s["upside"], s["upside_share"], s["upside_record"], s.get("upside_lift"))):
@@ -270,16 +290,31 @@ def read_night(date, legs=None, game=None):
                                   "price": price.get((p["pid"], stat, float(rung)))
                                   or price.get((p["pid"], stat, rung))})
         for k in picks:                                 # the read against the price, after the backtest's correction
-            k["edge"] = (round(k["share"] + CALIBRATION[k["kind"]] - 1 / k["price"], 3) if k.get("price") else None)
+            k["edge"] = (round(calibrated(k["share"]) - 1 / k["price"], 3) if k.get("price") else None)
+            k["backed"] = backed(k["edge"])
         picks.sort(key=lambda k: (-k["lift"], -k["share"]))      # most chance added by the read first
         away, home = g.split("@")
-        out[g] = {"shape": game_shape(away, home), "players": sorted(players, key=lambda p: -p["minutes"]), "picks": picks}
+        shape = game_shape(away, home)
+        if "DEN" in (away, home):
+            shape = list(shape) + [DEN_NOTE]
+        out[g] = {"shape": shape, "players": sorted(players, key=lambda p: -p["minutes"]), "picks": picks}
     return out
 
 
 def calibrated(share):
-    """The read's chance corrected by the backtest: floor-like chances (75%+) ran 8 points high, the rest 2."""
-    return share + (CALIBRATION["safe"] if share >= 0.75 else CALIBRATION["upside"])
+    """The read's chance mapped to what such reads actually landed at (CAL_POINTS, straight lines between)."""
+    share = _clip(share, 0.0, 1.0)
+    for (x0, y0), (x1, y1) in zip(CAL_POINTS, CAL_POINTS[1:]):
+        if share <= x1:
+            return round(y0 + (y1 - y0) * (share - x0) / (x1 - x0), 3)
+    return CAL_POINTS[-1][1]
+
+
+def backed(edge):
+    """The plain verdict for a read against the price: backed, coin flip (within COIN_FLIP) or not backed."""
+    if edge is None:
+        return None
+    return "backed" if edge >= COIN_FLIP else "coin flip" if edge > -COIN_FLIP else "not backed"
 
 
 def annotate_legs(legs, night):
@@ -296,9 +331,13 @@ def annotate_legs(legs, night):
         rung = int(round(x["th"])) if x["kind"] == "alt" else int(math.floor(x["th"])) + 1
         top = max(int(k) for k in chance)
         over = 1.0 if rung < 1 else 0.0 if rung > top else chance.get(str(rung), 0.0)
-        read = (1 - over) if x["kind"] == "under" else calibrated(over)
+        if rung > top:                                  # past his best game: no calibration lifts it
+            read = 1.0 if x["kind"] == "under" else 0.0
+        else:
+            read = (1 - calibrated(over)) if x["kind"] == "under" else calibrated(over)
         x["read"] = round(min(max(read, 0.01), 0.99), 3)
         x["read_edge"] = round(x["read"] - 1 / x["price"], 3)
+        x["backed"] = backed(x["read_edge"])
     return legs
 
 

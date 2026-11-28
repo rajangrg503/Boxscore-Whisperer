@@ -114,11 +114,14 @@ def test_every_leg_gets_the_reads_chance_and_read_v_price():
             dict(pid=1, stat="AST", kind="under", th=3.5, price=2.5), dict(pid=1, stat="AST", kind="alt", th=2, price=1.05),
             dict(pid=1, stat="AST", kind="alt", th=9, price=20.0), dict(pid=2, stat="AST", kind="alt", th=4, price=2.0)]
     gr.annotate_legs(legs, night)
-    assert legs[0]["read"] == 0.48 and legs[0]["read_edge"] == -0.02              # 50% read, 2 points off, v 50%
-    assert legs[1]["read"] == 0.08 and legs[1]["read_edge"] == round(0.08 - 0.25, 3)  # o5.5 = 6+
-    assert legs[2]["read"] == 0.5                                                 # u3.5 = under 4: 1 - 0.5
-    assert legs[3]["read"] == 0.82                                                # floor-like: 8 points off
-    assert legs[4]["read"] == 0.01                                                # past his best game
+    # read mapped through CAL_POINTS (what such reads landed at, 1-25 Nov backtest at max(projected, usual) minutes)
+    assert legs[0]["read"] == 0.493 and legs[0]["read_edge"] == -0.007            # 50% read lands ~49%, v 50%
+    assert legs[0]["backed"] == "coin flip"
+    assert legs[1]["read"] == 0.179 and legs[1]["read_edge"] == round(0.179 - 0.25, 3)  # o5.5 = 6+; 10% reads land ~18%
+    assert legs[1]["backed"] == "not backed"
+    assert legs[2]["read"] == 0.507                                               # u3.5 = under 4: 1 - 0.493
+    assert legs[3]["read"] == 0.808                                               # 90% reads land ~81%
+    assert legs[4]["read"] == 0.01                                                # past his best game: not lifted
     assert legs[5]["read"] is None and legs[5]["read_edge"] is None               # not read
 
 
@@ -138,3 +141,25 @@ def test_threes_list_shows_makes_v_them_and_the_best_priced_leg():
     r = rows[0]
     assert r["v_makes"] == [5, 3] and r["v_avg"] == 4 and r["v_other_team"] == 1 and r["season_avg"] == 2.2
     assert r["leg"]["th"] == 3 and r["leg"]["price"] == 2.1
+
+
+def test_calibration_and_backed_verdicts():
+    assert gr.calibrated(0.404) == 0.41 and gr.calibrated(0.0) == 0.10 and gr.calibrated(1.0) == 0.87
+    assert gr.calibrated(0.02) < gr.calibrated(0.2) < gr.calibrated(0.5) < gr.calibrated(0.95)   # still in order
+    assert gr.backed(0.05) == "backed" and gr.backed(0.02) == "coin flip" and gr.backed(-0.02) == "coin flip"
+    assert gr.backed(-0.04) == "not backed" and gr.backed(None) is None
+
+
+def test_minutes_never_read_below_his_usual(monkeypatch):
+    rows = [{"MIN": 32, "PTS": 20, "MATCHUP": "AAA vs. CCC", "date": f"2026-11-{d:02d}"} for d in range(1, 11)]
+    monkeypatch.setattr(gr.pc, "rows_for", lambda pid, seasons: rows)
+    monkeypatch.setattr(gr.pc, "_date", lambda x: __import__("datetime").date.fromisoformat(x["date"]))
+    monkeypatch.setattr(gr.pc, "season_of", lambda d: "2026-27")
+    monkeypatch.setattr(gr.pc, "prev_season", lambda s: "2025-26")
+    monkeypatch.setattr(gr.pc, "value", lambda x, stat: x.get(stat, 0))
+    monkeypatch.setattr(gr.pb, "_h2h_ratios", lambda prior, opp, stat: [])
+    day = __import__("datetime").date(2026, 11, 27)
+    low = gr.player_read(1, "A", "AAA", "BBB", day, minutes=26)       # projection 6 under his usual 32
+    assert low["minutes"] == 32.0 and low["stats"]["PTS"]["expected"] == 20.0
+    high = gr.player_read(1, "A", "AAA", "BBB", day, minutes=36)
+    assert high["minutes"] == 36 and high["stats"]["PTS"]["expected"] == 22.5
