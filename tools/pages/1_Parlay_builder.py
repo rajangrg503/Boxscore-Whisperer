@@ -69,7 +69,7 @@ def night_data(date, stamp, fitted):
     raw = pb.load_legs(date)
     night = gr.read_night(date, raw)
     gr.annotate_legs(raw, night)
-    return raw, {g: {"shape": r["shape"], "picks": r["picks"], "steady": r.get("steady", [])}
+    return raw, {g: {"shape": r["shape"], "picks": r["picks"], "steady": r.get("steady", []), "vthem": r.get("vthem", [])}
                  for g, r in night.items()}, gr.threes_table(night, raw)
 
 
@@ -413,6 +413,21 @@ with read_tab:
                 hide_index=True, width="stretch")
         else:
             st.info("No steady priced rungs for this game yet.")
+        st.subheader("80%+ v them")
+        st.caption("karma, 28 Nov: 'a list of 80% or above vs this team. or 4 of 5, 6 of 8'. His highest number "
+                   "cleared in 80%+ of his games v tonight's opponent (last three seasons, 5+ games), every stat "
+                   "and combo. A record to look at: check the Backed? column and his last 10 before using one.")
+        vthem = r.get("vthem") or []
+        if vthem:
+            st.dataframe(
+                [{"Backed?": backed_text(k["edge"]) if k.get("edge") is not None else "no price",
+                  "Pick": f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]}" + ("  (day-to-day)" if k.get("dtd") else ""),
+                  "v them": k["v"], "His games v them": ", ".join(f"{v:g}" for v in k["v_vals"]),
+                  "Last 10 at it": k["last10"], "Read says": pct(k["read"]),
+                  "Sportsbet": f"{k['price']:.2f}" if k.get("price") else "--"} for k in vthem[:20]],
+                hide_index=True, width="stretch")
+        else:
+            st.info("Nobody has 5+ games v this opponent at 80%+ yet.")
         priced = [k for k in r["picks"] if k.get("price")]
         chosen = st.multiselect("Send picks to Check a slip", priced, key=f"pb_read_send_{read_game}",
                                 format_func=lambda k: f"{k['player']} {k['rung']}+ {STAT_WORD[k['stat']]} @{k['price']:.2f}")

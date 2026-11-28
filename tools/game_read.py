@@ -65,6 +65,9 @@ PASS_FIRST_STATS = ("PA", "REB", "FG3M")
 # where the matchup moves a player, so a player who just does his job every night never showed (karma, 27 Nov:
 # "coward has been so consistent. why isnt he showing up"). STEADY is karma's own list of reliable players.
 STEADY = {"Cedric Coward"}
+# karma, 28 Nov 2026: "a list of 80% or above vs this team. or 4 of 5, 6 of 8" every night. His highest rung
+# cleared in 80%+ of his games v tonight's opponent (last three seasons, 5+ games), every stat and combo.
+VTHEM_SHARE, VTHEM_MIN = 0.80, 5
 STEADY_SHARE, STEADY_STATS = 0.70, ("PTS", "REB", "AST", "FG3M", "PR", "PA", "RA", "PRA")
 # Who feeds against Denver (angles 27 and 29, karma): their help defence gives up the most drive assists in the
 # league and Jokic in drop gives the opposing big room; their wins are close (27 Nov: UTA's George 24+,
@@ -259,6 +262,8 @@ def player_read(pid, name, team, opp, day, minutes=None, lift=None, allows=None,
                               "best": round(max(games), 0),
                               "season_raw": round(st.mean(raw), 2) if raw else 0.0,
                               "last10": [round(v, 1) for v in raw[:10]],      # newest first, untouched by the read
+                              "v_vals": [round(v, 1) for v in versus],         # every game v them, newest first
+                              "v_min": round(v_min) if versus else None,
                               # share of his games, as read, reaching every whole number: the read's chance for
                               # any rung or line Sportsbet offers (string keys so it survives the JSON feed)
                               "chance": {str(r): round(share(r), 3) for r in range(1, int(max(games)) + 2)}}
@@ -378,13 +383,46 @@ def read_night(date, legs=None, game=None):
             if best and (best["karma"] or best["edge"] > -COIN_FLIP):
                 steady.append(best)
         steady.sort(key=lambda k: (not k["karma"], -k["edge"]))
+        vthem = vthem_list(players, price)
         away, home = g.split("@")
         shape = game_shape(away, home)
         if "DEN" in (away, home):
             shape = list(shape) + [DEN_NOTE]
         out[g] = {"shape": shape, "players": sorted(players, key=lambda p: -p["minutes"]), "picks": picks,
-                  "steady": steady}
+                  "steady": steady, "vthem": vthem}
     return out
+
+
+def vthem_list(players, price):
+    """One row per player and stat: his highest rung (above the lowest) cleared in VTHEM_SHARE+ of his games v
+    tonight's opponent, with his last 10 and season at that rung, the read's chance and the price if Sportsbet
+    has it. Most games v them first, then the highest share. A record to look at, not a pick: the 28 Nov
+    backtest found the read's v-them weighting already as strong as it should be."""
+    rows = []
+    for p in players:
+        for stat in STATS + COMBOS:
+            s = p["stats"].get(stat)
+            vals = (s or {}).get("v_vals") or []
+            if len(vals) < VTHEM_MIN or s["season"] < VOLUME.get(stat, 0) * 0.6:
+                continue
+            for rung in sorted(RUNGS[stat], reverse=True)[:-1]:
+                made = sum(v >= rung for v in vals)
+                if made / len(vals) < VTHEM_SHARE:
+                    continue
+                last = s.get("last10") or []
+                read = calibrated(s["chance"].get(str(rung), 0.0))
+                pr = price.get((p["pid"], stat, float(rung))) or price.get((p["pid"], stat, rung))
+                edge = round(read - 1 / pr, 3) if pr else None
+                rows.append({"player": p["player"], "pid": p["pid"], "team": p["team"], "opp": p.get("opp"),
+                             "stat": stat, "rung": rung, "v": f"{made} of {len(vals)}",
+                             "v_share": round(made / len(vals), 2), "v_n": len(vals), "v_min": s.get("v_min"),
+                             "v_vals": vals[:8], "minutes": p["minutes"],
+                             "last10": f"{sum(v >= rung for v in last)} of {len(last)}" if last else "--",
+                             "read": round(read, 3), "price": pr, "edge": edge, "backed": backed(edge),
+                             "dtd": p.get("dtd", False)})
+                break                                   # his highest rung at 80%+ for this stat
+    rows.sort(key=lambda k: (-k["v_n"], -k["v_share"], -k["read"]))
+    return rows
 
 
 def calibrated(share):
